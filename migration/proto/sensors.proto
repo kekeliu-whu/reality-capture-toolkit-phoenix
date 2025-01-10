@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+// raw sensor data
+message LidarMsg {
+  message Point {
+    double timestamp = 1;
+    float x = 2;          // m
+    float y = 3;          // m
+    float z = 4;          // m
+    uint32 intensity = 5;
+  }
+
+  repeated Point points = 1;
+}
+
+message ImuMsg {
+  double timestamp = 1;
+  float ax = 2;         // m/s^2
+  float ay = 3;         // m/s^2
+  float az = 4;         // m/s^2
+  float gx = 5;         // rad/s
+  float gy = 6;         // rad/s
+  float gz = 7;         // rad/s
+}
+
+message ImuMsgList {
+  repeated ImuMsg imu_msgs = 1;
+}
+
+message MotorMsg {
+  double timestamp = 1;
+  float rx = 2;
+  float ry = 3;
+  float rz = 4;
+  float rw = 5;
+}
+
+message MotorMsgList {
+  repeated MotorMsg motor_msgs = 1;
+}
+
+// LIO result
+message UndistoredLidarMsg {
+  message Point {
+    float x = 2;          // m
+    float y = 3;          // m
+    float z = 4;          // m
+    uint32 intensity = 5;
+  }
+
+  double timestamp = 1;
+  repeated Point points = 2;
+}
+
+message PoseMsg {
+  double timestamp = 1;
+  double tx = 2;
+  double ty = 3;
+  double tz = 4;
+  double rx = 5;
+  double ry = 6;
+  double rz = 7;
+  double rw = 8;
+}
+
+message PoseMsgList {
+  repeated PoseMsg pose_msgs = 1;
+}
+
+// configuration files
+// WARNING: if you change the following message, please also change file in migration/proto/config
+message PgoConfig {
+  double odom_edge_translation_error = 1;   // meters
+  double odom_edge_rotation_error = 2;      // degrees
+  double loop_edge_translation_error = 3;   // meters
+  double loop_edge_rotation_error = 4;      // degrees
+  double gravity_align_rotation_error = 14; // degrees
+
+  double submap_duration_secs = 5;            // submap duration in seconds
+  double submap_downsample_resolution = 6;    // submap downsample resolution
+
+  double gicp_transform_epsilon = 7;          // submap refine match threshold
+  int32 gicp_max_iterations = 8;              // submap refine match max iterations
+  double gicp_fitness_score_threshold = 9;    // submap refine match fitness score threshold
+
+  double loop_closure_search_radius = 10;     // loop closure distance threshold
+  double loop_closure_search_time_diff = 11;  // loop closure time threshold
+
+  int32 outer_iteration_num = 12;             // PGO outer iteration times
+  int32 inner_iteration_num = 13;             // PGO inner iteration times
+}
