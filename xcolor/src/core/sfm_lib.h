@@ -19,12 +19,12 @@
 
 // todo kk read from config file
 struct SfmConfig {
-  int min_num_matches            = 15;
-  bool ignore_watermarks         = false;
-  bool refine_focal_length       = true;
-  bool refine_principal_point    = true;
-  bool refine_extra_params       = true;
-  double min_tri_angle           = 5;
+  int min_num_matches         = 15;
+  bool ignore_watermarks      = false;
+  bool refine_focal_length    = true;
+  bool refine_principal_point = true;
+  bool refine_extra_params    = true;
+  double min_tri_angle        = 5;
 
   int outer_opt_num                            = 3;
   double reproject_error_outlier_thresholds[3] = {10, 4, 2};       // pixels, equal to outer_opt_num
@@ -123,7 +123,7 @@ void ParameterizeCameras(const SfmConfig &config, ceres::Problem &problem, std::
 
 void ParameterizePoses(const SfmConfig &config, ceres::Problem &problem, std::unordered_map<colmap::camera_t, colmap::Image> &images);
 
-Eigen::Vector2d ComputePixelError(Eigen::Vector3d &point3D, const Eigen::Vector2d &point2D, colmap::Image &image, colmap::Camera &camera);
+Eigen::Vector2d ComputePixelError(Eigen::Vector3d &point3D, const Eigen::Vector2d &point2D, const colmap::Image &image, const colmap::Camera &camera);
 
 double ComputeLidarError(Eigen::Vector3d &point3D, const Eigen::Vector3d &center, const Eigen::Vector3d &normal);
 
@@ -136,6 +136,7 @@ void AddLidarFactorToProblem(ceres::Problem &problem, Eigen::Vector3d &point3D, 
 void AddPosePriorsToProblem(const SfmConfig &config, ceres::Problem &problem, const std::unordered_map<colmap::image_t, colmap::Rigid3d> &pose_priors,
                             std::unordered_set<colmap::image_t> &optimized_image_ids, std::unordered_map<colmap::image_t, colmap::Image> &images);
 
-void PrintResidualHistogram(ceres::Problem &problem, const std::vector<ceres::ResidualBlockId> &residual_block_ids, const std::string &name);
+void PrintResidualHistogram(double threshold, ceres::Problem &problem, const std::vector<ceres::ResidualBlockId> &residual_block_ids,
+                            const std::string &name);
 
 colmap::Rigid3d FromProto(const PoseMsg &pose_msg);

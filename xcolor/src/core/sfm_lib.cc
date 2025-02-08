@@ -165,20 +165,20 @@ void AddReprojectFactorToProblem(ceres::Problem &problem, Eigen::Vector3d &point
   residual_block_ids.push_back(residual_block_id);
 }
 
-Eigen::Vector2d ComputePixelError(Eigen::Vector3d &point3D, const Eigen::Vector2d &point2D, colmap::Image &image, colmap::Camera &camera) {
+Eigen::Vector2d ComputePixelError(Eigen::Vector3d &point3D, const Eigen::Vector2d &point2D, const colmap::Image &image,
+                                  const colmap::Camera &camera) {
   CHECK(image.HasPose());
-  image.CamFromWorld().rotation.normalize();
 
-  double *cam_from_world_rotation    = image.CamFromWorld().rotation.coeffs().data();
-  double *cam_from_world_translation = image.CamFromWorld().translation.data();
-  double *camera_params              = camera.params.data();
+  const double *cam_from_world_rotation    = image.CamFromWorld().rotation.coeffs().data();
+  const double *cam_from_world_translation = image.CamFromWorld().translation.data();
+  const double *camera_params              = camera.params.data();
 
-  auto cost_functor    = colmap::CreateCameraCostFunction<colmap::ReprojErrorCostFunctor>(camera.model_id, point2D);
-  double *parameters[] = {cam_from_world_rotation, cam_from_world_translation, point3D.data(), camera_params};
+  auto cost_functor          = colmap::CreateCameraCostFunction<colmap::ReprojErrorCostFunctor>(camera.model_id, point2D);
+  const double *parameters[] = {cam_from_world_rotation, cam_from_world_translation, point3D.data(), camera_params};
   Eigen::Vector2d residuals;
   cost_functor->Evaluate(parameters, residuals.data(), nullptr);
 
-  delete cost_functor; // todo kk check memory leak
+  delete cost_functor;  // todo kk check memory leak
 
   return residuals;
 }
@@ -211,7 +211,8 @@ void AddPosePriorsToProblem(const SfmConfig &config, ceres::Problem &problem, co
   }
 }
 
-void PrintResidualHistogram(ceres::Problem &problem, const std::vector<ceres::ResidualBlockId> &residual_block_ids, const std::string &name) {
+void PrintResidualHistogram(double threshold, ceres::Problem &problem, const std::vector<ceres::ResidualBlockId> &residual_block_ids,
+                            const std::string &name) {
   ceres::Problem::EvaluateOptions evaluate_options;
   evaluate_options.apply_loss_function = false;
   evaluate_options.residual_blocks     = residual_block_ids;
@@ -221,6 +222,7 @@ void PrintResidualHistogram(ceres::Problem &problem, const std::vector<ceres::Re
 
   Histogram hist;
   for (auto &residual : residuals) {
+    residual = std::clamp(residual, -threshold, threshold);
     hist.Add(residual);
   }
   LOG(INFO) << name << ": " << hist.ToString(10);

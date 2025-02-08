@@ -87,6 +87,54 @@ void SaveCameraParams(const std::string &filename, const std::unordered_map<colm
   }
 }
 
+bool TryTriangulate(const SfmConfig &config, const colmap::Image &image1, const colmap::Image &image2, const colmap::Camera &camera1,
+                    const colmap::Camera &camera2, const MatchPointInfo &point_on_image1, const MatchPointInfo &point_in_image2,
+                    const pcl::KdTreeFLANN<pcl::PointXYZINormal> &kdtree, const pcl::PointCloud<pcl::PointXYZINormal> &point_cloud, int iter,
+                    Eigen::Vector3d &point3D, Eigen::Vector3d &lidar_point, Eigen::Vector3d &lidar_normal) {
+  auto cam_from_world1 = image1.CamFromWorld().ToMatrix();
+  auto cam_from_world2 = image2.CamFromWorld().ToMatrix();
+
+  // if TriangulatePoint failed, ignore the match
+  bool ok = colmap::TriangulatePoint(cam_from_world1, cam_from_world2, camera1.CamFromImg(point_on_image1.point_pixel),
+                                     camera2.CamFromImg(point_in_image2.point_pixel), &point3D);
+  if (!ok) {
+    return false;
+  }
+
+  Eigen::Vector3d cam1_center = -(cam_from_world1.block<3, 3>(0, 0).transpose() * cam_from_world1.block<3, 1>(0, 3));
+  Eigen::Vector3d cam2_center = -(cam_from_world2.block<3, 3>(0, 0).transpose() * cam_from_world2.block<3, 1>(0, 3));
+
+  // if the viewing angle between the two perspectives is too small, the match will be ignored
+  double angle = colmap::CalculateTriangulationAngle(cam1_center, cam2_center, point3D);
+  if (std::abs(angle) < config.min_tri_angle * M_PI / 180) {
+    return false;
+  }
+
+  std::vector<float> distances;
+  std::vector<int> indices;
+  kdtree.nearestKSearch(pcl::PointXYZINormal{(float)point3D.x(), (float)point3D.y(), (float)point3D.z()}, 1, indices, distances);
+
+  auto nearest_point = point_cloud[indices[0]];
+  lidar_point        = nearest_point.getVector3fMap().cast<double>();
+  lidar_normal       = nearest_point.getNormalVector3fMap().cast<double>();
+
+  // if lidar error is too large, the match will be ignored
+  auto lidar_error = ComputeLidarError(point3D, lidar_point, lidar_normal);
+  if (std::abs(lidar_error) > config.lidar_error_outlier_thresholds[iter]) {
+    return false;
+  }
+
+  // if reprojection error is too large, the match will be ignored
+  auto projection_error1 = ComputePixelError(point3D, point_on_image1.point_pixel, image1, camera1);
+  auto projection_error2 = ComputePixelError(point3D, point_in_image2.point_pixel, image2, camera2);
+  if (projection_error1.norm() > config.reproject_error_outlier_thresholds[iter] ||
+      projection_error2.norm() > config.reproject_error_outlier_thresholds[iter]) {
+    return false;
+  }
+
+  return true;
+}
+
 void RunSFM(const SfmConfig &config, const std::vector<MatchPair> &match_pairs, const std::string &point_cloud_filename,
             std::unordered_map<colmap::image_t, colmap::Image> &images, std::unordered_map<colmap::camera_t, colmap::Camera> &cameras) {
   pcl::PointCloud<pcl::PointXYZINormal> point_cloud;
@@ -103,6 +151,7 @@ void RunSFM(const SfmConfig &config, const std::vector<MatchPair> &match_pairs, 
     pose_priors[image.ImageId()] = image.CamFromWorld();
   }
 
+  std::vector<MatchResult> match_results(match_pairs.size());
   for (int iter = 0; iter < config.outer_opt_num; ++iter) {
     ceres::Problem::Options problem_options;
     problem_options.loss_function_ownership = ceres::DO_NOT_TAKE_OWNERSHIP;
@@ -112,9 +161,6 @@ void RunSFM(const SfmConfig &config, const std::vector<MatchPair> &match_pairs, 
                                                                    ceres::DO_NOT_TAKE_OWNERSHIP);
     std::vector<ceres::ResidualBlockId> residual_block_ids;
     std::vector<ceres::ResidualBlockId> lidar_residual_block_ids;
-
-    std::vector<MatchResult> match_results;
-    match_results.resize(match_pairs.size());
 
     std::unordered_set<colmap::image_t> optimized_image_ids;
 
@@ -128,44 +174,15 @@ void RunSFM(const SfmConfig &config, const std::vector<MatchPair> &match_pairs, 
       auto &camera1         = cameras[point_on_image1.camera_id];
       auto &camera2         = cameras[point_in_image2.camera_id];
       auto &point3D         = match_results[i].point3D;
+      Eigen::Vector3d lidar_point;
+      Eigen::Vector3d lidar_normal;
 
       CHECK(image1.HasPose()) << "Image " << point_on_image1.image_id << " has no pose.";
       CHECK(image2.HasPose()) << "Image " << point_in_image2.image_id << " has no pose.";
 
-      auto cam_from_world1 = image1.CamFromWorld().ToMatrix();
-      auto cam_from_world2 = image2.CamFromWorld().ToMatrix();
-
-      bool ok = colmap::TriangulatePoint(cam_from_world1, cam_from_world2, camera1.CamFromImg(point_on_image1.point_pixel),
-                                         camera2.CamFromImg(point_in_image2.point_pixel), &point3D);
-
-      if (!ok) {
-        continue;
-      }
-
-      Eigen::Vector3d cam1_center = -(cam_from_world1.block<3, 3>(0, 0).transpose() * cam_from_world1.block<3, 1>(0, 3));
-      Eigen::Vector3d cam2_center = -(cam_from_world2.block<3, 3>(0, 0).transpose() * cam_from_world2.block<3, 1>(0, 3));
-
-      double angle = colmap::CalculateTriangulationAngle(cam1_center, cam2_center, point3D);
-      if (std::abs(angle) < config.min_tri_angle * M_PI / 180) {
-        continue;
-      }
-
-      std::vector<float> distances;
-      std::vector<int> indices;
-      kdtree.nearestKSearch(pcl::PointXYZINormal{(float)point3D.x(), (float)point3D.y(), (float)point3D.z()}, 1, indices, distances);
-
-      auto nearest_point = point_cloud[indices[0]];
-
-      auto projection_error1 = ComputePixelError(point3D, point_on_image1.point_pixel, image1, camera1);
-      auto projection_error2 = ComputePixelError(point3D, point_in_image2.point_pixel, image2, camera2);
-      if (projection_error1.norm() > config.reproject_error_outlier_thresholds[iter] ||
-          projection_error2.norm() > config.reproject_error_outlier_thresholds[iter]) {
-        continue;
-      }
-
-      auto lidar_error =
-          ComputeLidarError(point3D, nearest_point.getVector3fMap().cast<double>(), nearest_point.getNormalVector3fMap().cast<double>());
-      if (std::abs(lidar_error) > config.lidar_error_outlier_thresholds[iter]) {
+      bool valid = TryTriangulate(config, image1, image2, camera1, camera2, point_on_image1, point_in_image2, kdtree, point_cloud, iter, point3D,
+                                  lidar_point, lidar_normal);
+      if (!valid) {
         continue;
       }
 
@@ -178,8 +195,7 @@ void RunSFM(const SfmConfig &config, const std::vector<MatchPair> &match_pairs, 
         LOG_EVERY_N(INFO, 10000) << "Triangulate point " << i;
         AddReprojectFactorToProblem(problem, point3D, point_on_image1.point_pixel, image1, camera1, loss_function_image.get(), residual_block_ids);
         AddReprojectFactorToProblem(problem, point3D, point_in_image2.point_pixel, image2, camera2, loss_function_image.get(), residual_block_ids);
-        AddLidarFactorToProblem(problem, point3D, nearest_point.getVector3fMap().cast<double>(), nearest_point.getNormalVector3fMap().cast<double>(),
-                                loss_function_lidar.get(), lidar_residual_block_ids);
+        AddLidarFactorToProblem(problem, point3D, lidar_point, lidar_normal, loss_function_lidar.get(), lidar_residual_block_ids);
       }
     }
     LOG(INFO) << optimized_image_ids.size() << " images are used.";
@@ -191,9 +207,8 @@ void RunSFM(const SfmConfig &config, const std::vector<MatchPair> &match_pairs, 
     int valid_count = std::accumulate(match_results.begin(), match_results.end(), 0, [](int sum, auto &a) { return sum + a.valid; });
     LOG(INFO) << valid_count << "/" << match_pairs.size() << " (" << valid_count * 100.0 / match_pairs.size() << "%) matches are valid.";
 
-    PrintResidualHistogram(problem, residual_block_ids, "image");
-    PrintResidualHistogram(problem, lidar_residual_block_ids, "lidar");
-
+    PrintResidualHistogram(config.reproject_error_outlier_thresholds[iter], problem, residual_block_ids, "image");
+    PrintResidualHistogram(config.lidar_error_outlier_thresholds[iter], problem, lidar_residual_block_ids, "lidar");
     SaveTriangulatedPoints(match_results, FLAGS_output_path + "/triangulated" + std::to_string(iter) + ".pcd");
 
     ceres::Solver::Summary summary;
@@ -204,6 +219,8 @@ void RunSFM(const SfmConfig &config, const std::vector<MatchPair> &match_pairs, 
     ceres::Solve(options, &problem, &summary);
     LOG(INFO) << summary.FullReport();
 
+    PrintResidualHistogram(config.reproject_error_outlier_thresholds[iter], problem, residual_block_ids, "image_refined");
+    PrintResidualHistogram(config.lidar_error_outlier_thresholds[iter], problem, lidar_residual_block_ids, "lidar_refined");
     SaveTriangulatedPoints(match_results, FLAGS_output_path + "/triangulated" + std::to_string(iter) + "-refined.pcd");
 
     SaveImagePoses(FLAGS_output_path + "/image-poses.txt", optimized_image_ids, images, pose_priors);
@@ -255,6 +272,53 @@ void GiveInitialPosesToImages(std::unordered_map<colmap::image_t, colmap::Image>
   LOG(INFO) << "Give initial poses to images done: " << valid_count << "/" << images.size();
 }
 
+std::unordered_map<std::string, colmap::Rigid3d> ReadImagePoses(const std::string &filename) {
+  std::unordered_map<std::string, colmap::Rigid3d> image_to_pose;
+
+  std::ifstream file(FLAGS_initial_pose_filename);
+  CHECK(file) << FLAGS_initial_pose_filename;
+
+  std::string json_str{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+
+  rapidjson::Document doc;
+  doc.ParseStream(rapidjson::StringStream{json_str.c_str()});
+
+  auto &frames = doc["frames"];
+  for (int i = 0; i < frames.Size(); ++i) {
+    auto &frame = frames[i];
+
+    auto &mat = frame["transform_matrix"];
+    Eigen::Matrix4d T;
+    T << mat[0][0].GetDouble(), mat[0][1].GetDouble(), mat[0][2].GetDouble(), mat[0][3].GetDouble(), mat[1][0].GetDouble(), mat[1][1].GetDouble(),
+        mat[1][2].GetDouble(), mat[1][3].GetDouble(), mat[2][0].GetDouble(), mat[2][1].GetDouble(), mat[2][2].GetDouble(), mat[2][3].GetDouble(), 0,
+        0, 0, 1;
+
+    colmap::Rigid3d pose_cg_to_world;
+    pose_cg_to_world.rotation = T.block<3, 3>(0, 0);
+    pose_cg_to_world.rotation.normalize();
+    pose_cg_to_world.translation = T.block<3, 1>(0, 3);
+
+    std::string file_path = frame["file_path"].GetString();
+    auto file             = boost::filesystem::path(file_path);
+    auto timestamp        = frame["timestamp"].GetUint64();
+
+    auto real_filename = file.parent_path().string() + "/" + std::to_string(timestamp) + ".png";
+
+    colmap::Rigid3d pose_cg_from_world = colmap::Inverse(pose_cg_to_world);
+
+    colmap::Rigid3d pose_cv_from_world;
+
+    Eigen::Matrix3d mat_cg_to_cv;
+    mat_cg_to_cv << 1, 0, 0, 0, -1, 0, 0, 0, -1;
+    pose_cv_from_world.translation = mat_cg_to_cv * pose_cg_from_world.translation;
+    pose_cv_from_world.rotation    = Eigen::Quaterniond(mat_cg_to_cv) * pose_cg_from_world.rotation;
+
+    image_to_pose[real_filename] = pose_cv_from_world;
+  }
+
+  return image_to_pose;
+}
+
 int main(int argc, char **argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   google::InitGoogleLogging(argv[0]);
@@ -269,62 +333,27 @@ int main(int argc, char **argv) {
 
   SfmConfig config{cores_used};
 
-  std::unordered_map<std::string, colmap::Rigid3d> image_to_c2w;
-  std::unordered_set<std::string> image_names_with_pose;
-  std::vector<colmap::Rigid3d> pose_list;
   std::vector<MatchPair> match_pairs;
   std::unordered_map<colmap::image_t, colmap::Image> images;
   std::unordered_map<colmap::camera_t, colmap::Camera> cameras;
 
-  {
-    std::ifstream file(FLAGS_initial_pose_filename);
-    CHECK(file) << FLAGS_initial_pose_filename;
-
-    std::string json_str{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
-
-    rapidjson::Document doc;
-    doc.ParseStream(rapidjson::StringStream{json_str.c_str()});
-
-    auto &frames = doc["frames"];
-    for (int i = 0; i < frames.Size(); ++i) {
-      auto &frame = frames[i];
-
-      auto &mat = frame["transform_matrix"];
-      Eigen::Matrix4d T;
-      T << mat[0][0].GetDouble(), mat[0][1].GetDouble(), mat[0][2].GetDouble(), mat[0][3].GetDouble(), mat[1][0].GetDouble(), mat[1][1].GetDouble(),
-          mat[1][2].GetDouble(), mat[1][3].GetDouble(), mat[2][0].GetDouble(), mat[2][1].GetDouble(), mat[2][2].GetDouble(), mat[2][3].GetDouble(), 0,
-          0, 0, 1;
-
-      colmap::Rigid3d pose;
-      pose.rotation = T.block<3, 3>(0, 0);
-      pose.rotation.normalize();
-      pose.translation = T.block<3, 1>(0, 3);
-
-      std::string file_path = frame["file_path"].GetString();
-      auto file             = boost::filesystem::path(file_path);
-      auto timestamp        = frame["timestamp"].GetUint64();
-
-      auto real_filename = file.parent_path().string() + "/" + std::to_string(timestamp) + ".png";
-
-      image_to_c2w[real_filename] = pose;
-      image_names_with_pose.insert(real_filename);
-    }
-  }
-
   // reload images
   {
+    std::unordered_map<std::string, colmap::Rigid3d> image_to_pose = ReadImagePoses(FLAGS_initial_pose_filename);
+
+    std::unordered_set<std::string> image_names;
+    for (const auto &pair : image_to_pose) {
+      image_names.insert(pair.first);
+    }
+
     colmap::Database database(FLAGS_database_filename);
-    auto database_cache    = colmap::DatabaseCache::Create(database, config.min_num_matches, config.ignore_watermarks, image_names_with_pose);
+    auto database_cache    = colmap::DatabaseCache::Create(database, config.min_num_matches, config.ignore_watermarks, image_names);
     cameras                = database_cache->Cameras();
     images                 = database_cache->Images();
     const auto &corr_graph = *database_cache->CorrespondenceGraph();
 
     for (auto &image : images) {
-      image.second.SetCamFromWorld(colmap::Inverse(image_to_c2w[image.second.Name()]));
-      Eigen::Matrix3d mat;
-      mat << 1, 0, 0, 0, -1, 0, 0, 0, -1;
-      image.second.CamFromWorld().translation = mat * image.second.CamFromWorld().translation;
-      image.second.CamFromWorld().rotation    = Eigen::Quaterniond(mat) * image.second.CamFromWorld().rotation;
+      image.second.SetCamFromWorld(image_to_pose[image.second.Name()]);
     }
 
     match_pairs = GenerateMatchPairs(corr_graph, images, config);

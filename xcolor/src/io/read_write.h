@@ -31,3 +31,5 @@ void ReadImages(const std::string& sfm_path, const std::string& images_path, std
 void WriteCamerasBinary(const std::string& filename, const std::vector<colmap::Camera>& cameras);
 
 void WriteImagesBinary(const std::string& filename, const std::vector<colmap::Image>& images);
+
+void WritePoints3DBinary(const std::string& filename, const std::vector<colmap::Point3D>& points3D);

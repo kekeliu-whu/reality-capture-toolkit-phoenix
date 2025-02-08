@@ -204,3 +204,30 @@ void WriteImagesBinary(const std::string& filename, const std::vector<colmap::Im
     }
   }
 }
+
+void WritePoints3DBinary(const std::string& filename, const std::vector<colmap::Point3D>& points3D) {
+  std::ofstream stream(filename, std::ios::binary);
+  CHECK(stream.good());
+
+  WriteBinaryLittleEndian<uint64_t>(&stream, points3D.size());
+  stream.flush();
+
+  for (int i = 0; i < points3D.size(); i++) {
+    const colmap::Point3D& point3D = points3D[i];
+
+    WriteBinaryLittleEndian<colmap::point3D_t>(&stream, i);
+    WriteBinaryLittleEndian<double>(&stream, point3D.xyz(0));
+    WriteBinaryLittleEndian<double>(&stream, point3D.xyz(1));
+    WriteBinaryLittleEndian<double>(&stream, point3D.xyz(2));
+    WriteBinaryLittleEndian<uint8_t>(&stream, point3D.color(0));
+    WriteBinaryLittleEndian<uint8_t>(&stream, point3D.color(1));
+    WriteBinaryLittleEndian<uint8_t>(&stream, point3D.color(2));
+    WriteBinaryLittleEndian<double>(&stream, point3D.error);
+
+    WriteBinaryLittleEndian<uint64_t>(&stream, point3D.track.Length());
+    for (const colmap::TrackElement& track_el : point3D.track.Elements()) {
+      WriteBinaryLittleEndian<colmap::image_t>(&stream, track_el.image_id);
+      WriteBinaryLittleEndian<colmap::point2D_t>(&stream, track_el.point2D_idx);
+    }
+  }
+}
