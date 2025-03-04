@@ -12,7 +12,7 @@ void ReadCamerasBinary(const std::string& filename, std::vector<colmap::Camera>&
 // colmap::Reconstruction reconstruction;
 // reconstruction.ReadBinary(FLAGS_sfm_result_path);
 // auto images = reconstruction.Images();
-// LOG(INFO) << images.size();
+// DLOG(INFO) << images.size();
 //
 // msvc seems to have an internal bug in ifstream::read
 // which causes an error with errno == 2 midway
@@ -22,7 +22,7 @@ void ReadCamerasBinary(const std::string& filename, std::vector<colmap::Camera>&
 // colmap::Reconstruction reconstruction;
 // reconstruction.ReadBinary(FLAGS_sfm_result_path);
 // auto images = reconstruction.Images();
-// LOG(INFO) << images.size();
+// DLOG(INFO) << images.size();
 //
 void ReadImagesBinary(const std::string& filename, std::vector<colmap::Image>& images);
 

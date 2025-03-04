@@ -1,0 +1,69 @@
+FROM public.ecr.aws/docker/library/ubuntu:20.04
+
+
+# copy files
+COPY sources.list /etc/apt/sources.list.bak
+COPY .vimrc .zshrc-header /root/
+
+
+# setup environment
+ENV LANG C.UTF-8
+ENV LC_ALL C.UTF-8
+ENV EDITOR vim
+ENV ROS_DISTRO noetic
+ENV TZ Asia/Shanghai
+
+
+# install packages by apt
+RUN set -x && \
+    apt-get update \
+    # setup man pages
+    && yes | unminimize \
+    && apt-get install -q -y --no-install-recommends man-db less \
+    # setup timezone
+    && echo 'Etc/UTC' > /etc/timezone \
+    && apt-get install -q -y --no-install-recommends tzdata \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
+    # install packages
+    && apt-get install -q -y --no-install-recommends \
+    dirmngr gnupg2 sudo \
+    git tig build-essential clang gdb cmake ninja-build \
+    zsh tree htop autojump iotop wget curl apt-file asciinema \
+    vim-nox \
+    python3-pip \
+    dnsutils \
+    lsb-release \
+    && rm -rf /var/lib/apt/lists/*
+
+
+# configure
+RUN : \
+    # configure git
+    && git config --global core.editor vim \
+    && git config --global credential.helper store \
+    # configure zsh
+    && wget https://github.com/robbyrussell/oh-my-zsh/raw/master/tools/install.sh -O - | zsh || true \
+    && git clone https://github.com/zsh-users/zsh-autosuggestions ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-autosuggestions \
+    && mv ~/.zshrc ~/.zshrc.bak \
+    && cat ~/.zshrc-header ~/.zshrc.bak > ~/.zshrc \
+    && sed -i 's/ZSH_THEME="robbyrussell"/ZSH_THEME="ys"/g' ~/.zshrc \
+    && sed -i 's/plugins=(git)/plugins=(git autojump command-not-found zsh-autosuggestions)/g' ~/.zshrc \
+    # configure pip
+    && pip3 config set global.index-url https://mirrors.aliyun.com/pypi/simple/ \
+    # configure GEF
+    && pip3 install --break-system-packages --no-cache-dir keystone-engine unicorn ropper capstone \
+    && wget -O ~/.gdbinit-gef.py -q http://gef.blah.cat/py \
+    && echo source ~/.gdbinit-gef.py >> ~/.gdbinit
+
+
+# install packages
+RUN apt-get update \
+    && apt-get install -q -y libtool python3-jinja2 flex bison libxtst-dev autoconf automake autoconf-archive \
+       unzip zip '^libxcb.*-dev' libx11-xcb-dev libgl1-mesa-dev libxrender-dev libxi-dev  libxkbcommon-dev libxkbcommon-x11-dev gfortran \
+       libxi-dev libgl1-mesa-dev libglu1-mesa-dev mesa-common-dev libxrandr-dev libxxf86vm-dev \
+       pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+
+# setup entrypoint
+CMD ["bash"]

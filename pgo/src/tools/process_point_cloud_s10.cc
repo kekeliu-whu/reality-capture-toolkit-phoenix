@@ -6,10 +6,13 @@
 #include <pcl/filters/fast_bilateral_omp.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/io/pcd_io.h>
+#include <pcl/io/ply_io.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/search/kdtree.h>
 #include <Eigen/Eigen>
+#include <boost/filesystem.hpp>
+#include <fstream>
 #include <pcl/filters/impl/fast_bilateral.hpp>
 #include <pcl/filters/impl/fast_bilateral_omp.hpp>
 #include <thread>
@@ -17,8 +20,7 @@
 
 #include "map/utils.h"
 
-DEFINE_string(project_input_path, "D:/BaiduNetdiskDownload/2024-12-04-11-28-44-SHAREUAV-S20", "Input project path");
-DEFINE_string(project_output_path, "D:/BaiduNetdiskDownload/2024-12-04-11-28-44-SHAREUAV-S20", "Output project path");
+DEFINE_string(las_filename, "/buildspace/output_dir/colorized.las", "Input project path");
 
 static constexpr double kDownsampleVoxelSize    = 0.05;
 static constexpr int kNearestNeighbors          = 15;
@@ -27,6 +29,45 @@ static constexpr double kSmoothMaxSearchRadius  = 0.3;
 static constexpr double kSmoothSigmaD           = 0.05;
 static constexpr double kSmoothSigmaN           = 0.05;
 
+#include <pdal/StageFactory.hpp>
+#include <pdal/io/LasReader.hpp>
+#include <pdal/PointTable.hpp>
+#include <pdal/Options.hpp>
+
+void LoadLAS(const std::string &filename, pcl::PointCloud<pcl::PointXYZI>::Ptr &cloud) {
+    // 初始化点云对象
+    cloud.reset(new pcl::PointCloud<pcl::PointXYZI>);
+
+    // 创建 PDAL 读取器
+    pdal::StageFactory factory;
+    pdal::Stage* reader = factory.createStage("readers.las");
+    pdal::Options opts;
+    opts.add(pdal::Option("filename", filename));
+    reader->setOptions(opts);
+
+    // 准备点云数据容器
+    pdal::PointTable table;
+    reader->prepare(table);
+    pdal::PointViewSet viewSet = reader->execute(table);
+    pdal::PointViewPtr view = *viewSet.begin();
+
+    // 配置点云属性
+    cloud->width = view->size();
+    cloud->height = 1;
+    cloud->is_dense = false;
+    cloud->points.resize(cloud->width);
+
+    // 遍历并转换数据
+    for (size_t i = 0; i < view->size(); ++i) {
+        pcl::PointXYZI p;
+        p.x = view->getFieldAs<double>(pdal::Dimension::Id::X, i);
+        p.y = view->getFieldAs<double>(pdal::Dimension::Id::Y, i);
+        p.z = view->getFieldAs<double>(pdal::Dimension::Id::Z, i);
+        p.intensity = view->getFieldAs<float>(pdal::Dimension::Id::Intensity, i);
+        cloud->points[i] = p;
+    }
+}
+
 void SavePointCloud(const std::string &filename, const pcl::PointCloud<pcl::PointXYZI> &cloud, const std::vector<Eigen::Vector3f> &normals) {
   pcl::PointCloud<pcl::PointXYZINormal>::Ptr cloud_out(new pcl::PointCloud<pcl::PointXYZINormal>);
   for (int i = 0; i < cloud.size(); ++i) {
@@ -34,6 +75,48 @@ void SavePointCloud(const std::string &filename, const pcl::PointCloud<pcl::Poin
     np.getVector3fMap()       = cloud.points[i].getVector3fMap();
     np.getNormalVector3fMap() = normals[i];
     cloud_out->points.push_back(np);
+  }
+}
+
+void PcaEstimateNormalNoDirect(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &cloud,
+                               int k,
+                               double downsample_voxel_size,
+                               std::vector<Eigen::Vector3f> &normals) {
+  normals.resize(cloud->size());
+
+  DLOG(INFO) << "Building kdtree for normal estimation...";
+  pcl::KdTreeFLANN<pcl::PointXYZI>::Ptr tree(new pcl::KdTreeFLANN<pcl::PointXYZI>);
+  pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZI>);
+  DownsamplePointCloud(cloud, cloud_downsampled, downsample_voxel_size);
+  tree->setInputCloud(cloud_downsampled);
+
+  DLOG(INFO) << "Estimating normals...";
+#pragma omp parallel for
+  for (int i = 0; i < cloud->size(); ++i) {
+    std::vector<int> k_indices(k);
+    std::vector<float> k_sqr_distances(k);
+
+    if (tree->nearestKSearch(cloud->at(i), k, k_indices, k_sqr_distances) <= 0) {
+      continue;
+    }
+
+    Eigen::Vector3d centroid = Eigen::Vector3d::Zero();
+    for (int j : k_indices) {
+      centroid += cloud_downsampled->points[j].getVector3fMap().cast<double>();
+    }
+    centroid /= k_indices.size();
+
+    Eigen::Matrix3d covariance = Eigen::Matrix3d::Zero();
+    for (int j : k_indices) {
+      Eigen::Vector3d neighbor = cloud_downsampled->points[j].getVector3fMap().cast<double>();
+      Eigen::Vector3d cp       = neighbor - centroid;
+      covariance += cp * cp.transpose();
+    }
+
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eigensolver(covariance);
+    Eigen::Matrix3d eigenvectors = eigensolver.eigenvectors();
+
+    normals[i] = eigenvectors.col(0).cast<float>();
   }
 }
 
@@ -83,17 +166,19 @@ int main(int argc, char **argv) {
   omp_set_num_threads(cores_used);
 
   pcl::PointCloud<pcl::PointXYZI>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZI>);
-  std::vector<Eigen::Vector3f> centers;
   std::vector<Eigen::Vector3f> normals;
 
-  LoadFullPointCloud(FLAGS_project_input_path, cloud, centers);
-  PcaEstimateNormal(cloud, centers, kNearestNeighbors, kDownsampleVoxelSize, normals);
+  CHECK(boost::filesystem::is_regular_file(FLAGS_las_filename));
+
+  LoadLAS(FLAGS_las_filename, cloud);
+
+  PcaEstimateNormalNoDirect(cloud, kNearestNeighbors, kDownsampleVoxelSize, normals);
 
   pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZI>);
   DownsamplePointCloud(cloud, cloud_downsampled, kDownsampleVoxelSize);
 
   DLOG(INFO) << "Smoothing...";
-  pcl::io::savePCDFileBinary(FLAGS_project_output_path + "/before-smooth.pcd", *cloud);
+  // pcl::io::savePCDFileBinary(FLAGS_project_output_path + "/before-smooth.pcd", *cloud);
   SmoothPointCloud(normals, kSmoothMaxNearestNeighbors, kSmoothMaxSearchRadius, kSmoothSigmaD, kSmoothSigmaN, cloud);
 
   pcl::PointCloud<pcl::PointXYZINormal>::Ptr cloud_with_normals(new pcl::PointCloud<pcl::PointXYZINormal>);
@@ -106,8 +191,10 @@ int main(int argc, char **argv) {
   }
 
   DLOG(INFO) << "Saving cloud with normals...";
-  pcl::io::savePCDFileBinary(FLAGS_project_output_path + "/normals.pcd", *cloud_with_normals);
-  DLOG(INFO) << "Save to " << FLAGS_project_output_path + "/normals.pcd";
+  pcl::io::savePLYFileBinary(FLAGS_las_filename + "_normals.ply", *cloud_with_normals);
+  DLOG(INFO) << "Save to " << FLAGS_las_filename + "_normals.ply";
+
+  std::cout << "done." << std::endl;
 
   return 0;
 }

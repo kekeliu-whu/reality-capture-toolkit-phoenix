@@ -7,7 +7,7 @@ if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     set(CMAKE_CXX_FLAGS "-Wthread-safety")
 endif()
 
-find_package(PCL REQUIRED)
+find_package(PCL REQUIRED COMPONENTS common io)
 find_package(Ceres REQUIRED)
 find_package(Protobuf REQUIRED)
 find_package(Boost REQUIRED COMPONENTS iostreams)
@@ -70,7 +70,7 @@ set(
     TEST_EXECUTABLE_COMMON_DEPS
     protobuf::libprotobuf
     ${Boost_LIBRARIES}
-    $<$<PLATFORM_ID:Windows>:glog::>glog
+    glog::glog
     sophus
     rosbag
 )

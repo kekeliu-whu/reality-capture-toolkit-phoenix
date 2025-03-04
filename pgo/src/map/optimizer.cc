@@ -72,7 +72,7 @@ bool MatchGICP(pcl::PointCloud<pcl::PointXYZI>::Ptr &target,
 
   double score = CalcFitnessScore(target, source, T_source_to_target, 2.0);
   if (score < gicp_fitness_score_threshold) {
-    LOG(INFO) << "good match: " << score;
+    DLOG(INFO) << "good match: " << score;
     return true;
   }
   return false;
@@ -221,7 +221,7 @@ void Optimize(std::vector<TimestampedPointCloud> &submaps,
     options.minimizer_progress_to_stdout = true;
     ceres::Solver::Summary summary;
     ceres::Solve(options, &problem, &summary);
-    LOG(INFO) << summary.FullReport();
+    DLOG(INFO) << summary.FullReport();
 
     // clean up non-prior constraints for the next iteration
     RemoveNonPriorConstraints(problem, prior_residual_blocks);

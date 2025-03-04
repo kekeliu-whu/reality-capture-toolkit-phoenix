@@ -1,0 +1,18 @@
+FROM registry.cn-hangzhou.aliyuncs.com/c137/reality-capture-toolkit-internal:base-linux
+
+# install cuda-12.3
+RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb \
+    && sudo dpkg -i cuda-keyring_1.1-1_all.deb \
+    && sudo apt-get update \
+    && sudo apt-get -y install cuda-toolkit-12-3 \
+    && rm cuda-keyring_1.1-1_all.deb \
+    && rm -rf /var/lib/apt/lists/*
+
+# set CUDA variables
+ENV CUDA_HOME=/usr/local/cuda
+ENV LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64
+ENV PATH=${PATH}:${CUDA_HOME}/bin
+
+
+# setup entrypoint
+CMD ["bash"]

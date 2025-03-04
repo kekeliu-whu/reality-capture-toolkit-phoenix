@@ -89,10 +89,10 @@ class PosePriorCostFunction {
   template <typename T>
   bool operator()(const T *const R_ptr, const T *const t_ptr, T *residuals_ptr) const {
     Eigen::Map<const Eigen::Quaternion<T>> R_a(R_ptr);
-    Eigen::Map<const Eigen::Vector3<T>> t_a(t_ptr);
+    Eigen::Map<const Eigen::Matrix<T, 3, 1>> t_a(t_ptr);
 
-    Eigen::Quaternion<T> R_error = R_a.conjugate() * R_prior_.cast<T>();
-    Eigen::Vector3<T> t_error    = R_a.conjugate() * (t_prior_.cast<T>() - t_a);
+    Eigen::Quaternion<T> R_error   = R_a.conjugate() * R_prior_.cast<T>();
+    Eigen::Matrix<T, 3, 1> t_error = R_a.conjugate() * (t_prior_.cast<T>() - t_a);
 
     // Compute the residuals
     Eigen::Map<Eigen::Matrix<T, 6, 1>> residuals(residuals_ptr);

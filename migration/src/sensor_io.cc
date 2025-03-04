@@ -82,12 +82,12 @@ bool ReadSingleMsgFile(const std::string &filename,
   std::ifstream file(filename, std::ios::in | std::ios::binary);
 
   if (!file.is_open()) {
-    LOG(ERROR) << "Failed to open file: " << filename;
+    DLOG(ERROR) << "Failed to open file: " << filename;
     return false;
   }
 
   if (!message.ParseFromIstream(&file)) {
-    LOG(ERROR) << "Failed to parse MotorFile from file: " << filename;
+    DLOG(ERROR) << "Failed to parse MotorFile from file: " << filename;
     return false;
   }
 
@@ -99,12 +99,12 @@ bool WriteSingleMsgFile(const std::string &filename,
   std::ofstream outfile(filename, std::ios::out | std::ios::binary);
 
   if (!outfile.is_open()) {
-    LOG(ERROR) << "Failed to open file: " << filename;
+    DLOG(ERROR) << "Failed to open file: " << filename;
     return false;
   }
 
   if (!message.SerializeToOstream(&outfile)) {
-    LOG(ERROR) << "Failed to serialize MotorFile to file: " << filename;
+    DLOG(ERROR) << "Failed to serialize MotorFile to file: " << filename;
     return false;
   }
 
@@ -118,7 +118,7 @@ bool ReadLidarFile(
     std::function<void(const std::shared_ptr<const LidarMsg> &)> callback) {
   std::ifstream infile(filename, std::ios::in | std::ios::binary);
   if (!infile.is_open()) {
-    LOG(ERROR) << "Failed to open file: " << filename;
+    DLOG(ERROR) << "Failed to open file: " << filename;
     return false;
   }
 
@@ -133,13 +133,13 @@ bool WriteLidarFile(const std::string &filename,
                     const std::vector<ConstPtr<LidarMsg>> &scans) {
   std::ofstream outfile(filename, std::ios::out | std::ios::binary);
   if (!outfile.is_open()) {
-    LOG(ERROR) << "Failed to open file: " << filename;
+    DLOG(ERROR) << "Failed to open file: " << filename;
     return false;
   }
 
   for (const auto &scan : scans) {
     if (!WriteDelimitedTo(*scan, outfile)) {
-      LOG(ERROR) << "Failed to serialize LidarScanMsg to file: " << filename;
+      DLOG(ERROR) << "Failed to serialize LidarScanMsg to file: " << filename;
       return false;
     }
   }
@@ -151,7 +151,7 @@ bool ReadUndistortedLidarFile(
     std::function<void(const ConstPtr<UndistoredLidarMsg> &)> callback) {
   std::ifstream infile(filename, std::ios::in | std::ios::binary);
   if (!infile.is_open()) {
-    LOG(ERROR) << "Failed to open file: " << filename;
+    DLOG(ERROR) << "Failed to open file: " << filename;
     return false;
   }
 
@@ -167,13 +167,13 @@ bool WriteUndistortedLidarFile(
     const std::vector<ConstPtr<UndistoredLidarMsg>> &scans) {
   std::ofstream outfile(filename, std::ios::out | std::ios::binary);
   if (!outfile.is_open()) {
-    LOG(ERROR) << "Failed to open file: " << filename;
+    DLOG(ERROR) << "Failed to open file: " << filename;
     return false;
   }
 
   for (const auto &scan : scans) {
     if (!WriteDelimitedTo(*scan, outfile)) {
-      LOG(ERROR) << "Failed to serialize UndistoredLidarMsg to file: " << filename;
+      DLOG(ERROR) << "Failed to serialize UndistoredLidarMsg to file: " << filename;
       return false;
     }
   }
@@ -234,20 +234,20 @@ bool ReadPgoConfigFile(const std::string &filename, PgoConfig &config) {
         google::protobuf::util::JsonStringToMessage(fileContent, &config);
 
     if (!status.ok()) {
-      LOG(ERROR) << "Failed to parse JSON: " << status.ToString();
+      DLOG(ERROR) << "Failed to parse JSON: " << status.ToString();
       return false;
     }
 
     return true;
   }
 
-  LOG(ERROR) << "Unsupported file extension: " << extension;
+  DLOG(ERROR) << "Unsupported file extension: " << extension;
   return false;
 }
 
 bool LidarFileWriter::Write(const ConstPtr<UndistoredLidarMsg> &msg) {
   if (!WriteDelimitedTo(*msg, outfile_)) {
-    LOG(ERROR) << "Failed to serialize UndistoredLidarMsg to file: "
+    DLOG(ERROR) << "Failed to serialize UndistoredLidarMsg to file: "
                << filename_;
     return false;
   }

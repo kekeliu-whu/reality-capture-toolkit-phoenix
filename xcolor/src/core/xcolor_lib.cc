@@ -65,7 +65,7 @@ class PointCloudRayCaster {
       voxel_map_[key].point_indices->push_back(i);
     }
     tree_.reset(new Tree(voxel_boxes_cache_.begin(), voxel_boxes_cache_.end()));
-    LOG(INFO) << "Build Voxelmap and AABBTree done: voxel count: " << voxel_map_.size() << " point count: " << cloud.size();
+    DLOG(INFO) << "Build Voxelmap and AABBTree done: voxel count: " << voxel_map_.size() << " point count: " << cloud.size();
 
     // compute centroid as the voxel center
     for (auto &[_, voxel] : voxel_map_) {
@@ -75,11 +75,11 @@ class PointCloudRayCaster {
       }
       voxel.center = coord_sum / voxel.point_indices->size();
     }
-    LOG(INFO) << "Compute voxel center done.";
+    DLOG(INFO) << "Compute voxel center done.";
   }
 
   void PerformRayCasting(const std::vector<Image> &images) {
-    LOG(INFO) << "Perform Ray Casting...";
+    DLOG(INFO) << "Perform Ray Casting...";
     std::atomic<int> process_num(0);
 #pragma omp parallel for
     for (int image_idx = 0; image_idx < images.size(); ++image_idx) {
@@ -110,7 +110,7 @@ class PointCloudRayCaster {
 
 #pragma omp critical
       {
-        LOG(INFO) << "Progress: " << ++process_num << " / " << images.size();
+        DLOG(INFO) << "Progress: " << ++process_num << " / " << images.size();
         for (auto &voxel : visible_voxel_set) {
           voxel_map_[voxel].visible_image_indices->push_back(image_idx);
         }
@@ -193,7 +193,7 @@ void PerformXColor(const pcl::PointCloud<pcl::PointXYZRGB> &cloud, const std::ve
   PrintMemoryUsage();
   ray_caster.PerformRayCasting(images);
 
-  LOG(INFO) << "Start xcolor...";
+  DLOG(INFO) << "Start xcolor...";
   auto voxel_map = ray_caster.GetRayCastingResult();
   std::vector<Eigen::Vector3i> keys;
   for (const auto &pair : voxel_map) {
@@ -273,8 +273,8 @@ void PerformXColor(const pcl::PointCloud<pcl::PointXYZRGB> &cloud, const std::ve
     }
   }
 
-  LOG(INFO) << "Saving point cloud to " << output_path + "/xcolor.pcd";
+  DLOG(INFO) << "Saving point cloud to " << output_path + "/xcolor.pcd";
   pcl::io::savePCDFileBinary(output_path + "/xcolor.pcd", cloud_rgb);
 
-  LOG(INFO) << "Finish xcolor.";
+  DLOG(INFO) << "Finish xcolor.";
 }

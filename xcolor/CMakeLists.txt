@@ -12,6 +12,7 @@ if(OPT_ASAN)
 endif()
 
 add_definitions(-D_USE_MATH_DEFINES)
+add_definitions(-DGLOG_USE_GLOG_EXPORT)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -28,6 +29,7 @@ find_package(OpenCV CONFIG REQUIRED)
 find_package(absl CONFIG REQUIRED)
 find_package(RapidJSON CONFIG REQUIRED)
 find_package(Glog REQUIRED)
+find_package(GTest CONFIG REQUIRED)
 
 include_directories(
   src
@@ -52,7 +54,7 @@ target_link_libraries(
   ${GFLAGS_LIBRARIES}
   ${PCL_LIBRARIES}
   ${CERES_LIBRARIES}
-  $<$<PLATFORM_ID:Windows>:glog::>glog
+  glog::glog
   $<$<PLATFORM_ID:Windows>:lib>las
   colmap::colmap
   absl::flat_hash_map
@@ -74,7 +76,7 @@ target_link_libraries(
   ${GFLAGS_LIBRARIES}
   ${PCL_LIBRARIES}
   ${CERES_LIBRARIES}
-  $<$<PLATFORM_ID:Windows>:glog::>glog
+  glog::glog
   $<$<PLATFORM_ID:Windows>:lib>las
   colmap::colmap
   absl::flat_hash_map

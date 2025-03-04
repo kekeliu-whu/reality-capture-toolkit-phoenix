@@ -18,7 +18,7 @@ int main(int argc, char **argv) {
       R"(D:\matrix641\migration\config\pgo\pgo.json)",
       pgo_config);
   CHECK(ok);
-  LOG(INFO) << "Read configuration success:\n"
+  DLOG(INFO) << "Read configuration success:\n"
             << pgo_config.DebugString();
 
   PgoRunner runner(pgo_config);

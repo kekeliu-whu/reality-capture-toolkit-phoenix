@@ -1,0 +1,24 @@
+# Stage 1: Builder
+FROM registry.cn-hangzhou.aliyuncs.com/c137/reality-capture-toolkit-internal:base-cuda AS builder
+
+RUN mkdir /buildspace && cd /buildspace \
+    && git clone --depth 1 -b 2025.01.13 https://github.com/microsoft/vcpkg \
+    && sed -i '/--disable-test-modules/a \        "--disable-ipv6"' /buildspace/vcpkg/ports/python3/portfile.cmake \
+    && sed -i 's/set(VCPKG_LIBRARY_LINKAGE static)/set(VCPKG_LIBRARY_LINKAGE dynamic)/' /buildspace/vcpkg/triplets/x64-linux.cmake \
+    && sed -i '/set(VCPKG_CMAKE_SYSTEM_NAME Linux)/a set(VCPKG_BUILD_TYPE release)' /buildspace/vcpkg/triplets/x64-linux.cmake \
+    && sed -i 's/set(CUDA_ARCHITECTURES "native")/set(CUDA_ARCHITECTURES "all")/' /buildspace/vcpkg/ports/colmap/portfile.cmake \
+    && cd vcpkg && ./bootstrap-vcpkg.sh
+
+RUN for i in $(seq 1 10); do \
+      /buildspace/vcpkg/vcpkg install liblas boost pcl colmap[cuda] opencv cgal pdal rapidjson gtest --recurse && break || sleep 10; \
+    done \
+    && rm -rf /buildspace/vcpkg/downloads /buildspace/vcpkg/buildtrees /buildspace/vcpkg/packages /var/lib/apt/lists/* /root/.cache/vcpkg
+
+
+
+# Stage 2: Final Runtime Image
+FROM registry.cn-hangzhou.aliyuncs.com/c137/reality-capture-toolkit-internal:base-cuda
+
+COPY --from=builder /buildspace/vcpkg /buildspace/vcpkg
+
+CMD ["bash"]

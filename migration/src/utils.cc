@@ -21,14 +21,14 @@ void PrintMemoryUsage() {
   while (std::getline(file, line)) {
     // VmRSS is Resident Set Size, the physical memory used by the process
     if (line.find("VmRSS:") != std::string::npos) {
-      LOG(INFO) << line;
+      DLOG(INFO) << line;
       break;
     }
   }
 #else
   PROCESS_MEMORY_COUNTERS pmc;
   if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
-    LOG(INFO) << "Memory usage: " << pmc.WorkingSetSize / 1024 << " KB";
+    DLOG(INFO) << "Memory usage: " << pmc.WorkingSetSize / 1024 << " KB";
   }
 #endif
 }

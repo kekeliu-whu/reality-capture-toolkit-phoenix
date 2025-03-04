@@ -47,14 +47,14 @@ void SaveTriangulatedPoints(const std::vector<MatchResult> &match_results, const
 void SaveImagePoses(const std::string &filename, const std::unordered_set<colmap::image_t> &optimized_image_ids,
                     const std::unordered_map<colmap::image_t, colmap::Image> &images,
                     const std::unordered_map<colmap::camera_t, colmap::Rigid3d> &pose_priors) {
-  LOG(INFO) << "Saving image information into " << FLAGS_output_path + "/images.bin";
+  DLOG(INFO) << "Saving image information into " << FLAGS_output_path + "/images.bin";
   std::vector<colmap::Image> images_out;
   for (auto &image_id : optimized_image_ids) {
     images_out.push_back(images.at(image_id));
   }
   WriteImagesBinary(FLAGS_output_path + "/images.bin", images_out);
 
-  LOG(INFO) << "Saving image poses into " << filename;
+  DLOG(INFO) << "Saving image poses into " << filename;
   std::ofstream infile(filename);
   infile << "camera_id image_name x y z rw rx ry rz" << std::endl;
   for (auto &image_id : optimized_image_ids) {
@@ -140,7 +140,7 @@ void RunSFM(const SfmConfig &config, const std::vector<MatchPair> &match_pairs, 
   pcl::PointCloud<pcl::PointXYZINormal> point_cloud;
   int load_ply_status = pcl::io::loadPLYFile(point_cloud_filename, point_cloud);
   CHECK_NE(load_ply_status, -1);
-  LOG(INFO) << "Load " << point_cloud.size() << " points.";
+  DLOG(INFO) << "Load " << point_cloud.size() << " points.";
 
   // build kdtree
   pcl::KdTreeFLANN<pcl::PointXYZINormal> kdtree;
@@ -192,24 +192,24 @@ void RunSFM(const SfmConfig &config, const std::vector<MatchPair> &match_pairs, 
       {
         optimized_image_ids.insert(point_on_image1.image_id);
         optimized_image_ids.insert(point_in_image2.image_id);
-        LOG_EVERY_N(INFO, 10000) << "Triangulate point " << i;
+        DLOG_EVERY_N(INFO, 10000) << "Triangulate point " << i;
         AddReprojectFactorToProblem(problem, point3D, point_on_image1.point_pixel, image1, camera1, loss_function_image.get(), residual_block_ids);
         AddReprojectFactorToProblem(problem, point3D, point_in_image2.point_pixel, image2, camera2, loss_function_image.get(), residual_block_ids);
         AddLidarFactorToProblem(problem, point3D, lidar_point, lidar_normal, loss_function_lidar.get(), lidar_residual_block_ids);
       }
     }
-    LOG(INFO) << optimized_image_ids.size() << " images are used.";
-    LOG(INFO) << images.size() << " images in total.";
+    DLOG(INFO) << optimized_image_ids.size() << " images are used.";
+    DLOG(INFO) << images.size() << " images in total.";
     ParameterizeCameras(config, problem, cameras);
 
     AddPosePriorsToProblem(config, problem, pose_priors, optimized_image_ids, images);
 
     int valid_count = std::accumulate(match_results.begin(), match_results.end(), 0, [](int sum, auto &a) { return sum + a.valid; });
-    LOG(INFO) << valid_count << "/" << match_pairs.size() << " (" << valid_count * 100.0 / match_pairs.size() << "%) matches are valid.";
+    DLOG(INFO) << valid_count << "/" << match_pairs.size() << " (" << valid_count * 100.0 / match_pairs.size() << "%) matches are valid.";
 
     PrintResidualHistogram(config.reproject_error_outlier_thresholds[iter], problem, residual_block_ids, "image");
     PrintResidualHistogram(config.lidar_error_outlier_thresholds[iter], problem, lidar_residual_block_ids, "lidar");
-    SaveTriangulatedPoints(match_results, FLAGS_output_path + "/triangulated" + std::to_string(iter) + ".pcd");
+    // SaveTriangulatedPoints(match_results, FLAGS_output_path + "/triangulated" + std::to_string(iter) + ".pcd");
 
     ceres::Solver::Summary summary;
     ceres::Solver::Options options;
@@ -217,11 +217,11 @@ void RunSFM(const SfmConfig &config, const std::vector<MatchPair> &match_pairs, 
     options.num_threads                  = config.ba_optimization_num_threads;
     options.max_num_iterations           = 20;
     ceres::Solve(options, &problem, &summary);
-    LOG(INFO) << summary.FullReport();
+    DLOG(INFO) << summary.FullReport();
 
     PrintResidualHistogram(config.reproject_error_outlier_thresholds[iter], problem, residual_block_ids, "image_refined");
     PrintResidualHistogram(config.lidar_error_outlier_thresholds[iter], problem, lidar_residual_block_ids, "lidar_refined");
-    SaveTriangulatedPoints(match_results, FLAGS_output_path + "/triangulated" + std::to_string(iter) + "-refined.pcd");
+    // SaveTriangulatedPoints(match_results, FLAGS_output_path + "/triangulated" + std::to_string(iter) + "-refined.pcd");
 
     SaveImagePoses(FLAGS_output_path + "/image-poses.txt", optimized_image_ids, images, pose_priors);
     SaveCameraParams(FLAGS_output_path + "/camera-params.txt", cameras);
@@ -239,8 +239,8 @@ void GiveInitialPosesToImages(std::unordered_map<colmap::image_t, colmap::Image>
                                         [](double timestamp, const PoseMsg &pose_msg) { return timestamp < pose_msg.timestamp(); });
     int idx          = std::distance(pose_msgs.begin(), it);
     if (idx >= 1 && idx < pose_msgs.size()) {
-      auto &pose1   = FromProto(pose_msgs[idx - 1]);
-      auto &pose2   = FromProto(pose_msgs[idx]);
+      auto pose1    = FromProto(pose_msgs[idx - 1]);
+      auto pose2    = FromProto(pose_msgs[idx]);
       double factor = (timestamp - pose_msgs[idx - 1].timestamp()) / (pose_msgs[idx].timestamp() - pose_msgs[idx - 1].timestamp());
       CHECK_GE(factor, 0);
       CHECK_LE(factor, 1);
@@ -264,12 +264,12 @@ void GiveInitialPosesToImages(std::unordered_map<colmap::image_t, colmap::Image>
       } else if (image.Name().find("right") != std::string::npos) {
         image.SetCamFromWorld(lidar_to_right_cam * colmap::Inverse(lidar_to_imu) * colmap::Inverse(pose_imu_to_world));
       } else {
-        LOG(FATAL);
+        DLOG(FATAL);
       }
     }
   }
   int valid_count = std::accumulate(images.begin(), images.end(), 0, [](int sum, const auto &p) { return sum + p.second.HasPose(); });
-  LOG(INFO) << "Give initial poses to images done: " << valid_count << "/" << images.size();
+  DLOG(INFO) << "Give initial poses to images done: " << valid_count << "/" << images.size();
 }
 
 std::unordered_map<std::string, colmap::Rigid3d> ReadImagePoses(const std::string &filename) {
@@ -281,7 +281,8 @@ std::unordered_map<std::string, colmap::Rigid3d> ReadImagePoses(const std::strin
   std::string json_str{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
 
   rapidjson::Document doc;
-  doc.ParseStream(rapidjson::StringStream{json_str.c_str()});
+  rapidjson::StringStream string_stream{json_str.c_str()};
+  doc.ParseStream(string_stream);
 
   auto &frames = doc["frames"];
   for (int i = 0; i < frames.Size(); ++i) {
@@ -327,7 +328,7 @@ int main(int argc, char **argv) {
 
   int cores      = std::thread::hardware_concurrency();
   int cores_used = std::max(cores - 4, 1);
-  LOG(INFO) << "Using " << cores_used << "/" << cores << " cores.";
+  DLOG(INFO) << "Using " << cores_used << "/" << cores << " cores.";
   omp_set_dynamic(0);
   omp_set_num_threads(cores_used);
 
@@ -361,7 +362,8 @@ int main(int argc, char **argv) {
 
   RunSFM(config, match_pairs, FLAGS_point_cloud_filename, images, cameras);
 
-  LOG(INFO) << "done.";
+  DLOG(INFO) << "done.";
+  std::cout << "done." << std::endl;
 
   return 0;
 }

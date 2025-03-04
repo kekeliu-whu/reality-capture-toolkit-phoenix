@@ -79,10 +79,10 @@ void PreMergeTrack(const colmap::CorrespondenceGraph &corr_graph) {
     }
   }
 
-  LOG(INFO) << "Number of matches: " << match_num;
-  LOG(INFO) << "Number of tracks: " << map.size();
-  LOG(INFO) << "Number of mixed tracks: " << point3D_num_mixed_track;
-  LOG(INFO) << "Rate of mixed tracks: " << static_cast<double>(point3D_num_mixed_track) / map.size() * 100.0 << "%";
+  DLOG(INFO) << "Number of matches: " << match_num;
+  DLOG(INFO) << "Number of tracks: " << map.size();
+  DLOG(INFO) << "Number of mixed tracks: " << point3D_num_mixed_track;
+  DLOG(INFO) << "Rate of mixed tracks: " << static_cast<double>(point3D_num_mixed_track) / map.size() * 100.0 << "%";
 }
 
 std::vector<MatchPair> GenerateMatchPairs(const colmap::CorrespondenceGraph &corr_graph,
@@ -108,7 +108,7 @@ std::vector<MatchPair> GenerateMatchPairs(const colmap::CorrespondenceGraph &cor
       match_pairs.push_back(mp);
     }
   }
-  LOG(INFO) << "Load " << match_pairs.size() << " match pairs.";
+  DLOG(INFO) << "Load " << match_pairs.size() << " match pairs.";
   return match_pairs;
 }
 
@@ -225,7 +225,7 @@ void PrintResidualHistogram(double threshold, ceres::Problem &problem, const std
     residual = std::clamp(residual, -threshold, threshold);
     hist.Add(residual);
   }
-  LOG(INFO) << name << ": " << hist.ToString(10);
+  DLOG(INFO) << name << ": " << hist.ToString(10);
 }
 
 colmap::Rigid3d FromProto(const PoseMsg &pose_msg) {

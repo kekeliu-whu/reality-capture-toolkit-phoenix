@@ -18,19 +18,19 @@ void LoadRawScans(
   // read undistorted lidar scans
   std::vector<PointCloud::Ptr> raw_scans;
   std::vector<TimestampedPose> raw_timestamped_poses;
-  LOG(INFO) << "Loading undistorted lidar scans from " << lidar_filename;
+  DLOG(INFO) << "Loading undistorted lidar scans from " << lidar_filename;
   auto ok = ReadUndistortedLidarFile(
       lidar_filename, [&raw_scans](const ConstPtr<UndistoredLidarMsg> &msg) {
         raw_scans.push_back(FromProto(*msg));
       });
   CHECK(ok) << "Failed to load undistorted lidar scans from " << lidar_filename;
-  LOG(INFO) << "scans number loaded: " << raw_scans.size();
+  DLOG(INFO) << "scans number loaded: " << raw_scans.size();
 
   PoseMsgList pose_msg_list;
-  LOG(INFO) << "Loading poses from " << poses_filename;
+  DLOG(INFO) << "Loading poses from " << poses_filename;
   ok = ReadPoseFile(project_path + "/poses.dat", pose_msg_list);
   CHECK(ok) << "Failed to load poses from " << poses_filename;
-  LOG(INFO) << "poses number loaded: " << pose_msg_list.pose_msgs_size();
+  DLOG(INFO) << "poses number loaded: " << pose_msg_list.pose_msgs_size();
 
   CHECK_EQ(pose_msg_list.pose_msgs_size(), raw_scans.size());
 
@@ -41,7 +41,7 @@ void LoadRawScans(
     scans.back().cloud     = raw_scans[i];
   }
 
-  LOG(INFO) << "All project data loaded done.";
+  DLOG(INFO) << "All project data loaded done.";
 }
 
 void BuildSubMapFromRawScans(const std::vector<TimestampedPointCloud> &scans,
@@ -74,7 +74,7 @@ void BuildSubMapFromRawScans(const std::vector<TimestampedPointCloud> &scans,
     }
   }
 
-  LOG(INFO) << "Build " << submaps.size() << " submaps from " << scans.size()
+  DLOG(INFO) << "Build " << submaps.size() << " submaps from " << scans.size()
             << " scans done.";
 }
 
@@ -102,7 +102,7 @@ void SaveLasFile(const std::vector<TimestampedPointCloud> &submaps,
   std::ofstream ofs(output_filename, std::ios::out | std::ios::binary);
   CHECK(ofs) << "Failed to open output file: " << output_filename;
 
-  LOG(INFO) << "Saving " << point_num << " points to " << output_filename;
+  DLOG(INFO) << "Saving " << point_num << " points to " << output_filename;
 
   liblas::Header header;
   header.SetDataFormatId(liblas::ePointFormat1);
@@ -144,6 +144,6 @@ void SaveLasFile(const std::vector<TimestampedPointCloud> &submaps,
   writer.SetHeader(header);
   writer.WriteHeader();
 
-  LOG(INFO) << "Save " << point_num << " points to " << output_filename
+  DLOG(INFO) << "Save " << point_num << " points to " << output_filename
             << " successfully.";
 }

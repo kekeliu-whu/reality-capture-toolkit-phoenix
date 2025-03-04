@@ -22,7 +22,7 @@ int main(int argc, char **argv) {
 
   int cores      = std::thread::hardware_concurrency();
   int cores_used = std::max(cores - 4, 1);
-  LOG(INFO) << "Using " << cores_used << "/" << cores << " cores.";
+  DLOG(INFO) << "Using " << cores_used << "/" << cores << " cores.";
   omp_set_dynamic(0);
   omp_set_num_threads(cores_used);
 
@@ -34,16 +34,16 @@ int main(int argc, char **argv) {
   PrintMemoryUsage();
 
   // loading point cloud
-  LOG(INFO) << "Loading point cloud from " << FLAGS_point_cloud_filename << " ...";
+  DLOG(INFO) << "Loading point cloud from " << FLAGS_point_cloud_filename << " ...";
   pcl::PointCloud<pcl::PointXYZRGB> cloud;
   int ret = pcl::io::loadPLYFile(FLAGS_point_cloud_filename, cloud);
   PrintMemoryUsage();
   CHECK_EQ(ret, 0) << "Load point cloud failed: " << FLAGS_point_cloud_filename;
-  LOG(INFO) << "Load " << cloud.size() << " points.";
+  DLOG(INFO) << "Load " << cloud.size() << " points.";
 
-  LOG(INFO) << "Start xcolor...";
+  DLOG(INFO) << "Start xcolor...";
   PerformXColor(cloud, images, FLAGS_output_path);
-  LOG(INFO) << "Finish xcolor.";
+  DLOG(INFO) << "Finish xcolor.";
 
   return 0;
 }

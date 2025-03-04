@@ -1,0 +1,13 @@
+# 第一阶段：构建代码（临时层，不会影响最终镜像）
+FROM registry.cn-hangzhou.aliyuncs.com/c137/reality-capture-toolkit-internal:base-cuda-build-vcpkg-manual AS builder
+COPY . /buildspace/reality-capture-toolkit
+RUN bash /buildspace/reality-capture-toolkit/docker/linux/build.sh
+
+
+# 第二阶段：最小化最终镜像（避免多余层）
+FROM registry.cn-hangzhou.aliyuncs.com/c137/reality-capture-toolkit-internal:base-cuda-build-vcpkg-manual
+COPY --from=builder /buildspace/bin /buildspace/bin
+
+
+# setup entrypoint
+CMD ["bash"]

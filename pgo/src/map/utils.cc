@@ -19,13 +19,13 @@ void PcaEstimateNormal(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &cloud,
                        std::vector<Eigen::Vector3f> &normals) {
   normals.resize(cloud->size());
 
-  LOG(INFO) << "Building kdtree for normal estimation...";
+  DLOG(INFO) << "Building kdtree for normal estimation...";
   pcl::KdTreeFLANN<pcl::PointXYZI>::Ptr tree(new pcl::KdTreeFLANN<pcl::PointXYZI>);
   pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZI>);
   DownsamplePointCloud(cloud, cloud_downsampled, downsample_voxel_size);
   tree->setInputCloud(cloud_downsampled);
 
-  LOG(INFO) << "Estimating normals...";
+  DLOG(INFO) << "Estimating normals...";
 #pragma omp parallel for
   for (int i = 0; i < cloud->size(); ++i) {
     std::vector<int> k_indices(k);
@@ -94,9 +94,9 @@ void DownsampleSubmaps(std::vector<TimestampedPointCloud> &submaps,
     pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_filtered(
         new pcl::PointCloud<pcl::PointXYZI>);
     voxel_grid.filter(*cloud_filtered);
-    // LOG(INFO) << "Downsample submap from " << submap.cloud->size() << " to " << cloud_filtered->size() << " points.";
+    // DLOG(INFO) << "Downsample submap from " << submap.cloud->size() << " to " << cloud_filtered->size() << " points.";
     submap.cloud = cloud_filtered;
   }
 
-  LOG(INFO) << "Downsample " << submaps.size() << " submaps done.";
+  DLOG(INFO) << "Downsample " << submaps.size() << " submaps done.";
 }

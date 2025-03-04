@@ -19,6 +19,7 @@ find_package(libLAS CONFIG REQUIRED)
 find_package(Boost CONFIG COMPONENTS program_options)
 find_package(OpenCV REQUIRED)
 find_package(OpenMP REQUIRED)
+find_package(PDAL CONFIG REQUIRED)
 if(WIN32)
   find_package(Glog REQUIRED)
 endif()
@@ -48,7 +49,7 @@ target_link_libraries(
   ${GFLAGS_LIBRARIES}
   ${PCL_LIBRARIES}
   ${CERES_LIBRARIES}
-  $<$<PLATFORM_ID:Windows>:glog::>glog
+  glog::glog
   $<$<PLATFORM_ID:Windows>:lib>las
   OpenMP::OpenMP_CXX
 )
@@ -63,7 +64,7 @@ add_executable(
 target_link_libraries(
   process_point_cloud_std
   migration_core
-  $<$<PLATFORM_ID:Windows>:glog::>glog
+  glog::glog
   $<$<PLATFORM_ID:Windows>:lib>las
   ${PCL_LIBRARIES}
   opencv_core
@@ -71,6 +72,27 @@ target_link_libraries(
   opencv_calib3d
   ${GFLAGS_LIBRARIES}
   OpenMP::OpenMP_CXX
+)
+
+add_executable(
+  process_point_cloud_s10
+  src/tools/process_point_cloud_s10.cc
+  src/io/read_write.cc
+  src/map/utils.cc
+)
+
+target_link_libraries(
+  process_point_cloud_s10
+  migration_core
+  glog::glog
+  $<$<PLATFORM_ID:Windows>:lib>las
+  ${PCL_LIBRARIES}
+  opencv_core
+  opencv_highgui
+  opencv_calib3d
+  ${GFLAGS_LIBRARIES}
+  OpenMP::OpenMP_CXX
+  $<TARGET_NAME:pdalcpp>
 )
 
 add_executable(
@@ -82,7 +104,7 @@ add_executable(
 target_link_libraries(
   calib_camera_pose
   migration_core
-  $<$<PLATFORM_ID:Windows>:glog::>glog
+  glog::glog
   $<$<PLATFORM_ID:Windows>:lib>las
   ${PCL_LIBRARIES}
   opencv_core

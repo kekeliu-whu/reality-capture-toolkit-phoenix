@@ -64,7 +64,7 @@ void ReadCamerasBinary(const std::string& filename, std::vector<colmap::Camera>&
 // colmap::Reconstruction reconstruction;
 // reconstruction.ReadBinary(FLAGS_sfm_result_path);
 // auto images = reconstruction.Images();
-// LOG(INFO) << images.size();
+// DLOG(INFO) << images.size();
 //
 inline void ReadImagesBinary(const std::string& filename, std::vector<colmap::Image>& images) {
   std::ifstream stream(filename, std::ios::binary);
@@ -124,17 +124,17 @@ inline void ReadImagesBinary(const std::string& filename, std::vector<colmap::Im
 }
 
 void ReadImages(const std::string& sfm_path, const std::string& images_path, std::vector<Image>& images) {
-  LOG(INFO) << "Loading image poses from " << sfm_path + "/images.bin ...";
+  DLOG(INFO) << "Loading image poses from " << sfm_path + "/images.bin ...";
   std::vector<colmap::Image> raw_images;
   ReadImagesBinary(sfm_path + "/images.bin", raw_images);
-  LOG(INFO) << "Load " << raw_images.size() << " image poses.";
+  DLOG(INFO) << "Load " << raw_images.size() << " image poses.";
 
-  LOG(INFO) << "Loading cameras from " << sfm_path + "/cameras.bin ...";
+  DLOG(INFO) << "Loading cameras from " << sfm_path + "/cameras.bin ...";
   std::vector<colmap::Camera> raw_cameras;
   ReadCamerasBinary(sfm_path + "/cameras.bin", raw_cameras);
-  LOG(INFO) << "Load " << raw_cameras.size() << " cameras.";
+  DLOG(INFO) << "Load " << raw_cameras.size() << " cameras.";
 
-  LOG(INFO) << "Loading images from " << images_path << " ...";
+  DLOG(INFO) << "Loading images from " << images_path << " ...";
   std::unordered_map<colmap::camera_t, colmap::Camera> camera_id2camera;
   for (auto& e : raw_cameras) {
     camera_id2camera[e.camera_id] = e;
@@ -153,7 +153,7 @@ void ReadImages(const std::string& sfm_path, const std::string& images_path, std
     image.name   = raw_image.Name();
     images.push_back(image);
   }
-  LOG(INFO) << "Load " << images.size() << " images.";
+  DLOG(INFO) << "Load " << images.size() << " images.";
 }
 
 void WriteCamerasBinary(const std::string& filename, const std::vector<colmap::Camera>& cameras) {
