@@ -20,7 +20,8 @@
 
 #include "map/utils.h"
 
-DEFINE_string(las_filename, "/buildspace/output_dir/colorized.las", "Input project path");
+DEFINE_string(las_filename, "e:/BaiduNetdiskDownload/colorized.las", "Input project path");
+DEFINE_bool(output_full, true, "Output full point cloud");
 
 static constexpr double kDownsampleVoxelSize    = 0.05;
 static constexpr int kNearestNeighbors          = 15;
@@ -29,43 +30,43 @@ static constexpr double kSmoothMaxSearchRadius  = 0.3;
 static constexpr double kSmoothSigmaD           = 0.05;
 static constexpr double kSmoothSigmaN           = 0.05;
 
+#include <pdal/Options.hpp>
+#include <pdal/PointTable.hpp>
 #include <pdal/StageFactory.hpp>
 #include <pdal/io/LasReader.hpp>
-#include <pdal/PointTable.hpp>
-#include <pdal/Options.hpp>
 
 void LoadLAS(const std::string &filename, pcl::PointCloud<pcl::PointXYZI>::Ptr &cloud) {
-    // 初始化点云对象
-    cloud.reset(new pcl::PointCloud<pcl::PointXYZI>);
+  // 初始化点云对象
+  cloud.reset(new pcl::PointCloud<pcl::PointXYZI>);
 
-    // 创建 PDAL 读取器
-    pdal::StageFactory factory;
-    pdal::Stage* reader = factory.createStage("readers.las");
-    pdal::Options opts;
-    opts.add(pdal::Option("filename", filename));
-    reader->setOptions(opts);
+  // 创建 PDAL 读取器
+  pdal::StageFactory factory;
+  pdal::Stage *reader = factory.createStage("readers.las");
+  pdal::Options opts;
+  opts.add(pdal::Option("filename", filename));
+  reader->setOptions(opts);
 
-    // 准备点云数据容器
-    pdal::PointTable table;
-    reader->prepare(table);
-    pdal::PointViewSet viewSet = reader->execute(table);
-    pdal::PointViewPtr view = *viewSet.begin();
+  // 准备点云数据容器
+  pdal::PointTable table;
+  reader->prepare(table);
+  pdal::PointViewSet viewSet = reader->execute(table);
+  pdal::PointViewPtr view    = *viewSet.begin();
 
-    // 配置点云属性
-    cloud->width = view->size();
-    cloud->height = 1;
-    cloud->is_dense = false;
-    cloud->points.resize(cloud->width);
+  // 配置点云属性
+  cloud->width    = view->size();
+  cloud->height   = 1;
+  cloud->is_dense = false;
+  cloud->points.resize(cloud->width);
 
-    // 遍历并转换数据
-    for (size_t i = 0; i < view->size(); ++i) {
-        pcl::PointXYZI p;
-        p.x = view->getFieldAs<double>(pdal::Dimension::Id::X, i);
-        p.y = view->getFieldAs<double>(pdal::Dimension::Id::Y, i);
-        p.z = view->getFieldAs<double>(pdal::Dimension::Id::Z, i);
-        p.intensity = view->getFieldAs<float>(pdal::Dimension::Id::Intensity, i);
-        cloud->points[i] = p;
-    }
+  // 遍历并转换数据
+  for (size_t i = 0; i < view->size(); ++i) {
+    pcl::PointXYZI p;
+    p.x              = view->getFieldAs<double>(pdal::Dimension::Id::X, i);
+    p.y              = view->getFieldAs<double>(pdal::Dimension::Id::Y, i);
+    p.z              = view->getFieldAs<double>(pdal::Dimension::Id::Z, i);
+    p.intensity      = view->getFieldAs<float>(pdal::Dimension::Id::Intensity, i);
+    cloud->points[i] = p;
+  }
 }
 
 void SavePointCloud(const std::string &filename, const pcl::PointCloud<pcl::PointXYZI> &cloud, const std::vector<Eigen::Vector3f> &normals) {
@@ -170,12 +171,18 @@ int main(int argc, char **argv) {
 
   CHECK(boost::filesystem::is_regular_file(FLAGS_las_filename));
 
+  DLOG(INFO) << "Loading LAS file...";
   LoadLAS(FLAGS_las_filename, cloud);
+  DLOG(INFO) << "Loaded " << cloud->size() << " points.";
 
+  if (!FLAGS_output_full) {
+    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZI>);
+    DownsamplePointCloud(cloud, cloud_downsampled, kDownsampleVoxelSize);
+    cloud = cloud_downsampled;
+  }
+
+  DLOG(INFO) << "Saving original cloud...";
   PcaEstimateNormalNoDirect(cloud, kNearestNeighbors, kDownsampleVoxelSize, normals);
-
-  pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZI>);
-  DownsamplePointCloud(cloud, cloud_downsampled, kDownsampleVoxelSize);
 
   DLOG(INFO) << "Smoothing...";
   // pcl::io::savePCDFileBinary(FLAGS_project_output_path + "/before-smooth.pcd", *cloud);
@@ -187,12 +194,12 @@ int main(int argc, char **argv) {
     np.getVector3fMap()       = cloud->points[i].getVector3fMap();
     np.getNormalVector3fMap() = normals[i];
     np.intensity              = cloud->points[i].intensity;
-    cloud_with_normals->points.push_back(np);
+    cloud_with_normals->push_back(np);
   }
 
   DLOG(INFO) << "Saving cloud with normals...";
-  pcl::io::savePLYFileBinary(FLAGS_las_filename + "_normals.ply", *cloud_with_normals);
-  DLOG(INFO) << "Save to " << FLAGS_las_filename + "_normals.ply";
+  pcl::io::savePCDFileBinary(FLAGS_las_filename + "_normals.pcd", *cloud_with_normals);
+  DLOG(INFO) << "Save to " << FLAGS_las_filename + "_normals.pcd";
 
   std::cout << "done." << std::endl;
 

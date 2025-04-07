@@ -24,7 +24,7 @@
 #include "migration/utils.h"
 
 DEFINE_string(image_path, "D:/BaiduNetdiskDownload/s10-colmap/images", "SFM databaset filename");
-DEFINE_string(point_cloud_filename, "D:/BaiduNetdiskDownload/s10-colmap/normals-downsampled.ply", "Point cloud filename");
+DEFINE_string(point_cloud_filename, "D:/BaiduNetdiskDownload/s10-colmap/normals-downsampled.pcd", "Point cloud filename");
 DEFINE_string(output_path, "D:/BaiduNetdiskDownload/s10-colmap", "Output path");
 DEFINE_string(database_filename, "D:/BaiduNetdiskDownload/s10-colmap/test.db", "Database filename");
 DEFINE_string(initial_pose_filename, "D:/BaiduNetdiskDownload/s10-colmap/transforms.json", "Initial pose filename");
@@ -138,7 +138,7 @@ bool TryTriangulate(const SfmConfig &config, const colmap::Image &image1, const 
 void RunSFM(const SfmConfig &config, const std::vector<MatchPair> &match_pairs, const std::string &point_cloud_filename,
             std::unordered_map<colmap::image_t, colmap::Image> &images, std::unordered_map<colmap::camera_t, colmap::Camera> &cameras) {
   pcl::PointCloud<pcl::PointXYZINormal> point_cloud;
-  int load_ply_status = pcl::io::loadPLYFile(point_cloud_filename, point_cloud);
+  int load_ply_status = pcl::io::loadPCDFile(point_cloud_filename, point_cloud);
   CHECK_NE(load_ply_status, -1);
   DLOG(INFO) << "Load " << point_cloud.size() << " points.";
 

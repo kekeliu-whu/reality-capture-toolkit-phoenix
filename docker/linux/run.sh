@@ -22,8 +22,10 @@ mkdir -p ${OUT_DIR}/images
 cp -r ${RAW_DIR}/camera/left ${RAW_DIR}/camera/right ${OUT_DIR}/images
 
 
-${CODE_BIN}/process_point_cloud_s10 -las_filename ${OUT_DIR}/colorized.las
+${CODE_BIN}/process_point_cloud_s10 -las_filename ${OUT_DIR}/colorized.las -nooutput_full
+mv ${OUT_DIR}/colorized.las_normals.pcd ${OUT_DIR}/colorized.las_normals.full.pcd
 
+${CODE_BIN}/process_point_cloud_s10 -las_filename ${OUT_DIR}/colorized.las -output_full
 
 export LD_LIBRARY_PATH=/buildspace/vcpkg/installed/x64-linux/lib/manual-link/:${LD_LIBRARY_PATH}
 sudo ldconfig
@@ -34,4 +36,4 @@ $COLMAP_EXE feature_extractor --image_path ${OUT_DIR}/images --database_path ${O
 $COLMAP_EXE exhaustive_matcher --database_path ${OUT_DIR}/test.db
 # $COLMAP_EXE sequential_matcher --database_path ${OUT_DIR}/test.db
 
-${CODE_BIN}/sfm -database_filename ${OUT_DIR}/test.db -image_path ${OUT_DIR}/images -output_path ${OUT_DIR}/ -point_cloud_filename ${OUT_DIR}/colorized.las_normals.ply -initial_pose_filename ${OUT_DIR}/transforms.json
+${CODE_BIN}/sfm -database_filename ${OUT_DIR}/test.db -image_path ${OUT_DIR}/images -output_path ${OUT_DIR}/ -point_cloud_filename ${OUT_DIR}/colorized.las_normals.pcd -initial_pose_filename ${OUT_DIR}/transforms.json
