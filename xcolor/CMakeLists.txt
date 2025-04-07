@@ -11,6 +11,10 @@ if(OPT_ASAN)
   add_compile_options(/fsanitize=address)
 endif()
 
+if(MSVC)
+  add_compile_options(/MP)
+endif()
+
 add_definitions(-D_USE_MATH_DEFINES)
 add_definitions(-DGLOG_USE_GLOG_EXPORT)
 
@@ -22,7 +26,6 @@ find_package(Eigen3 REQUIRED)
 find_package(Ceres REQUIRED)
 find_package(gflags REQUIRED)
 find_package(PCL REQUIRED)
-find_package(libLAS REQUIRED)
 find_package(Boost COMPONENTS program_options)
 find_package(colmap REQUIRED)
 find_package(OpenCV CONFIG REQUIRED)
@@ -36,7 +39,6 @@ include_directories(
   ${EIGEN3_INCLUDE_DIRS}
   ${CERES_INCLUDE_DIRS}
   ${PCL_INCLUDE_DIRS}
-  ${libLAS_INCLUDE_DIRS}
 )
 
 add_subdirectory(../migration migration_build)
@@ -55,7 +57,6 @@ target_link_libraries(
   ${PCL_LIBRARIES}
   ${CERES_LIBRARIES}
   glog::glog
-  $<$<PLATFORM_ID:Windows>:lib>las
   colmap::colmap
   absl::flat_hash_map
   absl::flat_hash_set
@@ -77,7 +78,6 @@ target_link_libraries(
   ${PCL_LIBRARIES}
   ${CERES_LIBRARIES}
   glog::glog
-  $<$<PLATFORM_ID:Windows>:lib>las
   colmap::colmap
   absl::flat_hash_map
   absl::flat_hash_set

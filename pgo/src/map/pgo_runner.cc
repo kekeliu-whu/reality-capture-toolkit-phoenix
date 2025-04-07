@@ -1,4 +1,3 @@
-#include <liblas/liblas.hpp>
 
 #include "io/read_write.h"
 #include "map/optimizer.h"

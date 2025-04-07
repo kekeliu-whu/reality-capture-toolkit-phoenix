@@ -15,7 +15,6 @@ find_package(Eigen3 REQUIRED)
 find_package(Ceres REQUIRED)
 find_package(gflags REQUIRED)
 find_package(PCL REQUIRED COMPONENTS common io filters registration)
-find_package(libLAS CONFIG REQUIRED)
 find_package(Boost CONFIG COMPONENTS program_options)
 find_package(OpenCV REQUIRED)
 find_package(OpenMP REQUIRED)
@@ -29,7 +28,6 @@ include_directories(
   ${EIGEN3_INCLUDE_DIRS}
   ${CERES_INCLUDE_DIRS}
   ${PCL_INCLUDE_DIRS}
-  ${libLAS_INCLUDE_DIRS}
 )
 
 add_subdirectory(../migration migration_build)
@@ -50,8 +48,8 @@ target_link_libraries(
   ${PCL_LIBRARIES}
   ${CERES_LIBRARIES}
   glog::glog
-  $<$<PLATFORM_ID:Windows>:lib>las
   OpenMP::OpenMP_CXX
+  $<TARGET_NAME:pdalcpp>
 )
 
 add_executable(
@@ -65,13 +63,13 @@ target_link_libraries(
   process_point_cloud_std
   migration_core
   glog::glog
-  $<$<PLATFORM_ID:Windows>:lib>las
   ${PCL_LIBRARIES}
   opencv_core
   opencv_highgui
   opencv_calib3d
   ${GFLAGS_LIBRARIES}
   OpenMP::OpenMP_CXX
+  $<TARGET_NAME:pdalcpp>
 )
 
 add_executable(
@@ -85,7 +83,6 @@ target_link_libraries(
   process_point_cloud_s10
   migration_core
   glog::glog
-  $<$<PLATFORM_ID:Windows>:lib>las
   ${PCL_LIBRARIES}
   opencv_core
   opencv_highgui
@@ -105,9 +102,9 @@ target_link_libraries(
   calib_camera_pose
   migration_core
   glog::glog
-  $<$<PLATFORM_ID:Windows>:lib>las
   ${PCL_LIBRARIES}
   opencv_core
   opencv_highgui
   opencv_calib3d
+  $<TARGET_NAME:pdalcpp>
 )

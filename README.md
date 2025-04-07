@@ -10,7 +10,7 @@ Here is a Markdown table listing the open source projects and their respective o
 | Boost        | [Boost Software License](https://www.boost.org/)   |
 | Eigen3       | [MPL2 License](https://gitlab.com/libeigen/eigen)  |
 | yaml-cpp     | [MIT License](https://github.com/jbeder/yaml-cpp)  |
-| libLAS       | [BSD License](https://github.com/libLAS/libLAS)    |
+| PDAL         | [BSD License](https://github.com/PDAL/PDAL)    |
 | Ceres Solver | [Apache License](https://github.com/ceres-solver/ceres-solver) |
 | colmap       | [BSD License](https://github.com/colmap/colmap)    |
 

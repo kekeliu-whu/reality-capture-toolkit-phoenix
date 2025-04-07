@@ -1,6 +1,14 @@
 
 #include <glog/logging.h>
-#include <liblas/liblas.hpp>
+#include <Eigen/Dense>
+#include <fstream>
+#include <pdal/Options.hpp>
+#include <pdal/PointTable.hpp>
+#include <pdal/PointView.hpp>
+#include <pdal/io/BufferReader.hpp>
+#include <pdal/io/LasReader.hpp>
+#include <pdal/io/LasWriter.hpp>
+#include <vector>
 
 #include "common/msg_conversions.h"
 #include "map/utils.h"
@@ -75,7 +83,7 @@ void BuildSubMapFromRawScans(const std::vector<TimestampedPointCloud> &scans,
   }
 
   DLOG(INFO) << "Build " << submaps.size() << " submaps from " << scans.size()
-            << " scans done.";
+             << " scans done.";
 }
 
 }  // namespace
@@ -92,58 +100,50 @@ void LoadSubmapList(const std::string &project_path,
   BuildSubMapFromRawScans(scans, submap_duration_secs, submaps);
 }
 
+// todo kk to be tested
 void SaveLasFile(const std::vector<TimestampedPointCloud> &submaps,
                  const std::string &output_filename) {
-  int point_num = 0;
-  for (auto submap : submaps) {
-    point_num += submap.cloud->size();
-  }
+  pdal::PointTable table;
+  pdal::PointLayoutPtr layout = table.layout();
 
-  std::ofstream ofs(output_filename, std::ios::out | std::ios::binary);
-  CHECK(ofs) << "Failed to open output file: " << output_filename;
+  layout->registerDim(pdal::Dimension::Id::X);
+  layout->registerDim(pdal::Dimension::Id::Y);
+  layout->registerDim(pdal::Dimension::Id::Z);
+  layout->registerDim(pdal::Dimension::Id::Intensity);
+  layout->registerDim(pdal::Dimension::Id::GpsTime);
 
-  DLOG(INFO) << "Saving " << point_num << " points to " << output_filename;
+  pdal::PointViewPtr view(new pdal::PointView(table));
 
-  liblas::Header header;
-  header.SetDataFormatId(liblas::ePointFormat1);
-  header.SetVersionMajor(1);
-  header.SetVersionMinor(2);
-  header.SetPointRecordsCount(point_num);
-  header.SetScale(1e-4, 1e-4, 1e-4);
-  header.SetCreationYear(2024);
-  header.SetCreationDOY(1);
-
-  liblas::Writer writer(ofs, header);
-
-  bool is_first_point = true;
-  Eigen::AlignedBox<double, 3> bounding_box;
-  for (auto submap : submaps) {
+  for (const auto &submap : submaps) {
     for (const auto &p : submap.cloud->points) {
-      if (is_first_point) {
-        is_first_point = false;
-      }
-
       auto point_transform = submap.pose * p.getVector3fMap().cast<double>();
 
-      bounding_box.extend(point_transform);
-
-      liblas::Point point(&header);
-      point.SetX(point_transform.x());
-      point.SetY(point_transform.y());
-      point.SetZ(point_transform.z());
-      point.SetIntensity(p.intensity);
-      point.SetTime(submap.timestamp);
-      writer.WritePoint(point);
+      pdal::PointId id = view->size();
+      view->setField(pdal::Dimension::Id::X, id, point_transform.x());
+      view->setField(pdal::Dimension::Id::Y, id, point_transform.y());
+      view->setField(pdal::Dimension::Id::Z, id, point_transform.z());
+      view->setField(pdal::Dimension::Id::Intensity, id, p.intensity);
+      view->setField(pdal::Dimension::Id::GpsTime, id, submap.timestamp);
     }
   }
 
-  header.SetMax(bounding_box.max().x(), bounding_box.max().y(),
-                bounding_box.max().z());
-  header.SetMin(bounding_box.min().x(), bounding_box.min().y(),
-                bounding_box.min().z());
-  writer.SetHeader(header);
-  writer.WriteHeader();
+  pdal::BufferReader reader;
+  reader.addView(view);
 
-  DLOG(INFO) << "Save " << point_num << " points to " << output_filename
-            << " successfully.";
+  pdal::Options options;
+  options.add("filename", output_filename);
+  options.add("scale_x", 1e-4);
+  options.add("scale_y", 1e-4);
+  options.add("scale_z", 1e-4);
+  options.add("offset_x", "auto");
+  options.add("offset_y", "auto");
+  options.add("offset_z", "auto");
+  options.add("minor_version", 2);
+  options.add("dataformat_id", 1);  // PointFormat = 1
+
+  pdal::LasWriter writer;
+  writer.setOptions(options);
+  writer.setInput(reader);
+  writer.prepare(table);
+  writer.execute(table);
 }
