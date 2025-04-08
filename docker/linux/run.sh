@@ -36,4 +36,4 @@ $COLMAP_EXE feature_extractor --image_path ${OUT_DIR}/images --database_path ${O
 $COLMAP_EXE exhaustive_matcher --database_path ${OUT_DIR}/test.db
 # $COLMAP_EXE sequential_matcher --database_path ${OUT_DIR}/test.db
 
-${CODE_BIN}/sfm -database_filename ${OUT_DIR}/test.db -image_path ${OUT_DIR}/images -output_path ${OUT_DIR}/ -point_cloud_filename ${OUT_DIR}/colorized.las_normals.pcd -initial_pose_filename ${OUT_DIR}/transforms.json
+${CODE_BIN}/xsfm -database_filename ${OUT_DIR}/test.db -image_path ${OUT_DIR}/images -output_path ${OUT_DIR}/ -point_cloud_filename ${OUT_DIR}/colorized.las_normals.pcd -initial_pose_filename ${OUT_DIR}/transforms.json

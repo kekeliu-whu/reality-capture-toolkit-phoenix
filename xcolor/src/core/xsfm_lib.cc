@@ -1,5 +1,5 @@
 
-#include "sfm_lib.h"
+#include "xsfm_lib.h"
 
 #include <ceres/ceres.h>
 #include <colmap/estimators/cost_functions.h>

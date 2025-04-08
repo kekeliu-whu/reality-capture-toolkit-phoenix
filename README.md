@@ -22,7 +22,6 @@ Here is a Markdown table listing the open source projects and their respective o
   * pgo/pgo (optinal)
   * pgo/point_cloud_process
 * SFM
-  * pgo/camera_pose_calib
-  * sfm/colmap
+  * xsfm
 * Render
   * xcolor

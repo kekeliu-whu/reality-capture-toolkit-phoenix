@@ -64,15 +64,15 @@ target_link_libraries(
 )
 
 add_executable(
-  sfm
-  src/sfm_main.cc
-  src/core/sfm_lib.cc
+  xsfm
+  src/xsfm_main.cc
+  src/core/xsfm_lib.cc
   src/common/histogram.cc
   src/io/read_write.cc
 )
 
 target_link_libraries(
-  sfm
+  xsfm
   migration_core
   ${GFLAGS_LIBRARIES}
   ${PCL_LIBRARIES}

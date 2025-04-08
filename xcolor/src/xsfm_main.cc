@@ -18,7 +18,7 @@
 #include <boost/filesystem.hpp>
 
 #include "common/histogram.h"
-#include "core/sfm_lib.h"
+#include "core/xsfm_lib.h"
 #include "io/read_write.h"
 #include "migration/sensor_io.h"
 #include "migration/utils.h"
