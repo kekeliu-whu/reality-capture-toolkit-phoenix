@@ -6,6 +6,7 @@ RUN mkdir /buildspace && cd /buildspace \
     && sed -i '/--disable-test-modules/a \        "--disable-ipv6"' /buildspace/vcpkg/ports/python3/portfile.cmake \
     && sed -i 's/set(VCPKG_LIBRARY_LINKAGE static)/set(VCPKG_LIBRARY_LINKAGE dynamic)/' /buildspace/vcpkg/triplets/x64-linux.cmake \
     && sed -i '/set(VCPKG_CMAKE_SYSTEM_NAME Linux)/a set(VCPKG_BUILD_TYPE release)' /buildspace/vcpkg/triplets/x64-linux.cmake \
+    # By default, COLMAP uses nvcc -arch=native for CUDA compilation. If the build environment lacks a GPU, it defaults to compute_52, which may limit compatibility. Changing it to nvcc -arch=all ensures broader support across NVIDIA GPUs.
     && sed -i 's/set(CUDA_ARCHITECTURES "native")/set(CUDA_ARCHITECTURES "all")/' /buildspace/vcpkg/ports/colmap/portfile.cmake \
     && cd vcpkg && ./bootstrap-vcpkg.sh
 

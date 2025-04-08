@@ -25,3 +25,7 @@ Here is a Markdown table listing the open source projects and their respective o
   * xsfm
 * Render
   * xcolor
+
+
+# Usage
+`docker run -it --pull=always -v $(pwd)/data:/buildspace/s10-data --rm --gpus '"device=0,1,2"' registry.cn-hangzhou.aliyuncs.com/c137/reality-capture-toolkit:public /buildspace/bin/run.sh 2024-06-05_23-03-35-raw 2024-06-05_23-03-35-afterprocess output_dir`
