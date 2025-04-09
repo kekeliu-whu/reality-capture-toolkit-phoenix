@@ -21,73 +21,59 @@
 #include "migration/sensor_io.h"
 #include "migration/utils.h"
 
-// merge track is impossible becuase point match pair is not a one-to-one map
-void PreMergeTrack(const colmap::CorrespondenceGraph &corr_graph) {
-  std::unordered_map<std::pair<colmap::image_t, colmap::point2D_t>, std::shared_ptr<colmap::Point3D>> map;
-  int match_num = 0;
-  for (auto &[image_pair_id, _] : corr_graph.NumCorrespondencesBetweenImages()) {
-    std::pair<colmap::image_t, colmap::image_t> pair = colmap::Database::PairIdToImagePair(image_pair_id);
+namespace {
 
-    auto image1_id = pair.first;
-    auto image2_id = pair.second;
+std::vector<std::vector<int>> ClusterByBFS(const std::vector<MatchTrack> &match_tracks) {
+  int N = int(match_tracks.size());
+  std::unordered_map<Point2DInfo::Ptr, std::vector<int>> pt2pairs;
 
-    auto matches = corr_graph.FindCorrespondencesBetweenImages(image1_id, image2_id);
-    for (auto &match : matches) {
-      auto it_point1 = map.find({image1_id, match.point2D_idx1});
-      auto it_point2 = map.find({image2_id, match.point2D_idx2});
+  std::vector<bool> valid(N, false);
+  for (int i = 0; i < N; ++i) {
+    if (!match_tracks[i].point3D.valid) continue;
+    valid[i] = true;
+    for (auto &pt : match_tracks[i].point2D_on_imageN) {
+      pt2pairs[pt].push_back(i);
+    }
+  }
 
-      if (it_point1 == map.end() && it_point2 == map.end()) {
-        // create a new point3D
-        auto point3D_new = std::make_shared<colmap::Point3D>();
-        point3D_new->track.AddElement(image1_id, match.point2D_idx1);
-        point3D_new->track.AddElement(image2_id, match.point2D_idx2);
-        map[{image1_id, match.point2D_idx1}] = point3D_new;
-        map[{image2_id, match.point2D_idx2}] = point3D_new;
-      } else if (it_point1 == map.end() && it_point2 != map.end()) {
-        auto point3D_old = it_point2->second;
-        point3D_old->track.AddElement(image1_id, match.point2D_idx1);
-        map[{image1_id, match.point2D_idx1}] = point3D_old;
-      } else if (it_point1 != map.end() && it_point2 == map.end()) {
-        auto point3D_old = it_point1->second;
-        point3D_old->track.AddElement(image2_id, match.point2D_idx2);
-        map[{image2_id, match.point2D_idx2}] = point3D_old;
-      } else {
-        if (it_point1->second != it_point2->second) {
-          auto union_point3D = it_point1->second;
-          // merge two point3Ds into one
-          auto elements = it_point2->second->track.Elements();
-          for (auto &element : elements) {
-            union_point3D->track.AddElement(element);
-            map[{element.image_id, element.point2D_idx}] = union_point3D;
+  std::vector<bool> seen(N, false);
+  std::vector<std::vector<int>> clusters;
+
+  for (int i = 0; i < N; ++i) {
+    if (seen[i] || !valid[i]) continue;
+    std::vector<int> cluster;
+    std::queue<int> q;
+    q.push(i);
+    seen[i] = true;
+
+    while (!q.empty()) {
+      int u = q.front();
+      q.pop();
+      cluster.push_back(u);
+
+      for (auto &pt : match_tracks[u].point2D_on_imageN) {
+        for (int v : pt2pairs[pt]) {
+          if (!seen[v] && valid[v]) {
+            seen[v] = true;
+            q.push(v);
           }
         }
+        pt2pairs[pt].clear();
       }
     }
 
-    match_num += matches.size();
+    clusters.push_back(std::move(cluster));
   }
 
-  int point3D_num_mixed_track = 0;
-  for (auto &[_, point3D] : map) {
-    auto elements = point3D->track.Elements();
-    std::set<colmap::image_t> images;
-    for (auto &element : elements) {
-      images.insert(element.image_id);
-    }
-    if (images.size() != elements.size()) {
-      point3D_num_mixed_track++;
-    }
-  }
-
-  DLOG(INFO) << "Number of matches: " << match_num;
-  DLOG(INFO) << "Number of tracks: " << map.size();
-  DLOG(INFO) << "Number of mixed tracks: " << point3D_num_mixed_track;
-  DLOG(INFO) << "Rate of mixed tracks: " << static_cast<double>(point3D_num_mixed_track) / map.size() * 100.0 << "%";
+  return clusters;
 }
 
-std::vector<MatchPair> GenerateMatchPairs(const colmap::CorrespondenceGraph &corr_graph,
-                                          const std::unordered_map<colmap::image_t, colmap::Image> &images, const SfmConfig &config) {
-  std::vector<MatchPair> match_pairs;
+}  // namespace
+
+std::vector<MatchTrack> GenerateMatchPairs(const colmap::CorrespondenceGraph &corr_graph,
+                                           const std::unordered_map<colmap::image_t, colmap::Image> &images, const SfmConfig &config) {
+  std::vector<MatchTrack> match_tracks;
+  std::unordered_map<std::pair<colmap::image_t, colmap::point2D_t>, Point2DInfo::Ptr> map;
   for (auto &[image_pair_id, _] : corr_graph.NumCorrespondencesBetweenImages()) {
     std::pair<colmap::image_t, colmap::image_t> pair = colmap::Database::PairIdToImagePair(image_pair_id);
 
@@ -98,18 +84,37 @@ std::vector<MatchPair> GenerateMatchPairs(const colmap::CorrespondenceGraph &cor
 
     auto matches = corr_graph.FindCorrespondencesBetweenImages(image1_id, image2_id);
     for (auto &match : matches) {
-      MatchPair mp;
-      mp.point_on_image1.image_id    = image1_id;
-      mp.point_on_image1.camera_id   = images.at(image1_id).CameraId();
-      mp.point_on_image1.point_pixel = image1_points2D.at(match.point2D_idx1).xy;
-      mp.point_on_image2.image_id    = image2_id;
-      mp.point_on_image2.camera_id   = images.at(image2_id).CameraId();
-      mp.point_on_image2.point_pixel = image2_points2D.at(match.point2D_idx2).xy;
-      match_pairs.push_back(mp);
+      MatchTrack mp;
+
+      if (map.find(std::pair{image1_id, match.point2D_idx1}) != map.end()) {
+        mp.point2D_on_imageN.emplace_back(map.at(std::pair{image1_id, match.point2D_idx1}));
+      } else {
+        auto &point_on_image0 = mp.point2D_on_imageN.emplace_back(std::make_shared<Point2DInfo>());
+
+        point_on_image0->image_id    = image1_id;
+        point_on_image0->camera_id   = images.at(image1_id).CameraId();
+        point_on_image0->point_pixel = image1_points2D.at(match.point2D_idx1).xy;
+
+        map[std::pair{image1_id, match.point2D_idx1}] = point_on_image0;
+      }
+
+      if (map.find(std::pair{image2_id, match.point2D_idx2}) != map.end()) {
+        mp.point2D_on_imageN.emplace_back(map.at(std::pair{image2_id, match.point2D_idx2}));
+      } else {
+        auto &point_on_image1 = mp.point2D_on_imageN.emplace_back(std::make_shared<Point2DInfo>());
+
+        point_on_image1->image_id    = image2_id;
+        point_on_image1->camera_id   = images.at(image2_id).CameraId();
+        point_on_image1->point_pixel = image2_points2D.at(match.point2D_idx2).xy;
+
+        map[std::pair{image2_id, match.point2D_idx2}] = point_on_image1;
+      }
+
+      match_tracks.push_back(mp);
     }
   }
-  DLOG(INFO) << "Load " << match_pairs.size() << " match pairs.";
-  return match_pairs;
+  DLOG(INFO) << "Load " << match_tracks.size() << " match pairs.";
+  return match_tracks;
 }
 
 void ParameterizeCameras(const SfmConfig &config, ceres::Problem &problem, std::unordered_map<colmap::camera_t, colmap::Camera> &cameras) {
@@ -232,4 +237,164 @@ colmap::Rigid3d FromProto(const PoseMsg &pose_msg) {
   Eigen::Quaterniond rot(pose_msg.rw(), pose_msg.rx(), pose_msg.ry(), pose_msg.rz());
   Eigen::Vector3d pos(pose_msg.tx(), pose_msg.ty(), pose_msg.tz());
   return colmap::Rigid3d(rot, pos);
+}
+
+std::vector<double> ComputeRMSEByClusterCentroid(const std::vector<std::vector<int>> &clusters, const std::vector<MatchTrack> &match_tracks) {
+  std::vector<double> rmse_list;
+
+  for (const auto &cluster : clusters) {
+    CHECK_GT(cluster.size(), 0);
+
+    std::vector<Eigen::Vector3d> points;
+
+    for (int idx : cluster) {
+      auto result = match_tracks[idx];
+      if (result.point3D.valid) {
+        points.push_back(result.point3D.point3D);
+      }
+    }
+
+    Eigen::Vector3d center(0, 0, 0);
+    for (const auto &pt : points) {
+      center += pt;
+    }
+    center /= points.size();
+
+    double total_sq_error = 0.0;
+    for (const auto &pt : points) {
+      double error = (pt - center).squaredNorm();
+      total_sq_error += error;
+    }
+
+    double mean_sq_error = total_sq_error / points.size();
+    double rmse          = std::sqrt(mean_sq_error);
+    rmse_list.push_back(rmse);
+  }
+
+  return rmse_list;
+}
+
+std::vector<std::vector<int>> DBSCANClusterIndices(const std::vector<MatchTrack> &match_tracks_total, const std::vector<int> &indices, double eps,
+                                                   int min_pts) {
+  std::vector<std::vector<int>> clusters;
+  std::vector<bool> visited(match_tracks_total.size(), false);
+
+  auto distance = [](const Eigen::Vector3d &a, const Eigen::Vector3d &b) { return (a - b).norm(); };
+
+  for (size_t idx_i = 0; idx_i < indices.size(); ++idx_i) {
+    int i = indices[idx_i];
+    if (!match_tracks_total[i].point3D.valid || visited[i]) continue;
+
+    visited[i] = true;
+    std::vector<int> neighbors;
+
+    for (int j : indices) {
+      if (!match_tracks_total[j].point3D.valid) continue;
+      if (distance(match_tracks_total[i].point3D.point3D, match_tracks_total[j].point3D.point3D) < eps) {
+        neighbors.push_back(j);
+      }
+    }
+
+    if (neighbors.size() < min_pts) continue;
+
+    std::vector<int> cluster;
+    cluster.push_back(i);
+
+    for (size_t ni = 0; ni < neighbors.size(); ++ni) {
+      int j = neighbors[ni];
+
+      if (!visited[j]) {
+        visited[j] = true;
+
+        std::vector<int> sub_neighbors;
+        for (int k : indices) {
+          if (!match_tracks_total[k].point3D.valid) continue;
+          if (distance(match_tracks_total[j].point3D.point3D, match_tracks_total[k].point3D.point3D) < eps) {
+            sub_neighbors.push_back(k);
+          }
+        }
+
+        if (sub_neighbors.size() >= min_pts) {
+          neighbors.insert(neighbors.end(), sub_neighbors.begin(), sub_neighbors.end());
+        }
+      }
+
+      cluster.push_back(j);
+    }
+
+    clusters.push_back(cluster);
+  }
+
+  return clusters;
+}
+
+void PrintClusterMetrics(std::vector<MatchTrack> &match_tracks_valid, std::vector<std::vector<int>> &clusters,
+                         std::vector<std::vector<std::vector<int>>> &sub_clusters) {
+  std::vector<double> cluster_rmses = ComputeRMSEByClusterCentroid(clusters, match_tracks_valid);
+  Histogram hist;
+  for (int i = 0; i < clusters.size(); ++i) {
+    if (clusters[i].size() > 1) {
+      hist.Add(cluster_rmses[i]);
+    }
+  }
+  DLOG(INFO) << "Cluster RMSE: " << hist.ToString(10);
+
+  int idx = 0;
+  Histogram hist_count;
+  for (int i = 0; i < clusters.size(); ++i) {
+    if (clusters[i].size() > 1) {
+      hist_count.Add(sub_clusters[i].size());
+    }
+    if (clusters[i].size() > clusters[idx].size()) {
+      idx = i;
+    }
+  }
+  DLOG(INFO) << "Cluster count: " << hist_count.ToString(20);
+}
+
+std::vector<MatchTrack> MergeMatchTracks(const std::vector<MatchTrack> &match_tracks,
+                                         const std::vector<std::vector<std::vector<int>>> &sub_clusters) {
+  std::vector<MatchTrack> match_tracks_ret;
+  for (auto &sub_cluster : sub_clusters) {
+    for (auto &cluster : sub_cluster) {
+      std::unordered_set<Point2DInfo::Ptr> points2D;
+      for (auto &idx : cluster) {
+        for (auto &pt : match_tracks[idx].point2D_on_imageN) {
+          points2D.insert(pt);
+        }
+      }
+
+      MatchTrack mt_new;
+      for (auto &point2D : points2D) {
+        mt_new.point2D_on_imageN.push_back(point2D);
+      }
+      mt_new.point3D = match_tracks[cluster[0]].point3D;
+
+      match_tracks_ret.push_back(mt_new);
+    }
+  }
+  return match_tracks_ret;
+}
+
+bool MergeTrack(const std::vector<MatchTrack> &match_tracks, std::vector<MatchTrack> &match_tracks_merged) {
+  std::vector<MatchTrack> match_tracks_valid;
+
+  std::copy_if(match_tracks.begin(), match_tracks.end(), std::back_inserter(match_tracks_valid),
+               [](const MatchTrack &mt) { return mt.point3D.valid; });
+
+  std::vector<std::vector<int>> clusters = ClusterByBFS(match_tracks_valid);
+  DLOG(INFO) << "Cluster: " << match_tracks_valid.size() << " match pairs -> " << clusters.size() << " match tracks.";
+
+  std::vector<std::vector<std::vector<int>>> sub_clusters;
+  for (auto &cluster : clusters) {
+    std::vector<std::vector<int>> sub_cluster = DBSCANClusterIndices(match_tracks_valid, cluster, 0.03, 2);
+    sub_clusters.push_back(sub_cluster);
+  }
+
+  PrintClusterMetrics(match_tracks_valid, clusters, sub_clusters);
+
+  match_tracks_merged = MergeMatchTracks(match_tracks_valid, sub_clusters);
+  LOG(INFO) << "Finally, merge " << match_tracks_valid.size() << " match track into " << match_tracks_merged.size() << " tracks ";
+
+  return true;
 }

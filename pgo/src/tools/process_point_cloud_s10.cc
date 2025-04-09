@@ -20,7 +20,7 @@
 
 #include "map/utils.h"
 
-DEFINE_string(las_filename, "e:/BaiduNetdiskDownload/colorized.las", "Input project path");
+DEFINE_string(las_filename, "D:/project_3d/reality-capture-toolkit/output_dir/colorized.las", "Input project path");
 DEFINE_bool(output_full, true, "Output full point cloud");
 
 static constexpr double kDownsampleVoxelSize    = 0.05;
@@ -179,6 +179,7 @@ int main(int argc, char **argv) {
     pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZI>);
     DownsamplePointCloud(cloud, cloud_downsampled, kDownsampleVoxelSize);
     cloud = cloud_downsampled;
+    DLOG(INFO) << "Downsampled to " << cloud->size() << " points.";
   }
 
   DLOG(INFO) << "Saving original cloud...";

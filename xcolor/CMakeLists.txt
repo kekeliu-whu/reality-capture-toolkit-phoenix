@@ -13,6 +13,7 @@ endif()
 
 if(MSVC)
   add_compile_options(/MP)
+  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/MD /Zi /O2 /Ob1")
 endif()
 
 add_definitions(-D_USE_MATH_DEFINES)
@@ -73,6 +74,25 @@ add_executable(
 
 target_link_libraries(
   xsfm
+  migration_core
+  ${GFLAGS_LIBRARIES}
+  ${PCL_LIBRARIES}
+  ${CERES_LIBRARIES}
+  glog::glog
+  colmap::colmap
+  absl::flat_hash_map
+  absl::flat_hash_set
+  ${OpenCV_LIBS}
+  rapidjson
+)
+
+add_executable(
+  xsfm_reset_s20_cameras
+  src/xsfm_reset_s20_cameras.cc
+)
+
+target_link_libraries(
+  xsfm_reset_s20_cameras
   migration_core
   ${GFLAGS_LIBRARIES}
   ${PCL_LIBRARIES}

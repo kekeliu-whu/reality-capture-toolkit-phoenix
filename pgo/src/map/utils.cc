@@ -12,6 +12,81 @@
 #include "io/read_write.h"
 #include "utils.h"
 
+#define HASH_P 116101
+#define MAX_N 10000000000
+
+class VoxelLoc {
+ public:
+  int64_t x, y, z;
+
+  VoxelLoc(int64_t vx = 0, int64_t vy = 0, int64_t vz = 0)
+      : x(vx), y(vy), z(vz) {}
+
+  bool operator==(const VoxelLoc &other) const {
+    return (x == other.x && y == other.y && z == other.z);
+  }
+};
+
+// Hash value
+namespace std {
+template <>
+struct hash<VoxelLoc> {
+  int64_t operator()(const VoxelLoc &s) const {
+    using std::hash;
+    using std::size_t;
+    return ((((s.z) * HASH_P) % MAX_N + (s.y)) * HASH_P) % MAX_N + (s.x);
+  }
+};
+}  // namespace std
+
+struct M_POINT {
+  Eigen::Vector3d center;
+  int count = 0;
+};
+
+template <typename PointType>
+void DownsamplePointCloudInternal(const pcl::PointCloud<PointType> &cloud_in,
+                                  pcl::PointCloud<PointType> &cloud_out,
+                                  double voxel_size) {
+  if (voxel_size < 0.01) {
+    return;
+  }
+
+  std::unordered_map<VoxelLoc, M_POINT> feat_map;
+
+  for (int i = 0; i < cloud_in.size(); i++) {
+    Eigen::Vector3d p_c = cloud_in[i].getVector3fMap().template cast<double>();
+    int loc_xyz[3];
+    for (int j = 0; j < 3; j++) {
+      loc_xyz[j] = p_c[j] / voxel_size;
+      if (loc_xyz[j] < 0) {
+        loc_xyz[j] -= 1;
+      }
+    }
+
+    VoxelLoc position(loc_xyz[0], loc_xyz[1], loc_xyz[2]);
+    auto iter = feat_map.find(position);
+    if (iter != feat_map.end()) {
+      iter->second.center += p_c;
+      iter->second.count++;
+    } else {
+      M_POINT p;
+      p.center           = p_c;
+      p.count            = 1;
+      feat_map[position] = p;
+    }
+  }
+
+  cloud_out.clear();
+  cloud_out.resize(feat_map.size());
+
+  int i = 0;
+  for (auto iter = feat_map.begin(); iter != feat_map.end(); ++iter) {
+    cloud_out[i].getVector3fMap() = iter->second.center.cast<float>() / iter->second.count;
+    i++;
+  }
+}
+
 void PcaEstimateNormal(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &cloud,
                        const std::vector<Eigen::Vector3f> &centers,
                        int k,
@@ -61,10 +136,7 @@ void PcaEstimateNormal(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &cloud,
 void DownsamplePointCloud(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &cloud_in,
                           pcl::PointCloud<pcl::PointXYZI>::Ptr &cloud_out,
                           double voxel_size) {
-  pcl::VoxelGrid<pcl::PointXYZI> filter;
-  filter.setInputCloud(cloud_in);
-  filter.setLeafSize(voxel_size, voxel_size, voxel_size);
-  filter.filter(*cloud_out);
+  DownsamplePointCloudInternal<pcl::PointXYZI>(*cloud_in, *cloud_out, voxel_size);
 }
 
 void LoadFullPointCloud(const std::string &project_input_path,

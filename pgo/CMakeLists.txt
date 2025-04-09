@@ -7,6 +7,11 @@ endif(CMAKE_TOOLCHAIN_FILE)
 
 add_definitions(-D_USE_MATH_DEFINES)
 
+if(MSVC)
+  add_compile_options(/MP)
+  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/MD /Zi /O2 /Ob1")
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)

@@ -43,22 +43,26 @@ struct SfmConfig {
   SfmConfig(int cores_used) { ba_optimization_num_threads = cores_used; }
 };
 
-struct MatchPointInfo {
+struct Point2DInfo {
+  typedef std::shared_ptr<Point2DInfo> Ptr;
+
   colmap::image_t image_id;
   colmap::camera_t camera_id;
   Eigen::Vector2d point_pixel;
 };
 
-struct MatchPair {
-  MatchPointInfo point_on_image1;
-  MatchPointInfo point_on_image2;
-};
+struct Point3DInfo {
+  typedef std::shared_ptr<Point3DInfo> Ptr;
 
-struct MatchResult {
-  bool valid = false;
+  bool valid = false; // =false means this point3D is not used in the optimization
   Eigen::Vector3d point3D;
   ceres::ResidualBlockId residual_block_id       = nullptr;
   ceres::ResidualBlockId lidar_residual_block_id = nullptr;
+};
+
+struct MatchTrack {
+  std::vector<Point2DInfo::Ptr> point2D_on_imageN;
+  Point3DInfo point3D;
 };
 
 class LidarPlaneCostFunction {
@@ -116,7 +120,9 @@ class PosePriorCostFunction {
   Eigen::Matrix<double, 6, 6> sqrt_information_;
 };
 
-std::vector<MatchPair> GenerateMatchPairs(const colmap::CorrespondenceGraph &corr_graph,
+colmap::Rigid3d FromProto(const PoseMsg &pose_msg);
+
+std::vector<MatchTrack> GenerateMatchPairs(const colmap::CorrespondenceGraph &corr_graph,
                                           const std::unordered_map<colmap::image_t, colmap::Image> &images, const SfmConfig &config);
 
 void ParameterizeCameras(const SfmConfig &config, ceres::Problem &problem, std::unordered_map<colmap::camera_t, colmap::Camera> &cameras);
@@ -139,4 +145,5 @@ void AddPosePriorsToProblem(const SfmConfig &config, ceres::Problem &problem, co
 void PrintResidualHistogram(double threshold, ceres::Problem &problem, const std::vector<ceres::ResidualBlockId> &residual_block_ids,
                             const std::string &name);
 
-colmap::Rigid3d FromProto(const PoseMsg &pose_msg);
+bool MergeTrack(const std::vector<MatchTrack> &match_tracks, std::vector<MatchTrack> &match_tracks_merged);
+
