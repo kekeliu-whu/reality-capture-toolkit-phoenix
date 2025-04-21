@@ -44,36 +44,17 @@ include_directories(
 
 add_subdirectory(../migration migration_build)
 
-add_executable(
-  xcolor
-  src/xcolor_main.cc
+
+set(
+  PGO_PRIVATE_SRCS
   src/core/xcolor_lib.cc
   src/io/read_write.cc
-)
-
-target_link_libraries(
-  xcolor
-  migration_core
-  ${GFLAGS_LIBRARIES}
-  ${PCL_LIBRARIES}
-  ${CERES_LIBRARIES}
-  glog::glog
-  colmap::colmap
-  absl::flat_hash_map
-  absl::flat_hash_set
-  ${OpenCV_LIBS}
-)
-
-add_executable(
-  xsfm
-  src/xsfm_main.cc
   src/core/xsfm_lib.cc
   src/common/histogram.cc
   src/io/read_write.cc
 )
 
-target_link_libraries(
-  xsfm
+set(PGO_PRIVATE_LIBS
   migration_core
   ${GFLAGS_LIBRARIES}
   ${PCL_LIBRARIES}
@@ -86,21 +67,11 @@ target_link_libraries(
   rapidjson
 )
 
-add_executable(
-  xsfm_reset_s20_cameras
-  src/xsfm_reset_s20_cameras.cc
-)
+function(add_private_tool name)
+  add_executable(${name} ${ARGN} ${PGO_PRIVATE_SRCS})
+  target_link_libraries(${name} ${PGO_PRIVATE_LIBS})
+endfunction()
 
-target_link_libraries(
-  xsfm_reset_s20_cameras
-  migration_core
-  ${GFLAGS_LIBRARIES}
-  ${PCL_LIBRARIES}
-  ${CERES_LIBRARIES}
-  glog::glog
-  colmap::colmap
-  absl::flat_hash_map
-  absl::flat_hash_set
-  ${OpenCV_LIBS}
-  rapidjson
-)
+add_private_tool(xcolor_main src/xcolor_main.cc)
+add_private_tool(xsfm src/xsfm_main.cc)
+add_private_tool(xsfm_reset_s20_cameras src/xsfm_reset_s20_cameras.cc)

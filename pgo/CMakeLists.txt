@@ -37,79 +37,34 @@ include_directories(
 
 add_subdirectory(../migration migration_build)
 
-add_executable(
-  pgo_main
-  src/pgo_main.cc
+
+set(
+  PGO_PRIVATE_SRCS
   src/map/optimizer.cc
   src/map/pgo_runner.cc
   src/map/utils.cc
   src/io/read_write.cc
 )
 
-target_link_libraries(
-  pgo_main
+set(PGO_PRIVATE_LIBS
   migration_core
-  ${GFLAGS_LIBRARIES}
+  glog::glog
   ${PCL_LIBRARIES}
+  ${GFLAGS_LIBRARIES}
   ${CERES_LIBRARIES}
-  glog::glog
   OpenMP::OpenMP_CXX
   $<TARGET_NAME:pdalcpp>
-)
-
-add_executable(
-  process_point_cloud_std
-  src/tools/process_point_cloud_std.cc
-  src/io/read_write.cc
-  src/map/utils.cc
-)
-
-target_link_libraries(
-  process_point_cloud_std
-  migration_core
-  glog::glog
-  ${PCL_LIBRARIES}
   opencv_core
   opencv_highgui
   opencv_calib3d
-  ${GFLAGS_LIBRARIES}
-  OpenMP::OpenMP_CXX
-  $<TARGET_NAME:pdalcpp>
 )
 
-add_executable(
-  process_point_cloud_s10
-  src/tools/process_point_cloud_s10.cc
-  src/io/read_write.cc
-  src/map/utils.cc
-)
+function(add_private_tool name)
+  add_executable(${name} ${ARGN} ${PGO_PRIVATE_SRCS})
+  target_link_libraries(${name} ${PGO_PRIVATE_LIBS})
+endfunction()
 
-target_link_libraries(
-  process_point_cloud_s10
-  migration_core
-  glog::glog
-  ${PCL_LIBRARIES}
-  opencv_core
-  opencv_highgui
-  opencv_calib3d
-  ${GFLAGS_LIBRARIES}
-  OpenMP::OpenMP_CXX
-  $<TARGET_NAME:pdalcpp>
-)
-
-add_executable(
-  calib_camera_pose
-  src/tools/calib_camera_pose.cc
-  src/io/read_write.cc
-)
-
-target_link_libraries(
-  calib_camera_pose
-  migration_core
-  glog::glog
-  ${PCL_LIBRARIES}
-  opencv_core
-  opencv_highgui
-  opencv_calib3d
-  $<TARGET_NAME:pdalcpp>
-)
+add_private_tool(pgo_main src/pgo_main.cc)
+add_private_tool(process_point_cloud_std src/tools/process_point_cloud_std.cc)
+add_private_tool(process_point_cloud_s10 src/tools/process_point_cloud_s10.cc)
+add_private_tool(calib_camera_pose src/tools/calib_camera_pose.cc)
