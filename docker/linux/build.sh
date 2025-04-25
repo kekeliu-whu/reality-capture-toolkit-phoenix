@@ -31,4 +31,4 @@ cp xsfm xsfm_reset_s20_cameras ${CODE_BIN}
 
 cp ${CODE_WS}/docker/linux/run.sh ${CODE_BIN}
 
-wget https://github.com/colmap/colmap/releases/download/3.11.1/vocab_tree_flickr100K_words256K.bin -O ${CODE_BIN}/vocab_tree_flickr100K_words256K.bin
+wget https://github.com/colmap/colmap/releases/download/3.11.1/vocab_tree_flickr100K_words32K.bin -O ${CODE_BIN}/vocab_tree_flickr100K_words32K.bin

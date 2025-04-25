@@ -61,7 +61,7 @@ elif [ "$TYPE" = "1" ]; then
 
   ${CODE_BIN}/xsfm_reset_s20_cameras -database_filename ${OUT_DIR}/xsfm.db
 
-  $COLMAP_EXE vocab_tree_matcher --database_path ${OUT_DIR}/xsfm.db --VocabTreeMatching.vocab_tree_path ${CODE_BIN}/vocab_tree_flickr100K_words256K.bin
+  $COLMAP_EXE vocab_tree_matcher --database_path ${OUT_DIR}/xsfm.db --VocabTreeMatching.vocab_tree_path ${CODE_BIN}/vocab_tree_flickr100K_words32K.bin
   # $COLMAP_EXE exhaustive_matcher --database_path ${OUT_DIR}/xsfm.db
   # $COLMAP_EXE sequential_matcher --database_path ${OUT_DIR}/xsfm.db
 
