@@ -385,10 +385,10 @@ bool MergeTrack(const std::vector<MatchTrack> &match_tracks, std::vector<MatchTr
   std::vector<std::vector<int>> clusters = ClusterByBFS(match_tracks_valid);
   DLOG(INFO) << "Cluster: " << match_tracks_valid.size() << " match pairs -> " << clusters.size() << " match tracks.";
 
-  std::vector<std::vector<std::vector<int>>> sub_clusters;
-  for (auto &cluster : clusters) {
-    std::vector<std::vector<int>> sub_cluster = DBSCANClusterIndices(match_tracks_valid, cluster, 0.03, 2);
-    sub_clusters.push_back(sub_cluster);
+  std::vector<std::vector<std::vector<int>>> sub_clusters(clusters.size());
+#pragma omp parallel for
+  for (int i = 0; i < static_cast<int>(clusters.size()); ++i) {
+    sub_clusters[i] = DBSCANClusterIndices(match_tracks_valid, clusters[i], 0.03, 2);
   }
 
   PrintClusterMetrics(match_tracks_valid, clusters, sub_clusters);
