@@ -13,10 +13,6 @@ CODE_BIN=/buildspace/bin
 COLMAP_EXE=/buildspace/vcpkg/installed/x64-linux/tools/colmap/colmap
 
 
-export LD_LIBRARY_PATH=/buildspace/vcpkg/installed/x64-linux/lib/manual-link/:${LD_LIBRARY_PATH}
-sudo ldconfig
-
-
 if [ "$TYPE" = "0" ]; then
   echo "TYPE=0，processing s10 data..."
 
