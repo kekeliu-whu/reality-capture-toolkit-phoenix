@@ -47,12 +47,12 @@ void SaveTriangulatedPoints(const std::vector<MatchTrack> &match_tracks, const s
 void SaveImagePoses(const std::string &filename, const std::unordered_set<colmap::image_t> &optimized_image_ids,
                     const std::unordered_map<colmap::image_t, colmap::Image> &images,
                     const std::unordered_map<colmap::camera_t, colmap::Rigid3d> &pose_priors) {
-  // DLOG(INFO) << "Saving image information into " << FLAGS_output_path + "/images.bin";
-  // std::vector<colmap::Image> images_out;
-  // for (auto &image_id : optimized_image_ids) {
-  //   images_out.push_back(images.at(image_id));
-  // }
-  // WriteImagesBinary(FLAGS_output_path + "/images.bin", images_out);
+  //DLOG(INFO) << "Saving image information into " << FLAGS_output_path + "/images.bin";
+  //std::vector<colmap::Image> images_out;
+  //for (auto &image_id : optimized_image_ids) {
+  //  images_out.push_back(images.at(image_id));
+  //}
+  //WriteImagesBinary(FLAGS_output_path + "/images.bin", images_out);
 
   DLOG(INFO) << "Saving image poses into " << filename;
   std::ofstream infile(filename);
@@ -72,11 +72,11 @@ void SaveImagePoses(const std::string &filename, const std::unordered_set<colmap
 }
 
 void SaveCameraParams(const std::string &filename, const std::unordered_map<colmap::camera_t, colmap::Camera> &cameras) {
-  // std::vector<colmap::Camera> cameras_out;
-  // for (auto &[image_id, _] : cameras) {
-  //   cameras_out.push_back(cameras.at(image_id));
-  // }
-  // WriteCamerasBinary(FLAGS_output_path + "/cameras.bin", cameras_out);
+  //std::vector<colmap::Camera> cameras_out;
+  //for (auto &[image_id, _] : cameras) {
+  //  cameras_out.push_back(cameras.at(image_id));
+  //}
+  //WriteCamerasBinary(FLAGS_output_path + "/cameras.bin", cameras_out);
 
   std::ofstream infile(filename);
   infile << "camera_id model_id image_name x y z rw rx ry rz" << std::endl;

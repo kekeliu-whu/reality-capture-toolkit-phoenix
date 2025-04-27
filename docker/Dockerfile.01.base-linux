@@ -1,9 +1,9 @@
-FROM public.ecr.aws/docker/library/ubuntu:20.04
+FROM public.ecr.aws/docker/library/ubuntu:24.04
 
 
 # copy files
 COPY sources.list /etc/apt/sources.list.bak
-COPY .vimrc .zshrc-header /root/
+COPY .vimrc /root/
 
 
 # setup environment
@@ -27,7 +27,7 @@ RUN set -x && \
     # install packages
     && apt-get install -q -y --no-install-recommends \
     dirmngr gnupg2 sudo \
-    git tig build-essential clang gdb cmake ninja-build \
+    git tig build-essential gdb cmake ninja-build \
     zsh tree htop autojump iotop wget curl apt-file asciinema \
     vim-nox \
     python3-pip \
@@ -44,8 +44,6 @@ RUN : \
     # configure zsh
     && wget https://github.com/robbyrussell/oh-my-zsh/raw/master/tools/install.sh -O - | zsh || true \
     && git clone https://github.com/zsh-users/zsh-autosuggestions ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-autosuggestions \
-    && mv ~/.zshrc ~/.zshrc.bak \
-    && cat ~/.zshrc-header ~/.zshrc.bak > ~/.zshrc \
     && sed -i 's/ZSH_THEME="robbyrussell"/ZSH_THEME="ys"/g' ~/.zshrc \
     && sed -i 's/plugins=(git)/plugins=(git autojump command-not-found zsh-autosuggestions)/g' ~/.zshrc \
     # configure pip

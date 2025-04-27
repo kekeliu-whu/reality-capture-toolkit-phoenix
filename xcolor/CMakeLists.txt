@@ -34,6 +34,7 @@ find_package(absl CONFIG REQUIRED)
 find_package(RapidJSON CONFIG REQUIRED)
 find_package(Glog REQUIRED)
 find_package(GTest CONFIG REQUIRED)
+find_package(mimalloc CONFIG REQUIRED)
 
 include_directories(
   src
@@ -55,6 +56,7 @@ set(
 )
 
 set(PGO_PRIVATE_LIBS
+  mimalloc
   migration_core
   ${GFLAGS_LIBRARIES}
   ${PCL_LIBRARIES}

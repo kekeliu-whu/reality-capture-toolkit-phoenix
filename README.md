@@ -28,4 +28,22 @@ Here is a Markdown table listing the open source projects and their respective o
 
 
 # Usage
-`docker run -it --pull=always -v $(pwd)/data:/buildspace/s10-data --rm --gpus '"device=0,1,2"' registry.cn-hangzhou.aliyuncs.com/c137/reality-capture-toolkit:public /buildspace/bin/run.sh 2024-06-05_23-03-35-raw 2024-06-05_23-03-35-afterprocess output_dir`
+```
+docker run -it --pull=always -v $(pwd)/data:/buildspace/s10-data --rm --gpus '"device=0,1,2"' registry.cn-hangzhou.aliyuncs.com/c137/reality-capture-toolkit:public /buildspace/bin/run.sh 2024-06-05_23-03-35-raw 2024-06-05_23-03-35-afterprocess output_dir 0
+```
+
+# Build
+## Build base-linux
+```
+docker build -t registry.cn-hangzhou.aliyuncs.com/c137/reality-capture-toolkit:base-linux -f Dockerfile.01.base-linux docker
+```
+
+## Build base-cuda
+```
+docker build -t registry.cn-hangzhou.aliyuncs.com/c137/reality-capture-toolkit:base-cuda -f Dockerfile.02.base-cuda docker
+```
+
+## Build base-cuda-build-vcpkg-manua
+```
+DOCKER_BUILDKIT=1 docker build -t registry.cn-hangzhou.aliyuncs.com/c137/reality-capture-toolkit:base-cuda-build-vcpkg-manual -f Dockerfile.03.base-cuda-build-vcpkg-manual docker
+```
