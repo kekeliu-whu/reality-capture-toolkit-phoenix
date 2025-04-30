@@ -11,10 +11,9 @@ find_package(PCL REQUIRED COMPONENTS common io)
 find_package(Ceres REQUIRED)
 find_package(Protobuf REQUIRED)
 find_package(Boost REQUIRED COMPONENTS iostreams)
-if(WIN32)
-  find_package(Glog REQUIRED)
-endif()
+find_package(Glog REQUIRED)
 find_package(GTest REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 if (Protobuf_VERBOSE)
     message(STATUS "Using Protocol Buffers ${protobuf_VERSION}")
@@ -64,6 +63,7 @@ list(APPEND
     PROJECT_SRCS
     src/sensor_io.cc
     src/utils.cc
+    src/crypto.cc
 )
 
 set(
@@ -73,6 +73,7 @@ set(
     glog::glog
     sophus
     rosbag
+    OpenSSL::Crypto
 )
 
 # add_executable(test_proto src/test_proto.cc ${PROJECT_SRCS})

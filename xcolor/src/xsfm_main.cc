@@ -20,6 +20,7 @@
 #include "common/histogram.h"
 #include "core/xsfm_lib.h"
 #include "io/read_write.h"
+#include "migration/crypto.h"
 #include "migration/sensor_io.h"
 #include "migration/utils.h"
 
@@ -442,6 +443,8 @@ std::unordered_map<std::string, colmap::Rigid3d> ReadImagePoses(int type, const 
 int main(int argc, char **argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   google::InitGoogleLogging(argv[0]);
+  // EncryptedLogSink *sink = new EncryptedLogSink();
+  // google::AddLogSink(sink);
 
   FLAGS_logtostderr = 1;
 
@@ -494,5 +497,6 @@ int main(int argc, char **argv) {
   DLOG(INFO) << "done.";
   std::cout << "done." << std::endl;
 
+  google::ShutdownGoogleLogging();
   return 0;
 }

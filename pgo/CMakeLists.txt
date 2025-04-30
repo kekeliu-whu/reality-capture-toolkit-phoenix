@@ -24,9 +24,7 @@ find_package(Boost CONFIG COMPONENTS program_options)
 find_package(OpenCV REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(PDAL CONFIG REQUIRED)
-if(WIN32)
-  find_package(Glog REQUIRED)
-endif()
+find_package(Glog REQUIRED)
 
 include_directories(
   src
