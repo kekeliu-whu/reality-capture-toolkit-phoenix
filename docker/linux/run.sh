@@ -66,8 +66,26 @@ elif [ "$TYPE" = "1" ]; then
   # $COLMAP_EXE sequential_matcher --database_path ${OUT_DIR}/xsfm.db
 
   ${CODE_BIN}/xsfm -database_filename ${OUT_DIR}/xsfm.db -output_path ${OUT_DIR}/ -point_cloud_filename ${OUT_DIR}/colorized.las_normals.pcd -initial_pose_dirname ${OUT_DIR} -pose_type 1
+elif [ "$TYPE" = "2" ]; then
+  echo "TYPE=1，processing s20 data, simply export pose priors..."
+
+  rm -rf ${OUT_DIR}
+  mkdir -p ${OUT_DIR}
+
+  cp ${PROCESS_DIR}/output/calibration.yaml ${OUT_DIR}
+  cp ${PROCESS_DIR}/output/*Pose.txt ${OUT_DIR}
+  cp ${PROCESS_DIR}/output/colorized.las ${OUT_DIR}
+  mkdir -p ${OUT_DIR}/images
+  cp -r ${RAW_DIR}/output/undistort/left ${RAW_DIR}/output/undistort/right ${OUT_DIR}/images
+
+  ${CODE_BIN}/process_point_cloud_s10 -las_filename ${OUT_DIR}/colorized.las -output_full
+  mv ${OUT_DIR}/colorized.las_normals.pcd ${OUT_DIR}/colorized.las_normals.full.pcd
+
+  ${CODE_BIN}/process_point_cloud_s10 -las_filename ${OUT_DIR}/colorized.las -nooutput_full
+
+  ${CODE_BIN}/xsfm -database_filename ${OUT_DIR}/xsfm.db -output_path ${OUT_DIR}/ -point_cloud_filename ${OUT_DIR}/colorized.las_normals.pcd -initial_pose_dirname ${OUT_DIR} -pose_type 2 -calibration_filename ${OUT_DIR}/calibration.yaml -images_path ${OUT_DIR}/images
 else
-  echo "Error: TYPE must be 0 or 1"
+  echo "Error: invalid TYPE $TYPE"
   exit 1
 fi
 

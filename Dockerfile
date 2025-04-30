@@ -1,10 +1,9 @@
-# 第一阶段：构建代码（临时层，不会影响最终镜像）
+# Stage 1: Build the code (temporary layer, not included in the final image)
 FROM registry.cn-hangzhou.aliyuncs.com/c137/reality-capture-toolkit:base-cuda-build-vcpkg-manual AS builder
 COPY . /buildspace/reality-capture-toolkit
 RUN bash /buildspace/reality-capture-toolkit/docker/linux/build.sh
 
-
-# 第二阶段：最小化最终镜像（避免多余层）
+# Stage 2: Create the final image
 FROM registry.cn-hangzhou.aliyuncs.com/c137/reality-capture-toolkit:base-cuda-build-vcpkg-manual
 COPY --from=builder /buildspace/bin /buildspace/bin
 # Set LD_LIBRARY_PATH and run ldconfig

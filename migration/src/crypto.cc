@@ -12,19 +12,19 @@
 
 namespace {
 
-	const unsigned char KEY[33] = "12345678901234567890123456789012";  // 32 字节 AES-256
-	const unsigned char IV[17] = "1234567890123456";  // 16 字节 IV
+	const unsigned char KEY[33] = "12345678901234567890123456789012";  // 32 bytes AES-256
+	const unsigned char IV[17] = "1234567890123456";  // 16 bytes IV
 
 }
 
-// Base64 编码
+// Base64 encode
 std::string Base64Encode(const std::string& input) {
 	BIO* bio, * b64;
 	BUF_MEM* bufferPtr;
 	b64 = BIO_new(BIO_f_base64());
 	bio = BIO_new(BIO_s_mem());
 	BIO_push(b64, bio);
-	BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);  // 不换行
+	BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);  // no new line
 	BIO_write(b64, input.data(), (int)input.size());
 	BIO_flush(b64);
 	BIO_get_mem_ptr(b64, &bufferPtr);
@@ -33,7 +33,7 @@ std::string Base64Encode(const std::string& input) {
 	return encoded;
 }
 
-// Base64 解码
+// Base64 decode
 std::string Base64Decode(const std::string& input) {
 	BIO* bio, * b64;
 	char* buffer = (char*)malloc(input.size());
@@ -49,7 +49,7 @@ std::string Base64Decode(const std::string& input) {
 	return decoded;
 }
 
-// AES 加密
+// AES encrypt
 std::string EncryptAES(const std::string& plaintext) {
 	EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
 	std::string ciphertext;
@@ -68,7 +68,7 @@ std::string EncryptAES(const std::string& plaintext) {
 	return Base64Encode(ciphertext);
 }
 
-// AES 解密
+// AES decrypt
 std::string DecryptAES(const std::string& base64_cipher) {
 	std::string encrypted = Base64Decode(base64_cipher);
 	EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();

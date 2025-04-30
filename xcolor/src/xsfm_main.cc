@@ -15,6 +15,7 @@
 #include <rapidjson/document.h>
 #include <rapidjson/filereadstream.h>
 #include <rapidjson/rapidjson.h>
+#include <yaml-cpp/yaml.h>
 #include <boost/filesystem.hpp>
 
 #include "common/histogram.h"
@@ -24,11 +25,13 @@
 #include "migration/sensor_io.h"
 #include "migration/utils.h"
 
-DEFINE_string(point_cloud_filename, "D:/project_3d/reality-capture-toolkit/.cache/output_dir/colorized.las_normals.pcd", "Point cloud filename");
-DEFINE_string(output_path, "D:/project_3d/reality-capture-toolkit/.cache/output_dir", "Output path");
-DEFINE_string(database_filename, "D:/project_3d/reality-capture-toolkit/.cache/output_dir/xsfm.db", "Database filename");
-DEFINE_string(initial_pose_dirname, "D:/project_3d/reality-capture-toolkit/.cache/output_dir/", "Initial pose filename");
-DEFINE_int32(pose_type, 1, "Pose type, =0 for s10, =1 for s20");
+DEFINE_string(point_cloud_filename, "D:/project_3d/data/sfm-share/output_dir/colorized.las_normals.pcd", "Point cloud filename");
+DEFINE_string(output_path, "D:/project_3d/data/sfm-share/output_dir", "Output path");
+DEFINE_string(database_filename, "D:/project_3d/data/sfm-share/output_dir/xsfm.db", "Database filename");
+DEFINE_string(initial_pose_dirname, "D:/project_3d/data/sfm-share/output_dir/", "Initial pose filename");
+DEFINE_int32(pose_type, 2, "Pose type, =0 for s10, =1 for s20, =2 for export s20 poses");
+DEFINE_string(calibration_filename, "D:/project_3d/data/sfm-share/output_dir/calibration.yaml", "");
+DEFINE_string(images_path, "D:/project_3d/data/sfm-share/output_dir/undistort", "");
 
 void SaveTriangulatedPoints(const std::vector<MatchTrack> &match_tracks, const std::string &filename) {
   pcl::PointCloud<pcl::PointXYZINormal> point_cloud_out;
@@ -80,7 +83,7 @@ void SaveCameraParams(const std::string &filename, const std::unordered_map<colm
   //WriteCamerasBinary(FLAGS_output_path + "/cameras.bin", cameras_out);
 
   std::ofstream infile(filename);
-  infile << "camera_id model_id image_name x y z rw rx ry rz" << std::endl;
+  infile << "camera_id model_id fx fy cx cy params..." << std::endl;
   for (auto &e : cameras) {
     infile << std::fixed << std::setprecision(6) << e.first << " " << (int)e.second.model_id << " " << e.second.params[0] << " " << e.second.params[1]
            << " " << e.second.params[2] << " " << e.second.params[3] << " " << e.second.params[4] << " " << e.second.params[5] << " "
@@ -424,7 +427,8 @@ std::unordered_map<std::string, colmap::Rigid3d> ReadImagePoses(int type, const 
     case 0: {
       ret = ReadImagePosesType0(pose_dirname + "/transforms.json");
     } break;
-    case 1: {
+    case 1:
+    case 2: {
       std::unordered_map<std::string, colmap::Rigid3d> ret_left  = ReadImagePosesType1(pose_dirname + "/leftImgPose.txt");
       std::unordered_map<std::string, colmap::Rigid3d> ret_right = ReadImagePosesType1(pose_dirname + "/rightImgPose.txt");
       ret.insert(ret_left.begin(), ret_left.end());
@@ -459,6 +463,91 @@ int main(int argc, char **argv) {
   std::vector<MatchTrack> match_tracks;
   std::unordered_map<colmap::image_t, colmap::Image> images;
   std::unordered_map<colmap::camera_t, colmap::Camera> cameras;
+
+  if (FLAGS_pose_type == 2) {
+    try {
+      std::unordered_map<std::string, colmap::Rigid3d> image_to_pose = ReadImagePoses(FLAGS_pose_type, FLAGS_initial_pose_dirname);
+
+      CHECK(boost::filesystem::is_regular_file(FLAGS_calibration_filename));
+
+      YAML::Node config = YAML::LoadFile(FLAGS_calibration_filename); 
+
+      YAML::Node left_cam = config["intrinsic"]["fisheye_left"];
+      double left_a11     = left_cam["projection_parameters"]["A11"].as<double>();
+      double left_a22     = left_cam["projection_parameters"]["A22"].as<double>();
+      int left_width      = 0;
+      int left_height     = 0;
+      for (const auto &[image_name, pose] : image_to_pose) {
+        if (image_name.find("left") != std::string::npos) {
+          auto img = cv::imread(FLAGS_images_path + "/" + image_name);
+          if (img.empty()) {
+            DLOG(INFO) << "Read width & height from " + FLAGS_images_path + "/" + image_name << " failed.";
+          } else {
+            left_width  = img.cols;
+            left_height = img.rows;
+            break;
+          }
+        }
+      }
+
+      YAML::Node right_cam = config["intrinsic"]["fisheye_right"];
+      double right_a11     = right_cam["projection_parameters"]["A11"].as<double>();
+      double right_a22     = right_cam["projection_parameters"]["A22"].as<double>();
+      int right_width      = 0;
+      int right_height     = 0;
+      for (const auto &[image_name, pose] : image_to_pose) {
+        if (image_name.find("right") != std::string::npos) {
+          auto img = cv::imread(FLAGS_images_path + "/" + image_name);
+          if (img.empty()) {
+            DLOG(INFO) << "Read width & height from " + FLAGS_images_path + "/" + image_name << " failed.";
+          } else {
+            right_width = img.cols;
+            right_height = img.rows;
+            break;
+          }
+        }
+      }
+
+      DLOG(INFO) << "left camera: " << left_a11 << ", " << left_a22 << ", " << left_width << ", " << left_height;
+      DLOG(INFO) << "right camera: " << right_a11 << ", " << right_a22 << ", " << right_width << ", " << right_height;
+
+      // write into image-poses.txt and camera-params.txt
+      std::ofstream image_poses_file(FLAGS_output_path + "/image-poses.txt");
+      image_poses_file << "camera_id image_name x y z rw rx ry rz" << std::endl;
+      for (const auto &[image_name, pose] : image_to_pose) {
+        if (image_name.find("left") != std::string::npos) {
+          image_poses_file << "1 " + image_name + " ";
+        } else {
+          image_poses_file << "2 " + image_name + " ";
+        }
+        auto pose_c2w = colmap::Inverse(pose);
+        image_poses_file << pose_c2w.translation.x() << " " << pose_c2w.translation.y() << " " << pose_c2w.translation.z() << " "
+                         << pose_c2w.rotation.w() << " " << pose_c2w.rotation.x() << " " << pose_c2w.rotation.y() << " " << pose_c2w.rotation.z()
+                         << std::endl;
+      }
+      image_poses_file.close();
+
+      std::ofstream camera_params_file(FLAGS_output_path + "/camera-params.txt");
+      camera_params_file << "camera_id model_id fx fy cx cy params..." << std::endl;
+      camera_params_file << "1 4 " << left_a11 << " " << left_a22 << " " << left_width / 2.0 << " " << left_height / 2.0 << " 0 0 0 0"
+                         << std::endl;
+      camera_params_file << "2 4 " << right_a11 << " " << right_a22 << " " << right_width / 2.0 << " " << right_height / 2.0 << " 0 0 0 0"
+                         << std::endl;
+      camera_params_file.close();
+
+      DLOG(INFO) << "done.";
+      std::cout << "done." << std::endl;
+
+    } catch (const YAML::Exception &e) {
+      DLOG(ERROR) << "YAML error: " << e.what();
+      return 1;
+    } catch (const std::exception &e) {
+      DLOG(ERROR) << "Error: " << e.what();
+      return 1;
+    }
+
+    return 0;
+  }
 
   // reload images
   {

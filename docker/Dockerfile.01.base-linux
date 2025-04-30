@@ -54,14 +54,5 @@ RUN : \
     && echo source ~/.gdbinit-gef.py >> ~/.gdbinit
 
 
-# install packages
-RUN apt-get update \
-    && apt-get install -q -y libtool python3-jinja2 flex bison libxtst-dev autoconf automake autoconf-archive \
-       unzip zip '^libxcb.*-dev' libx11-xcb-dev libgl1-mesa-dev libxrender-dev libxi-dev  libxkbcommon-dev libxkbcommon-x11-dev gfortran \
-       libxi-dev libgl1-mesa-dev libglu1-mesa-dev mesa-common-dev libxrandr-dev libxxf86vm-dev \
-       pkg-config \
-    && rm -rf /var/lib/apt/lists/*
-
-
 # setup entrypoint
 CMD ["bash"]

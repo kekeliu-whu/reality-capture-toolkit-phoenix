@@ -300,8 +300,11 @@ std::vector<std::vector<int>> DBSCANClusterIndices(const std::vector<MatchTrack>
     std::vector<int> cluster;
     cluster.push_back(i);
 
-    for (size_t ni = 0; ni < neighbors.size(); ++ni) {
-      int j = neighbors[ni];
+    std::deque<int> search_queue(neighbors.begin(), neighbors.end());
+
+    while (!search_queue.empty()) {
+      int j = search_queue.front();
+      search_queue.pop_front();
 
       if (!visited[j]) {
         visited[j] = true;
@@ -315,7 +318,12 @@ std::vector<std::vector<int>> DBSCANClusterIndices(const std::vector<MatchTrack>
         }
 
         if (sub_neighbors.size() >= min_pts) {
-          neighbors.insert(neighbors.end(), sub_neighbors.begin(), sub_neighbors.end());
+          for (int n : sub_neighbors) {
+            if (std::find(neighbors.begin(), neighbors.end(), n) == neighbors.end()) {
+              search_queue.push_back(n);
+              neighbors.push_back(n);
+            }
+          }
         }
       }
 
@@ -333,20 +341,18 @@ void PrintClusterMetrics(std::vector<MatchTrack> &match_tracks_valid, std::vecto
   std::vector<double> cluster_rmses = ComputeRMSEByClusterCentroid(clusters, match_tracks_valid);
   Histogram hist;
   for (int i = 0; i < clusters.size(); ++i) {
+    // only use cluster with more than 1 match track
     if (clusters[i].size() > 1) {
       hist.Add(cluster_rmses[i]);
     }
   }
   DLOG(INFO) << "Cluster RMSE: " << hist.ToString(10);
 
-  int idx = 0;
   Histogram hist_count;
   for (int i = 0; i < clusters.size(); ++i) {
+    // only use cluster with more than 1 match track
     if (clusters[i].size() > 1) {
       hist_count.Add(sub_clusters[i].size());
-    }
-    if (clusters[i].size() > clusters[idx].size()) {
-      idx = i;
     }
   }
   DLOG(INFO) << "Cluster count: " << hist_count.ToString(20);

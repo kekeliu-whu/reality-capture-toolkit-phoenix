@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(xcolor)
+project(odometry)
 
 if(CMAKE_TOOLCHAIN_FILE)
     include(${CMAKE_TOOLCHAIN_FILE})
@@ -28,14 +28,13 @@ find_package(Ceres REQUIRED)
 find_package(gflags REQUIRED)
 find_package(PCL REQUIRED)
 find_package(Boost COMPONENTS program_options)
-find_package(colmap REQUIRED)
 find_package(OpenCV CONFIG REQUIRED)
 find_package(absl CONFIG REQUIRED)
 find_package(RapidJSON CONFIG REQUIRED)
 find_package(Glog REQUIRED)
 find_package(GTest CONFIG REQUIRED)
 find_package(mimalloc CONFIG REQUIRED)
-find_package(yaml-cpp CONFIG REQUIRED)
+find_package(crashpad CONFIG REQUIRED)
 
 include_directories(
   src
@@ -49,11 +48,7 @@ add_subdirectory(../migration migration_build)
 
 set(
   PGO_PRIVATE_SRCS
-  src/core/xcolor_lib.cc
-  src/io/read_write.cc
-  src/core/xsfm_lib.cc
-  src/common/histogram.cc
-  src/io/read_write.cc
+  src/slam_core_main.cc
 )
 
 set(PGO_PRIVATE_LIBS
@@ -63,12 +58,10 @@ set(PGO_PRIVATE_LIBS
   ${PCL_LIBRARIES}
   ${CERES_LIBRARIES}
   glog::glog
-  colmap::colmap
   absl::flat_hash_map
   absl::flat_hash_set
-  ${OpenCV_LIBS}
   rapidjson
-  yaml-cpp::yaml-cpp
+  crashpad::crashpad
 )
 
 function(add_private_tool name)
@@ -76,6 +69,4 @@ function(add_private_tool name)
   target_link_libraries(${name} ${PGO_PRIVATE_LIBS})
 endfunction()
 
-add_private_tool(xcolor_main src/xcolor_main.cc)
-add_private_tool(xsfm src/xsfm_main.cc)
-add_private_tool(xsfm_reset_s20_cameras src/xsfm_reset_s20_cameras.cc)
+add_private_tool(slam_core_main src/slam_core_main.cc)

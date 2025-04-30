@@ -36,29 +36,24 @@ static constexpr double kSmoothSigmaN           = 0.05;
 #include <pdal/io/LasReader.hpp>
 
 void LoadLAS(const std::string &filename, pcl::PointCloud<pcl::PointXYZI>::Ptr &cloud) {
-  // 初始化点云对象
   cloud.reset(new pcl::PointCloud<pcl::PointXYZI>);
 
-  // 创建 PDAL 读取器
   pdal::StageFactory factory;
   pdal::Stage *reader = factory.createStage("readers.las");
   pdal::Options opts;
   opts.add(pdal::Option("filename", filename));
   reader->setOptions(opts);
 
-  // 准备点云数据容器
   pdal::PointTable table;
   reader->prepare(table);
   pdal::PointViewSet viewSet = reader->execute(table);
   pdal::PointViewPtr view    = *viewSet.begin();
 
-  // 配置点云属性
   cloud->width    = view->size();
   cloud->height   = 1;
   cloud->is_dense = false;
   cloud->points.resize(cloud->width);
 
-  // 遍历并转换数据
   for (size_t i = 0; i < view->size(); ++i) {
     pcl::PointXYZI p;
     p.x              = view->getFieldAs<double>(pdal::Dimension::Id::X, i);

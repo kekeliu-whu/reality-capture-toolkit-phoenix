@@ -1,10 +1,10 @@
 # PGO
-## PGO（Pose Graph Optimization）模块有以下功能
-1. 基于submap的回环检测和优化  
-1. 融合RTK  
-1. 融合含坐标控制点  
-1. 融合同名无坐标控制点
-1. 融合多个地图
+## The PGO (Pose Graph Optimization) module provides the following features:
+1. Loop detection and optimization based on submaps  
+1. Integration of RTK  
+1. Integration of control points with coordinates  
+1. Integration of control points without coordinates  
+1. Integration of multiple maps
 
-## 研发计划
-先实现feature1，即先实先基于submap的回环检测和优化。后面其它的控制点和RTK的全局约束后面再优化。
+## Development Plan
+First, implement feature 1, which is loop detection and optimization based on submaps. The global constraints for control points and RTK will be optimized later.

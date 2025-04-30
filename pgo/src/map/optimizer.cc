@@ -62,8 +62,8 @@ bool MatchGICP(pcl::PointCloud<pcl::PointXYZI>::Ptr &target,
   gicp.setInputSource(source);
   gicp.setInputTarget(target);
 
-  gicp.setMaximumIterations(gicp_max_iterations);         // 最大迭代次数
-  gicp.setTransformationEpsilon(gicp_transform_epsilon);  // 变换矩阵的收敛阈值
+  gicp.setMaximumIterations(gicp_max_iterations);
+  gicp.setTransformationEpsilon(gicp_transform_epsilon);
 
   pcl::PointCloud<pcl::PointXYZI> aligned_source;
   gicp.align(aligned_source, T_source_to_target.matrix().cast<float>());
