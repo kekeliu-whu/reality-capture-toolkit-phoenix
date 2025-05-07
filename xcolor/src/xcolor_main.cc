@@ -6,7 +6,7 @@
 #include "common/types.h"
 #include "core/xcolor_lib.h"
 #include "io/read_write.h"
-#include "migration/sensor_io.h"
+#include "migration/proto_io.h"
 #include "migration/utils.h"
 
 DEFINE_string(images_path, "D:/BaiduNetdiskDownload/s10-colmap/images", "Images path");

@@ -120,7 +120,7 @@ class PosePriorCostFunction {
   Eigen::Matrix<double, 6, 6> sqrt_information_;
 };
 
-colmap::Rigid3d FromProto(const PoseMsg &pose_msg);
+colmap::Rigid3d FromProto(const proto::PoseMsg &pose_msg);
 
 std::vector<MatchTrack> GenerateMatchPairs(const colmap::CorrespondenceGraph &corr_graph,
                                           const std::unordered_map<colmap::image_t, colmap::Image> &images, const SfmConfig &config);

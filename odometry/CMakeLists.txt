@@ -49,6 +49,10 @@ add_subdirectory(../migration migration_build)
 set(
   PGO_PRIVATE_SRCS
   src/slam_core_main.cc
+  src/core/slam_core_lib.cc
+  src/core/preprocess.cc
+  src/io/msg_pack_synchronizer.cc
+  src/common/msg_conversions.cc
 )
 
 set(PGO_PRIVATE_LIBS

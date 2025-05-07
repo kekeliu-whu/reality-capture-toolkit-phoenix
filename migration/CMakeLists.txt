@@ -14,6 +14,7 @@ find_package(Boost REQUIRED COMPONENTS iostreams)
 find_package(Glog REQUIRED)
 find_package(GTest REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 if (Protobuf_VERBOSE)
     message(STATUS "Using Protocol Buffers ${protobuf_VERSION}")
@@ -61,7 +62,7 @@ include_directories(
 list(APPEND PROJECT_SRCS ${ALL_PROTO_SRCS})
 list(APPEND
     PROJECT_SRCS
-    src/sensor_io.cc
+    src/proto_io.cc
     src/utils.cc
     src/crypto.cc
 )
@@ -74,20 +75,19 @@ set(
     sophus
     rosbag
     OpenSSL::Crypto
+    yaml-cpp::yaml-cpp
 )
 
 # add_executable(test_proto src/test_proto.cc ${PROJECT_SRCS})
 # target_link_libraries(test_proto ${CERES_LIBRARIES} ${PCL_LIBRARIES} protobuf::libprotobuf)
 
-function(add_test_library_srcs ARG_SRC)
-    add_library(${TEST_LIB} ${ARG_SRC})
-    target_link_libraries(${TEST_LIB} ${TEST_EXECUTABLE_COMMON_DEPS})
-endfunction()
-
 include(cmake/google-test.cmake)
 set(TEST_LIB ${PROJECT_NAME})
 add_test_library_srcs("${PROJECT_SRCS}")
 enable_automatic_test_and_benchmark()
+
+add_executable(convert_l2pro src/convert_l2pro.cc)
+target_link_libraries(convert_l2pro ${TEST_LIB})
 
 target_include_directories(
     ${PROJECT_NAME}

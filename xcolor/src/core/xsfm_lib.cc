@@ -18,7 +18,7 @@
 
 #include "common/histogram.h"
 #include "io/read_write.h"
-#include "migration/sensor_io.h"
+#include "migration/proto_io.h"
 #include "migration/utils.h"
 
 namespace {
@@ -233,7 +233,7 @@ void PrintResidualHistogram(double threshold, ceres::Problem &problem, const std
   DLOG(INFO) << name << ": " << hist.ToString(10);
 }
 
-colmap::Rigid3d FromProto(const PoseMsg &pose_msg) {
+colmap::Rigid3d FromProto(const proto::PoseMsg &pose_msg) {
   Eigen::Quaterniond rot(pose_msg.rw(), pose_msg.rx(), pose_msg.ry(), pose_msg.rz());
   Eigen::Vector3d pos(pose_msg.tx(), pose_msg.ty(), pose_msg.tz());
   return colmap::Rigid3d(rot, pos);
@@ -400,7 +400,7 @@ bool MergeTrack(const std::vector<MatchTrack> &match_tracks, std::vector<MatchTr
   PrintClusterMetrics(match_tracks_valid, clusters, sub_clusters);
 
   match_tracks_merged = MergeMatchTracks(match_tracks_valid, sub_clusters);
-  LOG(INFO) << "Finally, merge " << match_tracks_valid.size() << " match track into " << match_tracks_merged.size() << " tracks ";
+  DLOG(INFO) << "Finally, merge " << match_tracks_valid.size() << " match track into " << match_tracks_merged.size() << " tracks ";
 
   return true;
 }

@@ -2,7 +2,6 @@ FROM public.ecr.aws/docker/library/ubuntu:24.04
 
 
 # copy files
-COPY sources.list /etc/apt/sources.list.bak
 COPY .vimrc /root/
 
 

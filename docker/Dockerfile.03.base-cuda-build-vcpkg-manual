@@ -1,7 +1,6 @@
 # Stage 1: Builder
 FROM registry.cn-hangzhou.aliyuncs.com/c137/reality-capture-toolkit:base-cuda AS builder
 
-
 # install packages
 RUN apt-get update \
     && apt-get install -q -y libtool python3-jinja2 flex bison libxtst-dev autoconf automake autoconf-archive \
@@ -10,26 +9,17 @@ RUN apt-get update \
        pkg-config python3.12-venv libxcursor-dev libxdamage-dev libxinerama-dev \
     && rm -rf /var/lib/apt/lists/*
 
-
-# 1. chekcout vcpkg version
-# 2. edit vcpkg options, By default, COLMAP uses nvcc -arch=native for CUDA compilation. If the build environment lacks a GPU, it defaults to compute_52, which may limit compatibility. Changing it to nvcc -arch=all ensures broader support across NVIDIA GPUs.
-# 3. build vcpkg binary
 RUN mkdir /buildspace && cd /buildspace \
-    && git clone https://github.com/microsoft/vcpkg \
-    && cd /buildspace/vcpkg \
-    && git checkout e9d0d6fe71ec440a6a7906f92f941a181b937556 \
-    && sed -i '/--disable-test-modules/a \        "--disable-ipv6"' /buildspace/vcpkg/ports/python3/portfile.cmake \
-    && sed -i 's/set(VCPKG_LIBRARY_LINKAGE static)/set(VCPKG_LIBRARY_LINKAGE dynamic)/' /buildspace/vcpkg/triplets/x64-linux.cmake \
-    && sed -i '/set(VCPKG_CMAKE_SYSTEM_NAME Linux)/a set(VCPKG_BUILD_TYPE release)' /buildspace/vcpkg/triplets/x64-linux.cmake \
-    && sed -i 's/set(CUDA_ARCHITECTURES "native")/set(CUDA_ARCHITECTURES "all")/' /buildspace/vcpkg/ports/colmap/portfile.cmake \
+    && git clone -b develop https://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@github.com/kekeliu-whu/vcpkg.git \
     && cd /buildspace/vcpkg \
     && ./bootstrap-vcpkg.sh
 
 RUN for i in $(seq 1 20); do \
-      /buildspace/vcpkg/vcpkg install boost pcl colmap[cuda] opencv cgal pdal rapidjson gtest mimalloc[override] crashpad yaml-cpp --recurse && break || sleep 10; \
-    done \
-    && rm -rf /buildspace/vcpkg/downloads /buildspace/vcpkg/buildtrees /buildspace/vcpkg/packages /var/lib/apt/lists/* /root/.cache/vcpkg
-
+    /buildspace/vcpkg/vcpkg install boost pcl colmap[cuda] opencv cgal pdal rapidjson gtest mimalloc[override] crashpad yaml-cpp --recurse && break || { \
+      echo "Attempt $i failed. Retrying in 10 seconds..."; sleep 10; }; \
+  done; \
+  if [ $i -eq 20 ]; then echo "Installation failed after 20 attempts." && exit 1; fi; \
+  rm -rf /buildspace/vcpkg/downloads /buildspace/vcpkg/buildtrees /buildspace/vcpkg/packages /var/lib/apt/lists/* /root/.cache/vcpkg
 
 
 # Stage 2: Final Runtime Image

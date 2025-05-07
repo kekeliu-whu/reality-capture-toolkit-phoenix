@@ -1,11 +1,15 @@
 #include <glog/logging.h>
 #include <sqlite3.h>
+#include <yaml-cpp/yaml.h>
+#include <Eigen/Eigen>
 #include <boost/filesystem.hpp>
 #include <cstring>
 #include <iostream>
 #include <vector>
 
-DEFINE_string(database_filename, "D:/project_3d/reality-capture-toolkit/.cache/output_dir/xsfm.db", "Database filename");
+DEFINE_string(database_filename, "D:/project_3d/data/sfm-share/output_dir_s20_first-oldest-outdoor-shareuav1f/xsfm.db", "Database filename");
+DEFINE_string(calibration_filename, "D:/project_3d/data/sfm-share/output_dir_s20_first-oldest-outdoor-shareuav1f/calibration.yaml",
+              "Calibration filename");
 
 // Retrieve all camera_ids
 std::vector<int> getAllCameraIds(sqlite3* db) {
@@ -75,6 +79,45 @@ bool updateParams(sqlite3* db, int camera_id, const std::vector<unsigned char>& 
   return success;
 }
 
+bool getFirstRow(const std::string& db_path, std::string& name, int& camera_id) {
+  sqlite3* db;
+  sqlite3_stmt* stmt;
+
+  int rc = sqlite3_open(db_path.c_str(), &db);
+  if (rc != SQLITE_OK) {
+    std::cerr << "Error opening database: " << sqlite3_errmsg(db) << std::endl;
+    return false;
+  }
+
+  const char* sql = "SELECT name, camera_id FROM images LIMIT 1;";
+
+  rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    std::cerr << "Error preparing statement: " << sqlite3_errmsg(db) << std::endl;
+    sqlite3_close(db);
+    return false;
+  }
+
+  rc = sqlite3_step(stmt);
+  if (rc == SQLITE_ROW) {
+    const unsigned char* db_name = sqlite3_column_text(stmt, 0);
+    name                         = db_name ? reinterpret_cast<const char*>(db_name) : "";
+    camera_id                    = sqlite3_column_int(stmt, 1);
+
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    return true;
+  } else if (rc == SQLITE_DONE) {
+    std::cerr << "No data found in the table." << std::endl;
+  } else {
+    std::cerr << "Error executing statement: " << sqlite3_errmsg(db) << std::endl;
+  }
+
+  sqlite3_finalize(stmt);
+  sqlite3_close(db);
+  return false;
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   google::InitGoogleLogging(argv[0]);
@@ -91,9 +134,52 @@ int main(int argc, char** argv) {
 
   // Retrieve all camera IDs
   std::vector<int> camera_ids = getAllCameraIds(db);
+  CHECK_EQ(camera_ids.size(), 2);
+
+  std::string image_path;
+  int camera_id;
+  if (getFirstRow(FLAGS_database_filename, image_path, camera_id)) {
+    DLOG(INFO) << "First Row - Name: " << image_path << ", Camera ID: " << camera_id;
+
+    bool is_left = (image_path.find("left") != std::string::npos);
+
+    if ((is_left && camera_ids[1] == camera_id) || (!is_left && camera_ids[0] == camera_id)) {
+      std::swap(camera_ids[0], camera_ids[1]);
+    }
+
+    DLOG(INFO) << "Sorted Camera IDs: [" << camera_ids[0] << ", " << camera_ids[1] << "]";
+  } else {
+    LOG(FATAL) << "Failed to retrieve the first row.";
+  }
+
+  std::vector<Eigen::Vector2d> camera_params;
+  try {
+    CHECK(boost::filesystem::is_regular_file(FLAGS_calibration_filename));
+
+    YAML::Node config = YAML::LoadFile(FLAGS_calibration_filename);
+
+    YAML::Node left_cam = config["intrinsic"]["fisheye_left"];
+    double left_a11     = left_cam["projection_parameters"]["A11"].as<double>();
+    double left_a22     = left_cam["projection_parameters"]["A22"].as<double>();
+    camera_params.push_back({left_a11, left_a22});
+
+    YAML::Node right_cam = config["intrinsic"]["fisheye_right"];
+    double right_a11     = right_cam["projection_parameters"]["A11"].as<double>();
+    double right_a22     = right_cam["projection_parameters"]["A22"].as<double>();
+    camera_params.push_back({right_a11, right_a22});
+  } catch (const YAML::Exception& e) {
+    DLOG(ERROR) << "YAML error: " << e.what();
+    return 1;
+  } catch (const std::exception& e) {
+    DLOG(ERROR) << "Error: " << e.what();
+    return 1;
+  }
 
   // Iterate over each camera and update its 'params'
-  for (int cam_id : camera_ids) {
+  for (int i = 0; i < camera_ids.size(); ++i) {
+    auto cam_id       = camera_ids[i];
+    auto camera_param = camera_params[i];
+
     int width = 0, height = 0;
     std::vector<unsigned char> params;
 
@@ -104,11 +190,14 @@ int main(int argc, char** argv) {
       CHECK_GT(params.size(), 4 * sizeof(double));
 
       // Replace with new parameters as needed; here is an example:
+      ((double*)params.data())[0] = camera_param[0];
+      ((double*)params.data())[1] = camera_param[1];
       ((double*)params.data())[2] = width / 2;
       ((double*)params.data())[3] = height / 2;
 
       if (updateParams(db, cam_id, params)) {
-        DLOG(INFO) << "Camera " << cam_id << "'s params has been updated.";
+        DLOG(INFO) << "Camera " << cam_id << "'s params has been updated: fx = " << camera_param[0] << ", fy = " << camera_param[1]
+                   << ", cx = " << width / 2 << ", cy = " << height / 2;
       }
     }
   }

@@ -12,7 +12,7 @@
 
 #include "common/msg_conversions.h"
 #include "map/utils.h"
-#include "migration/sensor_io.h"
+#include "migration/proto_io.h"
 #include "read_write.h"
 
 namespace {
@@ -28,13 +28,13 @@ void LoadRawScans(
   std::vector<TimestampedPose> raw_timestamped_poses;
   DLOG(INFO) << "Loading undistorted lidar scans from " << lidar_filename;
   auto ok = ReadUndistortedLidarFile(
-      lidar_filename, [&raw_scans](const ConstPtr<UndistoredLidarMsg> &msg) {
+      lidar_filename, [&raw_scans](const ConstPtr<proto::UndistoredLidarMsg> &msg) {
         raw_scans.push_back(FromProto(*msg));
       });
   CHECK(ok) << "Failed to load undistorted lidar scans from " << lidar_filename;
   DLOG(INFO) << "scans number loaded: " << raw_scans.size();
 
-  PoseMsgList pose_msg_list;
+  proto::PoseMsgList pose_msg_list;
   DLOG(INFO) << "Loading poses from " << poses_filename;
   ok = ReadPoseFile(project_path + "/poses.dat", pose_msg_list);
   CHECK(ok) << "Failed to load poses from " << poses_filename;

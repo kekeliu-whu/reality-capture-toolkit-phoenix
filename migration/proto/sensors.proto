@@ -1,5 +1,7 @@
 syntax = "proto3";
 
+package proto;
+
 // raw sensor data
 message LidarMsg {
   message Point {
@@ -27,7 +29,7 @@ message ImuMsgList {
   repeated ImuMsg imu_msgs = 1;
 }
 
-message MotorMsg {
+message EncoderMsg {
   double timestamp = 1;
   float rx = 2;
   float ry = 3;
@@ -35,8 +37,8 @@ message MotorMsg {
   float rw = 5;
 }
 
-message MotorMsgList {
-  repeated MotorMsg motor_msgs = 1;
+message EncoderMsgList {
+  repeated EncoderMsg encoder_msgs = 1;
 }
 
 // LIO result

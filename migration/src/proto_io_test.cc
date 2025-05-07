@@ -1,11 +1,11 @@
 #include <gtest/gtest.h>
 
-#include "migration/sensor_io.h"
+#include "migration/proto_io.h"
 
 TEST(SensorIO, ReadWriteImuFile) {
   std::string filename = "/tmp/imu.dat";
 
-  ImuMsgList imu;
+  proto::ImuMsgList imu;
   auto it = imu.add_imu_msgs();
   it->set_timestamp(1000);
   it->set_ax(0.1);
@@ -25,7 +25,7 @@ TEST(SensorIO, ReadWriteImuFile) {
 
   EXPECT_TRUE(WriteImuFile(filename, imu));
 
-  ImuMsgList imu_out;
+  proto::ImuMsgList imu_out;
   EXPECT_TRUE(ReadImuFile(filename, imu_out));
 
   EXPECT_EQ(imu.imu_msgs_size(), imu_out.imu_msgs_size());
@@ -40,39 +40,39 @@ TEST(SensorIO, ReadWriteImuFile) {
   }
 }
 
-TEST(SensorIO, ReadWriteMotorFile) {
+TEST(SensorIO, ReadWriteEncoderFile) {
   std::string filename = "/tmp/motor.dat";
 
-  MotorMsgList motor;
-  auto it = motor.add_motor_msgs();
+  proto::EncoderMsgList motor;
+  auto it = motor.add_encoder_msgs();
   it->set_timestamp(1000);
   it->set_rx(0.1);
   it->set_ry(0.2);
   it->set_rz(0.3);
   it->set_rw(0.4);
 
-  EXPECT_TRUE(WriteMotorFile(filename, motor));
+  EXPECT_TRUE(WriteEncoderFile(filename, motor));
 
-  MotorMsgList motor_out;
-  EXPECT_TRUE(ReadMotorFile(filename, motor_out));
+  proto::EncoderMsgList motor_out;
+  EXPECT_TRUE(ReadEncoderFile(filename, motor_out));
 
-  EXPECT_EQ(motor.motor_msgs_size(), motor_out.motor_msgs_size());
-  for (int i = 0; i < motor.motor_msgs_size(); i++) {
-    EXPECT_EQ(motor.motor_msgs(i).timestamp(),
-              motor_out.motor_msgs(i).timestamp());
-    EXPECT_EQ(motor.motor_msgs(i).rx(), motor_out.motor_msgs(i).rx());
-    EXPECT_EQ(motor.motor_msgs(i).ry(), motor_out.motor_msgs(i).ry());
-    EXPECT_EQ(motor.motor_msgs(i).rz(), motor_out.motor_msgs(i).rz());
-    EXPECT_EQ(motor.motor_msgs(i).rw(), motor_out.motor_msgs(i).rw());
+  EXPECT_EQ(motor.encoder_msgs_size(), motor_out.encoder_msgs_size());
+  for (int i = 0; i < motor.encoder_msgs_size(); i++) {
+    EXPECT_EQ(motor.encoder_msgs(i).timestamp(),
+              motor_out.encoder_msgs(i).timestamp());
+    EXPECT_EQ(motor.encoder_msgs(i).rx(), motor_out.encoder_msgs(i).rx());
+    EXPECT_EQ(motor.encoder_msgs(i).ry(), motor_out.encoder_msgs(i).ry());
+    EXPECT_EQ(motor.encoder_msgs(i).rz(), motor_out.encoder_msgs(i).rz());
+    EXPECT_EQ(motor.encoder_msgs(i).rw(), motor_out.encoder_msgs(i).rw());
   }
 }
 
 TEST(SensorIO, ReadWriteLidarFile) {
   std::string filename = "/tmp/lidar.dat";
 
-  std::vector<ConstPtr<LidarMsg>> lidar_msgs;
+  std::vector<ConstPtr<proto::LidarMsg>> lidar_msgs;
   for (int i = 0; i < 10; ++i) {
-    Ptr<LidarMsg> lidar_msg{new LidarMsg()};
+    Ptr<proto::LidarMsg> lidar_msg{new proto::LidarMsg()};
     for (int j = 0; j < 32000; ++j) {
       lidar_msg->add_points();
       lidar_msg->mutable_points(j)->set_x(j + 0.1);
@@ -86,9 +86,9 @@ TEST(SensorIO, ReadWriteLidarFile) {
 
   EXPECT_TRUE(WriteLidarFile(filename, lidar_msgs));
 
-  std::vector<ConstPtr<LidarMsg>> lidar_msgs_out;
+  std::vector<ConstPtr<proto::LidarMsg>> lidar_msgs_out;
   EXPECT_TRUE(ReadLidarFile(
-      filename, [&lidar_msgs_out](const ConstPtr<LidarMsg> &lidar_msg) {
+      filename, [&lidar_msgs_out](const ConstPtr<proto::LidarMsg> &lidar_msg) {
         lidar_msgs_out.push_back(lidar_msg);
       }));
 

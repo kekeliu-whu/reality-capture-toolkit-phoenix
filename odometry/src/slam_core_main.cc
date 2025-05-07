@@ -5,7 +5,11 @@
 #include <glog/logging.h>
 #include <omp.h>
 
-DEFINE_string(point_cloud_filename, "D:/project_3d/data/sfm-share/output_dir/colorized.las_normals.pcd", "Point cloud filename");
+#include "common/msg_conversions.h"
+#include "core/slam_core_lib.h"
+#include "migration/proto_io.h"
+
+DEFINE_string(project_dir, "/root/output_dir", "Project directory");
 
 bool StartCrashpad(const base::FilePath::StringType& db_path, const base::FilePath::StringType& handler_path, const std::string& url) {
   using namespace crashpad;
@@ -42,7 +46,6 @@ int main(int argc, char** argv) {
                              }};
 
 /////////////////////////////////// setup minidump ///////////////////////////////////
-// todo kk generate dump file with version
 #ifdef __linux__
   base::FilePath::StringType db_path      = "dump";
   base::FilePath::StringType handler_path = "/buildspace/vcpkg/installed/x64-linux/tools/crashpad_handler";
@@ -53,11 +56,34 @@ int main(int argc, char** argv) {
   std::string report_url = ".";
   StartCrashpad(db_path, handler_path, report_url);
 
+  /////////////////////////////////// setup omp ///////////////////////////////////
   int cores      = std::thread::hardware_concurrency();
   int cores_used = std::max(cores - 4, 1);
   DLOG(INFO) << "Using " << cores_used << "/" << cores << " cores.";
   omp_set_dynamic(0);
   omp_set_num_threads(cores_used);
+
+  /////////////////////////////////// setup odometry core ///////////////////////////////////
+  proto::SensorCalib calib;
+  proto::ImuMsgList imu_msg_list;
+  proto::EncoderMsgList encoder_msg_list;
+  ReadSensorCalibFile(FLAGS_project_dir + "/calibration.dat", calib);
+  ReadImuFile(FLAGS_project_dir + "/imu.dat", imu_msg_list);
+  ReadEncoderFile(FLAGS_project_dir + "/encoder.dat", encoder_msg_list);
+
+  LOG(INFO) << "Calibration: " << calib.DebugString();
+  SlamCore core(FromProto(calib));
+  for (auto& msg : imu_msg_list.imu_msgs()) {
+    core.AddSensorData(FromProto(msg));
+  }
+  for (auto& msg : encoder_msg_list.encoder_msgs()) {
+    core.AddSensorData(FromProto(msg));
+  }
+  ReadLidarFile(FLAGS_project_dir + "/lidar.dat", [&core](const ConstPtr<proto::LidarMsg>& msg) {
+    core.AddSensorData(FromProto(msg));
+    OdometryResult::Ptr result;
+    core.TryEstimateState(result);
+  });
 
   return 0;
 }

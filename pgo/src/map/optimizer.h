@@ -4,4 +4,4 @@
 #include "proto/sensors.pb.h"
 
 void Optimize(std::vector<TimestampedPointCloud> &submaps,
-              const PgoConfig &config);
+              const proto::PgoConfig &config);

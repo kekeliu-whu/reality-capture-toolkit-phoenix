@@ -3,7 +3,7 @@
 #include "proto/sensors.pb.h"
 #include "types.h"
 
-inline PointCloud::Ptr FromProto(const UndistoredLidarMsg &msg) {
+inline PointCloud::Ptr FromProto(const proto::UndistoredLidarMsg &msg) {
   PointCloud::Ptr cloud{new PointCloud};
   cloud->reserve(msg.points_size());
 
@@ -19,7 +19,7 @@ inline PointCloud::Ptr FromProto(const UndistoredLidarMsg &msg) {
   return cloud;
 }
 
-inline Sophus::SE3d FromProto(const PoseMsg &pose_msg) {
+inline Sophus::SE3d FromProto(const proto::PoseMsg &pose_msg) {
   Sophus::SE3d pose;
   pose.translation().x() = pose_msg.tx();
   pose.translation().y() = pose_msg.ty();

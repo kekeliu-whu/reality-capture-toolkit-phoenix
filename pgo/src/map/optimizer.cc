@@ -91,7 +91,7 @@ void AddParameters(ceres::Problem &problem,
 void AddGravityConstraits(ceres::Problem &problem,
                           std::vector<TimestampedPointCloud> &submaps,
                           std::set<ceres::ResidualBlockId> &prior_residual_blocks,
-                          const PgoConfig &config) {
+                          const proto::PgoConfig &config) {
   Eigen::DiagonalMatrix<double, 3> gravity_align_sqrt_information;
   gravity_align_sqrt_information.diagonal() << 1 / (config.gravity_align_rotation_error() / 180.0 * M_PI),
       1 / (config.gravity_align_rotation_error() / 180.0 * M_PI),
@@ -108,7 +108,7 @@ void AddAdjacentConstraints(
     ceres::Problem &problem,
     std::vector<TimestampedPointCloud> &submaps,
     std::set<ceres::ResidualBlockId> &prior_residual_blocks,
-    const PgoConfig &config) {
+    const proto::PgoConfig &config) {
   Eigen::DiagonalMatrix<double, 6> odom_sqrt_information;
   odom_sqrt_information.diagonal() << 1 / config.odom_edge_translation_error(),
       1 / config.odom_edge_translation_error(),
@@ -131,7 +131,7 @@ void AddAdjacentConstraints(
 
 void AddLoopClosureConstraints(ceres::Problem &problem,
                                std::vector<TimestampedPointCloud> &submaps,
-                               const PgoConfig &config) {
+                               const proto::PgoConfig &config) {
   Eigen::DiagonalMatrix<double, 6> loop_sqrt_information;
   loop_sqrt_information.diagonal() << 1 / config.loop_edge_translation_error(),
       1 / config.loop_edge_translation_error(),
@@ -206,7 +206,7 @@ void RemoveNonPriorConstraints(
 }  // namespace
 
 void Optimize(std::vector<TimestampedPointCloud> &submaps,
-              const PgoConfig &config) {
+              const proto::PgoConfig &config) {
   ceres::Problem problem;
 
   std::set<ceres::ResidualBlockId> prior_residual_blocks;

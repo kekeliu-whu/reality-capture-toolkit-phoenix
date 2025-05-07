@@ -22,7 +22,7 @@
 #include "core/xsfm_lib.h"
 #include "io/read_write.h"
 #include "migration/crypto.h"
-#include "migration/sensor_io.h"
+#include "migration/proto_io.h"
 #include "migration/utils.h"
 
 DEFINE_string(point_cloud_filename, "D:/project_3d/data/sfm-share/output_dir_s20_first-oldest-outdoor-shareuav1f/colorized.las_normals.pcd",
@@ -31,8 +31,10 @@ DEFINE_string(output_path, "D:/project_3d/data/sfm-share/output_dir_s20_first-ol
 DEFINE_string(database_filename, "D:/project_3d/data/sfm-share/output_dir_s20_first-oldest-outdoor-shareuav1f/xsfm.db", "Database filename");
 DEFINE_string(initial_pose_dirname, "D:/project_3d/data/sfm-share/output_dir_s20_first-oldest-outdoor-shareuav1f/", "Initial pose filename");
 DEFINE_int32(pose_type, 1, "Pose type, =0 for s10, =1 for s20, =2 for export s20 poses");
+//////////////////////// only used when pose_type = 2 begin ////////////////////////
 DEFINE_string(calibration_filename, "D:/project_3d/data/sfm-share/output_dir_s20_first-oldest-outdoor-shareuav1f/calibration.yaml", "");
 DEFINE_string(images_path, "D:/project_3d/data/sfm-share/output_dir_s20_first-oldest-outdoor-shareuav1f/undistort", "");
+//////////////////////// only used when pose_type = 2 end   ////////////////////////
 
 void SaveTriangulatedPoints(const std::vector<MatchTrack> &match_tracks, const std::string &filename) {
   pcl::PointCloud<pcl::PointXYZINormal> point_cloud_out;
@@ -459,7 +461,7 @@ std::unordered_map<std::string, colmap::Rigid3d> ReadImagePoses(int type, const 
       ret.insert(ret_right.begin(), ret_right.end());
     } break;
     default: {
-      LOG(FATAL) << "Unknown pose type: " << type;
+      DLOG(FATAL) << "Unknown pose type: " << type;
       break;
     }
   }
@@ -553,8 +555,8 @@ int main(int argc, char **argv) {
 
       std::ofstream camera_params_file(FLAGS_output_path + "/camera-params.txt");
       camera_params_file << "camera_id model_id fx fy cx cy params..." << std::endl;
-      camera_params_file << "1 4 " << left_a11 << " " << left_a22 << " " << left_width / 2.0 << " " << left_height / 2.0 << " 0 0 0 0" << std::endl;
-      camera_params_file << "2 4 " << right_a11 << " " << right_a22 << " " << right_width / 2.0 << " " << right_height / 2.0 << " 0 0 0 0"
+      camera_params_file << "1 4 " << left_a11 << " " << left_a22 << " " << left_width / 2 << " " << left_height / 2 << " 0 0 0 0" << std::endl;
+      camera_params_file << "2 4 " << right_a11 << " " << right_a22 << " " << right_width / 2 << " " << right_height / 2 << " 0 0 0 0"
                          << std::endl;
       camera_params_file.close();
 

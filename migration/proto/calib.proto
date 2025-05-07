@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package proto;
+
+message Rigid3d {
+  double tx = 2;
+  double ty = 3;
+  double tz = 4;
+  double rx = 5;
+  double ry = 6;
+  double rz = 7;
+  double rw = 8;
+}
+
+message Matrix3 {
+  repeated double data = 1; // 存储3x3矩阵的9个元素
+}
+
+message Vector3 {
+  repeated double data = 1; // 存储3个元素的向量
+}
+
+message ImuInstrinsicTpmIcra2014 {
+  Matrix3 Ta = 1;
+  Matrix3 Ka = 2;
+  Vector3 Ba = 3;
+
+  Matrix3 Tg = 4;
+  Matrix3 Kg = 5;
+  Vector3 Bg = 6;
+}
+
+message ImuInstrinsic {
+  oneof imu_model { ImuInstrinsicTpmIcra2014 tpm = 1; }
+}
+
+message LidarInstrinsicSimple {
+  double e = 1;
+  repeated double s = 2;
+}
+
+message LidarInstrinsic {
+  oneof lidar_model { LidarInstrinsicSimple simple = 1; }
+}
+
+message SensorCalib {
+  bool has_encoder = 1;
+  Rigid3d lidar_to_encoder = 2;
+  Rigid3d encoder_to_imu = 3;
+  LidarInstrinsic lidar_instrinsic = 4;
+  ImuInstrinsic imu_instrinsic = 5;
+}
