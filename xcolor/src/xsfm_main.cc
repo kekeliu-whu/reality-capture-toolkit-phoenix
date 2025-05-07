@@ -25,13 +25,14 @@
 #include "migration/sensor_io.h"
 #include "migration/utils.h"
 
-DEFINE_string(point_cloud_filename, "D:/project_3d/data/sfm-share/output_dir/colorized.las_normals.pcd", "Point cloud filename");
-DEFINE_string(output_path, "D:/project_3d/data/sfm-share/output_dir", "Output path");
-DEFINE_string(database_filename, "D:/project_3d/data/sfm-share/output_dir/xsfm.db", "Database filename");
-DEFINE_string(initial_pose_dirname, "D:/project_3d/data/sfm-share/output_dir/", "Initial pose filename");
-DEFINE_int32(pose_type, 2, "Pose type, =0 for s10, =1 for s20, =2 for export s20 poses");
-DEFINE_string(calibration_filename, "D:/project_3d/data/sfm-share/output_dir/calibration.yaml", "");
-DEFINE_string(images_path, "D:/project_3d/data/sfm-share/output_dir/undistort", "");
+DEFINE_string(point_cloud_filename, "D:/project_3d/data/sfm-share/output_dir_s20_first-oldest-outdoor-shareuav1f/colorized.las_normals.pcd",
+              "Point cloud filename");
+DEFINE_string(output_path, "D:/project_3d/data/sfm-share/output_dir_s20_first-oldest-outdoor-shareuav1f", "Output path");
+DEFINE_string(database_filename, "D:/project_3d/data/sfm-share/output_dir_s20_first-oldest-outdoor-shareuav1f/xsfm.db", "Database filename");
+DEFINE_string(initial_pose_dirname, "D:/project_3d/data/sfm-share/output_dir_s20_first-oldest-outdoor-shareuav1f/", "Initial pose filename");
+DEFINE_int32(pose_type, 1, "Pose type, =0 for s10, =1 for s20, =2 for export s20 poses");
+DEFINE_string(calibration_filename, "D:/project_3d/data/sfm-share/output_dir_s20_first-oldest-outdoor-shareuav1f/calibration.yaml", "");
+DEFINE_string(images_path, "D:/project_3d/data/sfm-share/output_dir_s20_first-oldest-outdoor-shareuav1f/undistort", "");
 
 void SaveTriangulatedPoints(const std::vector<MatchTrack> &match_tracks, const std::string &filename) {
   pcl::PointCloud<pcl::PointXYZINormal> point_cloud_out;
@@ -51,12 +52,20 @@ void SaveTriangulatedPoints(const std::vector<MatchTrack> &match_tracks, const s
 void SaveImagePoses(const std::string &filename, const std::unordered_set<colmap::image_t> &optimized_image_ids,
                     const std::unordered_map<colmap::image_t, colmap::Image> &images,
                     const std::unordered_map<colmap::camera_t, colmap::Rigid3d> &pose_priors) {
-  //DLOG(INFO) << "Saving image information into " << FLAGS_output_path + "/images.bin";
-  //std::vector<colmap::Image> images_out;
-  //for (auto &image_id : optimized_image_ids) {
-  //  images_out.push_back(images.at(image_id));
-  //}
-  //WriteImagesBinary(FLAGS_output_path + "/images.bin", images_out);
+  DLOG(INFO) << "Saving image poses into " << FLAGS_output_path + "/images.bin";
+  std::vector<colmap::Image> images_out;
+  for (auto &image_id : optimized_image_ids) {
+    auto &image          = images.at(image_id);
+    auto &pose_prior_w2c = pose_priors.at(image.ImageId());
+    auto pose_c2w        = colmap::Inverse(image.CamFromWorld());
+    double distance      = (pose_prior_w2c * pose_c2w).translation.norm();
+    if (distance > 0.35) {
+      continue;
+    }
+    images_out.push_back(images.at(image_id));
+  }
+  LOG_IF(WARNING, optimized_image_ids.size() != images_out.size()) << images_out.size() << " / " << optimized_image_ids.size() << " poses is valid";
+  WriteImagesBinary(FLAGS_output_path + "/images.bin", images_out);
 
   DLOG(INFO) << "Saving image poses into " << filename;
   std::ofstream infile(filename);
@@ -76,12 +85,14 @@ void SaveImagePoses(const std::string &filename, const std::unordered_set<colmap
 }
 
 void SaveCameraParams(const std::string &filename, const std::unordered_map<colmap::camera_t, colmap::Camera> &cameras) {
-  //std::vector<colmap::Camera> cameras_out;
-  //for (auto &[image_id, _] : cameras) {
-  //  cameras_out.push_back(cameras.at(image_id));
-  //}
-  //WriteCamerasBinary(FLAGS_output_path + "/cameras.bin", cameras_out);
+  DLOG(INFO) << "Saving camera params into " << FLAGS_output_path + "/images.bin";
+  std::vector<colmap::Camera> cameras_out;
+  for (auto &[image_id, _] : cameras) {
+    cameras_out.push_back(cameras.at(image_id));
+  }
+  WriteCamerasBinary(FLAGS_output_path + "/cameras.bin", cameras_out);
 
+  DLOG(INFO) << "Saving camera params into " << filename;
   std::ofstream infile(filename);
   infile << "camera_id model_id fx fy cx cy params..." << std::endl;
   for (auto &e : cameras) {
@@ -327,6 +338,19 @@ void RunSFM(const SfmConfig &config, std::vector<MatchTrack> &match_tracks, cons
   MergeTrack(match_tracks, match_tracks_merged);
 
   RunMultipleViewBA(config, kdtree, point_cloud, pose_priors, images, cameras, match_tracks_merged);
+
+  {
+    std::vector<colmap::Point3D> points3D;
+    points3D.reserve(point_cloud.size());
+    for (auto &p : point_cloud) {
+      colmap::Point3D np;
+      np.xyz = p.getVector3fMap().cast<double>();
+      np.color.setConstant(255);
+      np.error = 0;
+      points3D.push_back(np);
+    }
+    WritePoints3DBinary(FLAGS_output_path + "/points3D.bin", points3D);
+  }
 }
 
 std::unordered_map<std::string, colmap::Rigid3d> ReadImagePosesType0(const std::string &filename) {
@@ -470,7 +494,7 @@ int main(int argc, char **argv) {
 
       CHECK(boost::filesystem::is_regular_file(FLAGS_calibration_filename));
 
-      YAML::Node config = YAML::LoadFile(FLAGS_calibration_filename); 
+      YAML::Node config = YAML::LoadFile(FLAGS_calibration_filename);
 
       YAML::Node left_cam = config["intrinsic"]["fisheye_left"];
       double left_a11     = left_cam["projection_parameters"]["A11"].as<double>();
@@ -501,7 +525,7 @@ int main(int argc, char **argv) {
           if (img.empty()) {
             DLOG(INFO) << "Read width & height from " + FLAGS_images_path + "/" + image_name << " failed.";
           } else {
-            right_width = img.cols;
+            right_width  = img.cols;
             right_height = img.rows;
             break;
           }
@@ -529,15 +553,14 @@ int main(int argc, char **argv) {
 
       std::ofstream camera_params_file(FLAGS_output_path + "/camera-params.txt");
       camera_params_file << "camera_id model_id fx fy cx cy params..." << std::endl;
-      camera_params_file << "1 4 " << left_a11 << " " << left_a22 << " " << left_width / 2.0 << " " << left_height / 2.0 << " 0 0 0 0"
-                         << std::endl;
+      camera_params_file << "1 4 " << left_a11 << " " << left_a22 << " " << left_width / 2.0 << " " << left_height / 2.0 << " 0 0 0 0" << std::endl;
       camera_params_file << "2 4 " << right_a11 << " " << right_a22 << " " << right_width / 2.0 << " " << right_height / 2.0 << " 0 0 0 0"
                          << std::endl;
       camera_params_file.close();
 
       DLOG(INFO) << "done.";
       std::cout << "done." << std::endl;
-
+      return 0;
     } catch (const YAML::Exception &e) {
       DLOG(ERROR) << "YAML error: " << e.what();
       return 1;
@@ -545,8 +568,6 @@ int main(int argc, char **argv) {
       DLOG(ERROR) << "Error: " << e.what();
       return 1;
     }
-
-    return 0;
   }
 
   // reload images
