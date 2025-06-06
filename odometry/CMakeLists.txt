@@ -35,6 +35,7 @@ find_package(Glog REQUIRED)
 find_package(GTest CONFIG REQUIRED)
 find_package(mimalloc CONFIG REQUIRED)
 find_package(crashpad CONFIG REQUIRED)
+find_package(PDAL CONFIG REQUIRED)
 
 include_directories(
   src
@@ -48,7 +49,6 @@ add_subdirectory(../migration migration_build)
 
 set(
   PGO_PRIVATE_SRCS
-  src/slam_core_main.cc
   src/core/slam_core_lib.cc
   src/core/preprocess.cc
   src/io/msg_pack_synchronizer.cc
@@ -66,6 +66,7 @@ set(PGO_PRIVATE_LIBS
   absl::flat_hash_set
   rapidjson
   crashpad::crashpad
+  $<TARGET_NAME:pdalcpp>
 )
 
 function(add_private_tool name)
@@ -74,3 +75,4 @@ function(add_private_tool name)
 endfunction()
 
 add_private_tool(slam_core_main src/slam_core_main.cc)
+add_private_tool(accuracy_evaluation src/tools/accuracy_evaluation.cc)
