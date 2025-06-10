@@ -164,7 +164,7 @@ int main(int argc, char **argv) {
   pcl::PointCloud<pcl::PointXYZI>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZI>);
   std::vector<Eigen::Vector3f> normals;
 
-  CHECK(boost::filesystem::is_regular_file(FLAGS_las_filename));
+  DCHECK(boost::filesystem::is_regular_file(FLAGS_las_filename));
 
   DLOG(INFO) << "Loading LAS file...";
   LoadLAS(FLAGS_las_filename, cloud);

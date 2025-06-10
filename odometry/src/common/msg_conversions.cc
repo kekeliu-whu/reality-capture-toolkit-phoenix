@@ -35,7 +35,7 @@ std::shared_ptr<ImuInstrinsic> FromProto(const proto::ImuInstrinsic& proto) {
   if (proto.has_tpm()) {
     return FromProto(proto.tpm());
   } else {
-    LOG(FATAL);
+    DLOG(FATAL);
   }
 }
 
@@ -52,7 +52,7 @@ std::shared_ptr<LidarInstrinsic> FromProto(const proto::LidarInstrinsic& proto) 
   if (proto.has_simple()) {
     return FromProto(proto.simple());
   } else {
-    LOG(FATAL);
+    DLOG(FATAL);
   }
 }
 

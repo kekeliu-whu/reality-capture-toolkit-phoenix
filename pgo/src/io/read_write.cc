@@ -31,13 +31,13 @@ void LoadRawScans(
       lidar_filename, [&raw_scans](const ConstPtr<proto::UndistoredLidarMsg> &msg) {
         raw_scans.push_back(FromProto(*msg));
       });
-  CHECK(ok) << "Failed to load undistorted lidar scans from " << lidar_filename;
+  DCHECK(ok) << "Failed to load undistorted lidar scans from " << lidar_filename;
   DLOG(INFO) << "scans number loaded: " << raw_scans.size();
 
   proto::PoseMsgList pose_msg_list;
   DLOG(INFO) << "Loading poses from " << poses_filename;
   ok = ReadPoseFile(project_path + "/poses.dat", pose_msg_list);
-  CHECK(ok) << "Failed to load poses from " << poses_filename;
+  DCHECK(ok) << "Failed to load poses from " << poses_filename;
   DLOG(INFO) << "poses number loaded: " << pose_msg_list.pose_msgs_size();
 
   CHECK_EQ(pose_msg_list.pose_msgs_size(), raw_scans.size());
@@ -91,12 +91,9 @@ void BuildSubMapFromRawScans(const std::vector<TimestampedPointCloud> &scans,
 void LoadSubmapList(const std::string &project_path,
                     std::vector<TimestampedPointCloud> &submaps,
                     double submap_duration_secs) {
+  CHECK_GT(submap_duration_secs, 0);
   std::vector<TimestampedPointCloud> scans;
   LoadRawScans(project_path, scans);
-  if (submap_duration_secs <= 0) {
-    submaps = std::move(scans);
-    return;
-  }
   BuildSubMapFromRawScans(scans, submap_duration_secs, submaps);
 }
 

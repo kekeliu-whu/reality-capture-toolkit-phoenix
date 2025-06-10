@@ -36,11 +36,11 @@ void CollectImuOrEncoderData(std::vector<T>& out_msgs, std::deque<T>& buffer, do
 void MsgPackSynchronizer::AddLidarData(const LidarMsg::ConstPtr& lidar_msg) {
   for (const auto& lidar_point : *lidar_msg->lidar_points) {
     if (!lidar_data_queue_.empty() && lidar_point.timestamp <= lidar_data_queue_.back().timestamp) {
-      LOG(WARNING) << "sensor timestamp is not increasing";
+      DLOG(WARNING) << "sensor timestamp is not increasing";
       return;
     }
     if (!lidar_data_queue_.empty() && lidar_point.timestamp - lidar_data_queue_.back().timestamp > kMaxSensorTimestampGap) {
-      LOG(FATAL) << "Lidar timestamp gap is too large: " << lidar_point.timestamp - lidar_data_queue_.back().timestamp;
+      DLOG(FATAL) << "Lidar timestamp gap is too large: " << lidar_point.timestamp - lidar_data_queue_.back().timestamp;
     }
     lidar_data_queue_.push_back(lidar_point);
   }
@@ -48,23 +48,23 @@ void MsgPackSynchronizer::AddLidarData(const LidarMsg::ConstPtr& lidar_msg) {
 
 void MsgPackSynchronizer::AddImuData(const ImuMsg& imu_msg) {
   if (!imu_data_queue_.empty() && imu_msg.timestamp <= imu_data_queue_.back().timestamp) {
-    LOG(WARNING) << "sensor timestamp is not increasing";
+    DLOG(WARNING) << "sensor timestamp is not increasing";
     return;
   }
   if (!imu_data_queue_.empty() && imu_msg.timestamp - imu_data_queue_.back().timestamp > kMaxSensorTimestampGap) {
-    LOG(FATAL) << "IMU timestamp gap is too large: " << imu_msg.timestamp - imu_data_queue_.back().timestamp;
+    DLOG(FATAL) << "IMU timestamp gap is too large: " << imu_msg.timestamp - imu_data_queue_.back().timestamp;
   }
   imu_data_queue_.push_back(imu_msg);
 }
 
 void MsgPackSynchronizer::AddEncoderData(const EncoderMsg& encoder_msg) {
-  CHECK(has_encoder_);
+  DCHECK(has_encoder_);
   if (!encoder_data_queue_.empty() && encoder_msg.timestamp <= encoder_data_queue_.back().timestamp) {
-    LOG(WARNING) << "sensor timestamp is not increasing";
+    DLOG(WARNING) << "sensor timestamp is not increasing";
     return;
   }
   if (!encoder_data_queue_.empty() && encoder_msg.timestamp - encoder_data_queue_.back().timestamp > kMaxSensorTimestampGap) {
-    LOG(FATAL) << "Encoder timestamp gap is too large: " << encoder_msg.timestamp - encoder_data_queue_.back().timestamp;
+    DLOG(FATAL) << "Encoder timestamp gap is too large: " << encoder_msg.timestamp - encoder_data_queue_.back().timestamp;
   }
   encoder_data_queue_.push_back(encoder_msg);
 }
@@ -151,14 +151,14 @@ void MsgPackSynchronizer::ValidateMsgPack(const MsgPack& msg_pack) const {
 
 void MsgPackSynchronizer::PrintMsgPack(const MsgPack& msg_pack) const {
   if (has_encoder_) {
-    LOG(INFO) << std::fixed << std::setprecision(6) << "msg_pack(" << msg_pack.id << ")[" << msg_pack.group_start_time << ","
+    DLOG(INFO) << std::fixed << std::setprecision(6) << "msg_pack(" << msg_pack.id << ")[" << msg_pack.group_start_time << ","
               << msg_pack.group_end_time << "] lidar_" << msg_pack.lidar_points->points.size() << "["
               << msg_pack.lidar_points->points.front().timestamp << "," << msg_pack.lidar_points->points.back().timestamp << "] imu_"
               << msg_pack.imu_msgs.size() << "[" << msg_pack.imu_msgs.front().timestamp << "," << msg_pack.imu_msgs.back().timestamp << "] encoder_"
               << msg_pack.encoder_msgs.size() << "[" << msg_pack.encoder_msgs.front().timestamp << "," << msg_pack.encoder_msgs.back().timestamp
               << "]";
   } else {
-    LOG(INFO) << std::fixed << std::setprecision(6) << "msg_pack(" << msg_pack.id << ")[" << msg_pack.group_start_time << ","
+    DLOG(INFO) << std::fixed << std::setprecision(6) << "msg_pack(" << msg_pack.id << ")[" << msg_pack.group_start_time << ","
               << msg_pack.group_end_time << "] lidar_" << msg_pack.lidar_points->points.size() << "["
               << msg_pack.lidar_points->points.front().timestamp << "," << msg_pack.lidar_points->points.back().timestamp << "] imu_"
               << msg_pack.imu_msgs.size() << "[" << msg_pack.imu_msgs.front().timestamp << "," << msg_pack.imu_msgs.back().timestamp << "]";

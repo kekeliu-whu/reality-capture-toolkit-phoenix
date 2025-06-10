@@ -48,7 +48,7 @@ void PointCloudCallback(const sensor_msgs::PointCloud2ConstPtr& msg, std::shared
   int timestamp_offset = GetFieldOffset(msg, "timestamp");
 
   if (x_offset < 0 || y_offset < 0 || z_offset < 0 || intensity_offset < 0 || timestamp_offset < 0) {
-    LOG(INFO) << "Missing one or more fields: x/y/z/intensity/timestamp";
+    DLOG(INFO) << "Missing one or more fields: x/y/z/intensity/timestamp";
     return;
   }
 
@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
   for (const auto& m : rosbag::View(bag)) {
     if (m.getTopic().find("_yaml") != std::string::npos) {
       auto msg = m.instantiate<custom_msg_pkg::LixelAnyData>();
-      CHECK(msg);
+      DCHECK(msg);
 
       if (m.getTopic() == "/config/extrinsic_imu_motor_yaml") {
         YAML::Node config = YAML::Load(msg->data);
@@ -137,8 +137,8 @@ int main(int argc, char** argv) {
         ReadMatrixToProto<2, 1>(config["s"], sc.mutable_lidar_instrinsic()->mutable_simple()->mutable_s());
       }
 
-      // LOG(INFO) << m.getTopic();
-      // LOG(INFO) << msg->data;
+      // DLOG(INFO) << m.getTopic();
+      // DLOG(INFO) << msg->data;
     } else if (m.getTopic() == "/imu") {
       auto msg = m.instantiate<sensor_msgs::Imu>();
 
@@ -171,5 +171,5 @@ int main(int argc, char** argv) {
   WriteImuFile(FLAGS_output_dir + "/imu.dat", imu_msg_list);
   WriteEncoderFile(FLAGS_output_dir + "/encoder.dat", encoder_msg_list);
 
-  LOG(INFO) << "done.";
+  DLOG(INFO) << "done.";
 }

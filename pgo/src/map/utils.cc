@@ -159,7 +159,9 @@ void LoadFullPointCloud(const std::string &project_input_path,
 
 void DownsampleSubmaps(std::vector<TimestampedPointCloud> &submaps,
                        double voxel_size) {
-  for (auto &submap : submaps) {
+#pragma omp parallel for
+  for (int i = 0; i < submaps.size(); ++i) {
+    auto &submap = submaps[i];
     pcl::VoxelGrid<pcl::PointXYZI> voxel_grid;
     voxel_grid.setInputCloud(submap.cloud);
     voxel_grid.setLeafSize(voxel_size, voxel_size, voxel_size);

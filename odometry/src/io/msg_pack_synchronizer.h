@@ -19,20 +19,20 @@ class MsgPackSynchronizer {
  private:
   double GetCommonBeginTime() const {
     if (has_encoder_) {
-      CHECK(!lidar_data_queue_.empty() && !imu_data_queue_.empty() && !encoder_data_queue_.empty());
+      DCHECK(!lidar_data_queue_.empty() && !imu_data_queue_.empty() && !encoder_data_queue_.empty());
       return std::max({lidar_data_queue_.front().timestamp, imu_data_queue_.front().timestamp, encoder_data_queue_.front().timestamp});
     } else {
-      CHECK(!lidar_data_queue_.empty() && !imu_data_queue_.empty());
+      DCHECK(!lidar_data_queue_.empty() && !imu_data_queue_.empty());
       return std::max(lidar_data_queue_.front().timestamp, imu_data_queue_.front().timestamp);
     }
   }
 
   double GetCommonEndTime() const {
     if (has_encoder_) {
-      CHECK(!lidar_data_queue_.empty() && !imu_data_queue_.empty() && !encoder_data_queue_.empty());
+      DCHECK(!lidar_data_queue_.empty() && !imu_data_queue_.empty() && !encoder_data_queue_.empty());
       return std::min({lidar_data_queue_.back().timestamp, imu_data_queue_.back().timestamp, encoder_data_queue_.back().timestamp});
     } else {
-      CHECK(!lidar_data_queue_.empty() && !imu_data_queue_.empty());
+      DCHECK(!lidar_data_queue_.empty() && !imu_data_queue_.empty());
       return std::min(lidar_data_queue_.back().timestamp, imu_data_queue_.back().timestamp);
     }
   }

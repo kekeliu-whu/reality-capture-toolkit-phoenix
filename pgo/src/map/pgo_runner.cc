@@ -15,7 +15,7 @@ void PgoRunner::Run(const std::string &input_path,
   MallocTrim();
   PrintMemoryUsage();
 
-  DownsampleSubmaps(submaps, 0.15);
+  DownsampleSubmaps(submaps, config_.submap_downsample_resolution());
   MallocTrim();
   PrintMemoryUsage();
 

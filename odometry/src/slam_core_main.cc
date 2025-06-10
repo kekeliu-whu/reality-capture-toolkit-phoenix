@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
   ReadImuFile(FLAGS_project_dir + "/imu.dat", imu_msg_list);
   ReadEncoderFile(FLAGS_project_dir + "/encoder.dat", encoder_msg_list);
 
-  LOG(INFO) << "Calibration: " << calib.DebugString();
+  DLOG(INFO) << "Calibration: " << calib.DebugString();
   SlamCore core(FromProto(calib));
   for (auto& msg : imu_msg_list.imu_msgs()) {
     core.AddSensorData(FromProto(msg));

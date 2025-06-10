@@ -57,8 +57,8 @@ bool MatchGICP(pcl::PointCloud<pcl::PointXYZI>::Ptr &target,
                int gicp_max_iterations,
                double gicp_transform_epsilon) {
   pcl::GeneralizedIterativeClosestPoint<pcl::PointXYZI, pcl::PointXYZI> gicp;
-  CHECK(source.get());
-  CHECK(target.get());
+  DCHECK(source.get());
+  DCHECK(target.get());
   gicp.setInputSource(source);
   gicp.setInputTarget(target);
 
@@ -141,7 +141,7 @@ void AddLoopClosureConstraints(ceres::Problem &problem,
       1 / (config.loop_edge_rotation_error() / 180.0 * M_PI);
 
   std::set<std::pair<int, int>> edges_used;
-  int loop_edge_num = 30;  // todo
+  int loop_edge_num = 40;  // todo
   do {
     int target_id = rand() % submaps.size();
 
@@ -155,6 +155,11 @@ void AddLoopClosureConstraints(ceres::Problem &problem,
           candidate_scan_ids.push_back(i);
         }
       }
+    }
+
+    if (candidate_scan_ids.empty()) {
+      DLOG(WARNING) << "candidate scan ids empty";
+      continue;
     }
 
     CHECK_GT(candidate_scan_ids.size(), 0);
@@ -219,6 +224,7 @@ void Optimize(std::vector<TimestampedPointCloud> &submaps,
 
     ceres::Solver::Options options;
     options.minimizer_progress_to_stdout = true;
+    options.max_num_iterations           = config.inner_iteration_num();
     ceres::Solver::Summary summary;
     ceres::Solve(options, &problem, &summary);
     DLOG(INFO) << summary.FullReport();

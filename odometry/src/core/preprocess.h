@@ -22,7 +22,7 @@ class ImuPreprocess {
     if (imu_msgs.back().timestamp - *first_timestamp_ < kInitDuration) {
       IMU_init(imu_msgs, stat, init_iter_num);
 
-      LOG(INFO) << "IMU Initials: Gravity: " << stat.gravity.transpose() << "; Bias_g: " << stat.bias_g.transpose()
+      DLOG(INFO) << "IMU Initials: Gravity: " << stat.gravity.transpose() << "; Bias_g: " << stat.bias_g.transpose()
                 << "; acc covarience: " << cov_acc.transpose() << "; gyr covarience: " << cov_gyr.transpose();
 
       return false;
