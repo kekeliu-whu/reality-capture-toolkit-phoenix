@@ -78,4 +78,12 @@ endfunction()
 
 add_private_tool(xcolor_main src/xcolor_main.cc)
 add_private_tool(xsfm src/xsfm_main.cc)
-add_private_tool(xsfm_reset_s20_cameras src/xsfm_reset_s20_cameras.cc)
+add_private_tool(xsfm_reset_s20_cameras src/tools/xsfm_reset_s20_cameras.cc)
+add_private_tool(xsfm_undistort_s20_images
+  src/tools/xsfm_undistort_s20_images.cc
+  src/tools/internal/poly_fisheye_camera.cc
+  src/tools/internal/camera.cc
+  src/tools/internal/utils/cv_utils.cc
+  src/tools/internal/utils/polynomial.cc
+  src/tools/internal/utils/gpl.cc
+)
