@@ -18,10 +18,8 @@
 
 #include "common/histogram.h"
 #include "io/read_write.h"
-#include "migration/proto_io.h"
-#include "migration/utils.h"
 
-namespace {
+namespace xcolor {
 
 std::vector<std::vector<int>> ClusterByBFS(const std::vector<MatchTrack> &match_tracks) {
   int N = int(match_tracks.size());
@@ -67,8 +65,6 @@ std::vector<std::vector<int>> ClusterByBFS(const std::vector<MatchTrack> &match_
 
   return clusters;
 }
-
-}  // namespace
 
 std::vector<MatchTrack> GenerateMatchPairs(const colmap::CorrespondenceGraph &corr_graph,
                                            const std::unordered_map<colmap::image_t, colmap::Image> &images, const SfmConfig &config) {
@@ -231,12 +227,6 @@ void PrintResidualHistogram(double threshold, ceres::Problem &problem, const std
     hist.Add(residual);
   }
   DLOG(INFO) << name << ": " << hist.ToString(10);
-}
-
-colmap::Rigid3d FromProto(const proto::PoseMsg &pose_msg) {
-  Eigen::Quaterniond rot(pose_msg.rw(), pose_msg.rx(), pose_msg.ry(), pose_msg.rz());
-  Eigen::Vector3d pos(pose_msg.tx(), pose_msg.ty(), pose_msg.tz());
-  return colmap::Rigid3d(rot, pos);
 }
 
 std::vector<double> ComputeRMSEByClusterCentroid(const std::vector<std::vector<int>> &clusters, const std::vector<MatchTrack> &match_tracks) {
@@ -404,3 +394,5 @@ bool MergeTrack(const std::vector<MatchTrack> &match_tracks, std::vector<MatchTr
 
   return true;
 }
+
+}  // namespace xcolor

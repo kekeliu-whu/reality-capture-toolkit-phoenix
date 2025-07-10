@@ -7,6 +7,8 @@
 
 #include "read_write.h"
 
+namespace xcolor {
+
 template <typename T>
 T NativeToLittleEndian(const T x) {
   return x;
@@ -231,3 +233,5 @@ void WritePoints3DBinary(const std::string& filename, const std::vector<colmap::
     }
   }
 }
+
+}  // namespace xcolor

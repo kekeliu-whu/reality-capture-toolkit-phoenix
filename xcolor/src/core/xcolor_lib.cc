@@ -11,7 +11,7 @@
 
 #include "common/types.h"
 #include "core/xcolor_lib.h"
-#include "migration/utils.h"
+#include "utils.h"
 
 typedef CGAL::Simple_cartesian<double> K;
 typedef K::Point_3 Point;
@@ -37,6 +37,8 @@ struct hash<Eigen::Vector3i> {
 };
 
 }  // namespace std
+
+namespace xcolor {
 
 struct VoxelVisibleInfo {
   std::shared_ptr<std::vector<int>> point_indices;
@@ -278,3 +280,5 @@ void PerformXColor(const pcl::PointCloud<pcl::PointXYZRGB> &cloud, const std::ve
 
   DLOG(INFO) << "Finish xcolor.";
 }
+
+}  // namespace xcolor

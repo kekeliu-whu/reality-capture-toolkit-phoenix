@@ -15,7 +15,7 @@
 #include <pcl/point_types.h>
 #include <boost/filesystem.hpp>
 
-#include "proto/sensors.pb.h"
+namespace xcolor {
 
 // todo kk read from config file
 struct SfmConfig {
@@ -54,7 +54,7 @@ struct Point2DInfo {
 struct Point3DInfo {
   typedef std::shared_ptr<Point3DInfo> Ptr;
 
-  bool valid = false; // =false means this point3D is not used in the optimization
+  bool valid = false;  // =false means this point3D is not used in the optimization
   Eigen::Vector3d point3D;
   ceres::ResidualBlockId residual_block_id       = nullptr;
   ceres::ResidualBlockId lidar_residual_block_id = nullptr;
@@ -120,10 +120,8 @@ class PosePriorCostFunction {
   Eigen::Matrix<double, 6, 6> sqrt_information_;
 };
 
-colmap::Rigid3d FromProto(const proto::PoseMsg &pose_msg);
-
 std::vector<MatchTrack> GenerateMatchPairs(const colmap::CorrespondenceGraph &corr_graph,
-                                          const std::unordered_map<colmap::image_t, colmap::Image> &images, const SfmConfig &config);
+                                           const std::unordered_map<colmap::image_t, colmap::Image> &images, const SfmConfig &config);
 
 void ParameterizeCameras(const SfmConfig &config, ceres::Problem &problem, std::unordered_map<colmap::camera_t, colmap::Camera> &cameras);
 
@@ -147,3 +145,4 @@ void PrintResidualHistogram(double threshold, ceres::Problem &problem, const std
 
 bool MergeTrack(const std::vector<MatchTrack> &match_tracks, std::vector<MatchTrack> &match_tracks_merged);
 
+}  // namespace xcolor

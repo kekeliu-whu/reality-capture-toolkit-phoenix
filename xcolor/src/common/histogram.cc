@@ -24,6 +24,8 @@
 #include "absl/strings/str_format.h"
 #include "glog/logging.h"
 
+namespace xcolor {
+
 void Histogram::Add(double value) { values_.push_back(value); }
 
 std::string Histogram::ToString(const int buckets) const {
@@ -77,3 +79,5 @@ std::string Histogram::ToString(const int buckets) const {
   }
   return result;
 }
+
+}  // namespace xcolor

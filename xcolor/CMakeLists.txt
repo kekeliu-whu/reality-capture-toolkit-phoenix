@@ -44,21 +44,18 @@ include_directories(
   ${PCL_INCLUDE_DIRS}
 )
 
-add_subdirectory(../migration migration_build)
-
-
 set(
   PGO_PRIVATE_SRCS
   src/core/xcolor_lib.cc
   src/io/read_write.cc
   src/core/xsfm_lib.cc
+  src/core/utils.cc
   src/common/histogram.cc
   src/io/read_write.cc
 )
 
 set(PGO_PRIVATE_LIBS
   mimalloc
-  migration_core
   ${GFLAGS_LIBRARIES}
   ${PCL_LIBRARIES}
   ${CERES_LIBRARIES}

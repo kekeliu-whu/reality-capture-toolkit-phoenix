@@ -2,6 +2,8 @@
 
 #include "common/types.h"
 
+namespace xcolor {
+
 void ReadCamerasBinary(const std::string& filename, std::vector<colmap::Camera>& cameras);
 
 // msvc seems to have an internal bug in ifstream::read
@@ -33,3 +35,5 @@ void WriteCamerasBinary(const std::string& filename, const std::vector<colmap::C
 void WriteImagesBinary(const std::string& filename, const std::vector<colmap::Image>& images);
 
 void WritePoints3DBinary(const std::string& filename, const std::vector<colmap::Point3D>& points3D);
+
+}  // namespace xcolor

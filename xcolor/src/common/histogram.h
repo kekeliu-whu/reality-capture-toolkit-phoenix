@@ -14,19 +14,20 @@
  * limitations under the License.
  */
 
-#ifndef CARTOGRAPHER_COMMON_HISTOGRAM_H_
-#define CARTOGRAPHER_COMMON_HISTOGRAM_H_
+#pragma once
 
 #include <string>
 #include <vector>
 
+namespace xcolor {
+
 class Histogram {
  public:
-  void        Add(double value);
+  void Add(double value);
   std::string ToString(int buckets) const;
 
  private:
   std::vector<double> values_;
 };
 
-#endif  // CARTOGRAPHER_COMMON_HISTOGRAM_H_
+}  // namespace xcolor
