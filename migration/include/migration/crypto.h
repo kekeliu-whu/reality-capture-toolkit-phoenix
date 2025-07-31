@@ -1,6 +1,6 @@
 #pragma once
 
-#include <google/logging.h>
+#include <glog/logging.h>
 
 class EncryptedLogSink : public google::LogSink {
  public:

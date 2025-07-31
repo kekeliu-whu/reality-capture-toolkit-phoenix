@@ -5,7 +5,6 @@
 #include <openssl/buffer.h>
 
 #include <string>
-#include <vector>
 #include <iostream>
 
 #include "migration/crypto.h"

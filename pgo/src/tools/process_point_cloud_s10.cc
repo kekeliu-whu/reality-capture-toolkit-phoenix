@@ -1,4 +1,3 @@
-
 #include <glog/logging.h>
 #include <omp.h>
 #include <pcl/filters/bilateral.h>
@@ -20,7 +19,7 @@
 
 #include "map/utils.h"
 
-DEFINE_string(las_filename, "D:/project_3d/reality-capture-toolkit/output_dir/colorized.las", "Input project path");
+DEFINE_string(las_filename, "D:/Users/rick/Documents/reality-capture/20240913144522483000ca5a095ebd514539856a5263fe63052a/projects/cf33afb0-37fb-4aec-8660-d3aae66ef68c/2fcc3bac-1ff6-40f2-8f07-e5e2c517882b/result/3D/point-las/MipModel.las", "Input project path");
 DEFINE_bool(output_full, true, "Output full point cloud");
 
 static constexpr double kDownsampleVoxelSize    = 0.05;
@@ -35,7 +34,17 @@ static constexpr double kSmoothSigmaN           = 0.05;
 #include <pdal/StageFactory.hpp>
 #include <pdal/io/LasReader.hpp>
 
-void LoadLAS(const std::string &filename, pcl::PointCloud<pcl::PointXYZI>::Ptr &cloud) {
+void SaveLasOffset(const std::string &filename, double offset_x, double offset_y, double offset_z) {
+  std::ofstream ofs(filename);
+  if (!ofs.is_open()) {
+    LOG(ERROR) << "Failed to open file: " << filename;
+    return;
+  }
+  ofs << "offset_x,offset_y,offset_z" << std::endl;
+  ofs << std::fixed << std::setprecision(9) << offset_x << "," << offset_y << "," << offset_z << std::endl;
+}
+
+void LoadLAS(const std::string &filename, pcl::PointCloud<pcl::PointXYZI>::Ptr &cloud, double &offset_x, double &offset_y, double &offset_z) {
   cloud.reset(new pcl::PointCloud<pcl::PointXYZI>);
 
   pdal::StageFactory factory;
@@ -49,6 +58,12 @@ void LoadLAS(const std::string &filename, pcl::PointCloud<pcl::PointXYZI>::Ptr &
   pdal::PointViewSet viewSet = reader->execute(table);
   pdal::PointViewPtr view    = *viewSet.begin();
 
+  pdal::MetadataNode metadata = reader->getMetadata();
+  offset_x             = metadata.findChild("offset_x").value<double>();
+  offset_y             = metadata.findChild("offset_y").value<double>();
+  offset_z             = metadata.findChild("offset_z").value<double>();
+  DLOG(INFO) << "LAS offset: X=" << offset_x << ", Y=" << offset_y << ", Z=" << offset_z;
+
   cloud->width    = view->size();
   cloud->height   = 1;
   cloud->is_dense = false;
@@ -56,9 +71,9 @@ void LoadLAS(const std::string &filename, pcl::PointCloud<pcl::PointXYZI>::Ptr &
 
   for (size_t i = 0; i < view->size(); ++i) {
     pcl::PointXYZI p;
-    p.x              = view->getFieldAs<double>(pdal::Dimension::Id::X, i);
-    p.y              = view->getFieldAs<double>(pdal::Dimension::Id::Y, i);
-    p.z              = view->getFieldAs<double>(pdal::Dimension::Id::Z, i);
+    p.x              = view->getFieldAs<double>(pdal::Dimension::Id::X, i) - offset_x;
+    p.y              = view->getFieldAs<double>(pdal::Dimension::Id::Y, i) - offset_y;
+    p.z              = view->getFieldAs<double>(pdal::Dimension::Id::Z, i) - offset_z;
     p.intensity      = view->getFieldAs<float>(pdal::Dimension::Id::Intensity, i);
     cloud->points[i] = p;
   }
@@ -167,7 +182,8 @@ int main(int argc, char **argv) {
   DCHECK(boost::filesystem::is_regular_file(FLAGS_las_filename));
 
   DLOG(INFO) << "Loading LAS file...";
-  LoadLAS(FLAGS_las_filename, cloud);
+  double offset_x, offset_y, offset_z;
+  LoadLAS(FLAGS_las_filename, cloud, offset_x, offset_y, offset_z);
   DLOG(INFO) << "Loaded " << cloud->size() << " points.";
 
   if (!FLAGS_output_full) {
@@ -177,7 +193,7 @@ int main(int argc, char **argv) {
     DLOG(INFO) << "Downsampled to " << cloud->size() << " points.";
   }
 
-  DLOG(INFO) << "Saving original cloud...";
+  DLOG(INFO) << "Computing normals...";
   PcaEstimateNormalNoDirect(cloud, kNearestNeighbors, kDownsampleVoxelSize, normals);
 
   DLOG(INFO) << "Smoothing...";
@@ -196,6 +212,9 @@ int main(int argc, char **argv) {
   DLOG(INFO) << "Saving cloud with normals...";
   pcl::io::savePCDFileBinary(FLAGS_las_filename + "_normals.pcd", *cloud_with_normals);
   DLOG(INFO) << "Save to " << FLAGS_las_filename + "_normals.pcd";
+
+  DLOG(INFO) << "Save to " << FLAGS_las_filename + "_offset.csv";
+  SaveLasOffset(FLAGS_las_filename + "_offset.csv", offset_x, offset_y, offset_z);
 
   std::cout << "done." << std::endl;
 
