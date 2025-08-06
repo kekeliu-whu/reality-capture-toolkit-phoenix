@@ -29,6 +29,7 @@ find_package(OpenCV REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(PDAL CONFIG REQUIRED)
 find_package(Glog REQUIRED)
+find_package(PROJ CONFIG REQUIRED)
 
 include_directories(
   src
@@ -59,6 +60,7 @@ set(PGO_PRIVATE_LIBS
   opencv_core
   opencv_highgui
   opencv_calib3d
+  PROJ::proj
 )
 
 function(add_private_tool name)

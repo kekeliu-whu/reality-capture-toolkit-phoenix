@@ -9,6 +9,7 @@
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/search/kdtree.h>
+#include <proj.h>
 #include <Eigen/Eigen>
 #include <boost/filesystem.hpp>
 #include <fstream>
@@ -19,8 +20,8 @@
 
 #include "map/utils.h"
 
-DEFINE_string(las_filename, "D:/Users/rick/Documents/reality-capture/20240913144522483000ca5a095ebd514539856a5263fe63052a/projects/cf33afb0-37fb-4aec-8660-d3aae66ef68c/2fcc3bac-1ff6-40f2-8f07-e5e2c517882b/result/3D/point-las/MipModel.las", "Input project path");
-DEFINE_bool(output_full, true, "Output full point cloud");
+DEFINE_string(las_filename, "D:/ProjectX/project-3d/data/sfm/output_dir/colorized.las", "Input project path");
+DEFINE_bool(output_full, false, "Output full point cloud");
 
 static constexpr double kDownsampleVoxelSize    = 0.05;
 static constexpr int kNearestNeighbors          = 15;
@@ -34,17 +35,45 @@ static constexpr double kSmoothSigmaN           = 0.05;
 #include <pdal/StageFactory.hpp>
 #include <pdal/io/LasReader.hpp>
 
-void SaveLasOffset(const std::string &filename, double offset_x, double offset_y, double offset_z) {
+void SaveLasOffset(const std::string &filename, double offset_x, double offset_y, double lon, double lat) {
   std::ofstream ofs(filename);
   if (!ofs.is_open()) {
     LOG(ERROR) << "Failed to open file: " << filename;
     return;
   }
-  ofs << "offset_x,offset_y,offset_z" << std::endl;
-  ofs << std::fixed << std::setprecision(9) << offset_x << "," << offset_y << "," << offset_z << std::endl;
+  ofs << "offset_x,offset_y,lon,lat" << std::endl;
+  ofs << std::fixed << std::setprecision(9) << offset_x << "," << offset_y << "," << lon << "," << lat << std::endl;
 }
 
-void LoadLAS(const std::string &filename, pcl::PointCloud<pcl::PointXYZI>::Ptr &cloud, double &offset_x, double &offset_y, double &offset_z) {
+void ComputeOriginalLonLat(const std::string &proj_str, double offset_x, double offset_y, double &lon, double &lat) {
+  // 初始化PROJ上下文
+  PJ_CONTEXT *ctx = proj_context_create();
+
+  //// 创建投影对象
+  PJ *proj = proj_create(ctx, proj_str.c_str());
+
+  DCHECK(proj) << "Failed to create projection object with PROJ string: " << proj;
+
+  // 投影坐标原点 (x_0, y_0) = (500000, 0)
+  double x = offset_x;
+  double y = offset_y;
+
+  // 执行反向投影（投影坐标 -> 地理坐标）
+  PJ_COORD coord_proj = proj_coord(x, y, 0, 0);
+  PJ_COORD coord_geo  = proj_trans(proj, PJ_INV, coord_proj);
+
+  DCHECK(coord_geo.lp.lam != HUGE_VAL && coord_geo.lp.phi != HUGE_VAL);
+
+  // 转换为度数（PROJ返回的是弧度）
+  lon = coord_geo.lp.lam * 180.0 / M_PI;
+  lat = coord_geo.lp.phi * 180.0 / M_PI;
+
+  // 清理资源
+  proj_destroy(proj);
+  proj_context_destroy(ctx);
+}
+
+void LoadLAS(const std::string &filename, pcl::PointCloud<pcl::PointXYZI>::Ptr &cloud, double &offset_x, double &offset_y, double &lon, double &lat) {
   cloud.reset(new pcl::PointCloud<pcl::PointXYZI>);
 
   pdal::StageFactory factory;
@@ -59,10 +88,11 @@ void LoadLAS(const std::string &filename, pcl::PointCloud<pcl::PointXYZI>::Ptr &
   pdal::PointViewPtr view    = *viewSet.begin();
 
   pdal::MetadataNode metadata = reader->getMetadata();
-  offset_x             = metadata.findChild("offset_x").value<double>();
-  offset_y             = metadata.findChild("offset_y").value<double>();
-  offset_z             = metadata.findChild("offset_z").value<double>();
-  DLOG(INFO) << "LAS offset: X=" << offset_x << ", Y=" << offset_y << ", Z=" << offset_z;
+  offset_x                    = metadata.findChild("offset_x").value<double>();
+  offset_y                    = metadata.findChild("offset_y").value<double>();
+  std::string proj_str        = metadata.findChild("srs").findChild("proj4").value<std::string>();
+  ComputeOriginalLonLat(proj_str, offset_x, offset_y, lon, lat);
+  DLOG(INFO) << std::fixed << std::setprecision(9) << "LAS offset: X=" << offset_x << ", Y=" << offset_y << ", longitude=" << lon << " latitude=" << lat;
 
   cloud->width    = view->size();
   cloud->height   = 1;
@@ -73,7 +103,7 @@ void LoadLAS(const std::string &filename, pcl::PointCloud<pcl::PointXYZI>::Ptr &
     pcl::PointXYZI p;
     p.x              = view->getFieldAs<double>(pdal::Dimension::Id::X, i) - offset_x;
     p.y              = view->getFieldAs<double>(pdal::Dimension::Id::Y, i) - offset_y;
-    p.z              = view->getFieldAs<double>(pdal::Dimension::Id::Z, i) - offset_z;
+    p.z              = view->getFieldAs<double>(pdal::Dimension::Id::Z, i);
     p.intensity      = view->getFieldAs<float>(pdal::Dimension::Id::Intensity, i);
     cloud->points[i] = p;
   }
@@ -182,8 +212,8 @@ int main(int argc, char **argv) {
   DCHECK(boost::filesystem::is_regular_file(FLAGS_las_filename));
 
   DLOG(INFO) << "Loading LAS file...";
-  double offset_x, offset_y, offset_z;
-  LoadLAS(FLAGS_las_filename, cloud, offset_x, offset_y, offset_z);
+  double offset_x, offset_y, lon, lat;
+  LoadLAS(FLAGS_las_filename, cloud, offset_x, offset_y, lon, lat);
   DLOG(INFO) << "Loaded " << cloud->size() << " points.";
 
   if (!FLAGS_output_full) {
@@ -214,7 +244,7 @@ int main(int argc, char **argv) {
   DLOG(INFO) << "Save to " << FLAGS_las_filename + "_normals.pcd";
 
   DLOG(INFO) << "Save to " << FLAGS_las_filename + "_offset.csv";
-  SaveLasOffset(FLAGS_las_filename + "_offset.csv", offset_x, offset_y, offset_z);
+  SaveLasOffset(FLAGS_las_filename + "_offset.csv", offset_x, offset_y, lon, lat);
 
   std::cout << "done." << std::endl;
 
