@@ -21,20 +21,20 @@
 
 namespace xcolor {
 
-std::vector<std::vector<int>> ClusterByBFS(const std::vector<MatchTrack> &match_tracks) {
+std::vector<std::vector<int>> ClusterByBFS(const std::vector<MatchTrack> &match_tracks, bool use_all_track) {
   int N = int(match_tracks.size());
   std::unordered_map<Point2DInfo::Ptr, std::vector<int>> pt2pairs;
 
-  std::vector<bool> valid(N, false);
+  std::vector<int8_t> valid(N, false);
   for (int i = 0; i < N; ++i) {
-    if (!match_tracks[i].point3D.valid) continue;
+    if (!(use_all_track || match_tracks[i].point3D.valid)) continue;
     valid[i] = true;
     for (auto &pt : match_tracks[i].point2D_on_imageN) {
       pt2pairs[pt].push_back(i);
     }
   }
 
-  std::vector<bool> seen(N, false);
+  std::vector<int8_t> seen(N, false);
   std::vector<std::vector<int>> clusters;
 
   for (int i = 0; i < N; ++i) {
@@ -66,6 +66,8 @@ std::vector<std::vector<int>> ClusterByBFS(const std::vector<MatchTrack> &match_
   return clusters;
 }
 
+// 将colmap的所有匹配对读取进入Track，每个Track包含两个Point2DInfo
+// 单一的一个特征点只有一个Point2DInfo实例，例如(image_id, point2D_idx)这个特征点只使用一个Point2DInfo实例
 std::vector<MatchTrack> GenerateMatchPairs(const colmap::CorrespondenceGraph &corr_graph,
                                            const std::unordered_map<colmap::image_t, colmap::Image> &images, const SfmConfig &config) {
   std::vector<MatchTrack> match_tracks;
@@ -206,7 +208,7 @@ void AddPosePriorsToProblem(const SfmConfig &config, ceres::Problem &problem, co
     auto &pose       = images.at(image_id).CamFromWorld();
     auto &pose_prior = pose_priors.at(image_id);
     problem.AddResidualBlock(PosePriorCostFunction::Create(pose_prior.rotation, pose_prior.translation, info_matrix),
-                             new ceres::ScaledLoss(nullptr, config.pose_prior_scale_weight, ceres::DO_NOT_TAKE_OWNERSHIP),
+                             new ceres::ScaledLoss(nullptr, config.pose_prior_scale_weight, ceres::TAKE_OWNERSHIP),
                              pose.rotation.coeffs().data(), pose.translation.data());
     problem.SetManifold(pose.rotation.coeffs().data(), new ceres::EigenQuaternionManifold());
   }
@@ -229,7 +231,8 @@ void PrintResidualHistogram(double threshold, ceres::Problem &problem, const std
   DLOG(INFO) << name << ": " << hist.ToString(10);
 }
 
-std::vector<double> ComputeRMSEByClusterCentroid(const std::vector<std::vector<int>> &clusters, const std::vector<MatchTrack> &match_tracks) {
+std::vector<double> ComputeRMSEByClusterCentroid(const std::vector<std::vector<int>> &clusters, const std::vector<MatchTrack> &match_tracks,
+                                                 bool use_all_track) {
   std::vector<double> rmse_list;
 
   for (const auto &cluster : clusters) {
@@ -239,7 +242,7 @@ std::vector<double> ComputeRMSEByClusterCentroid(const std::vector<std::vector<i
 
     for (int idx : cluster) {
       auto result = match_tracks[idx];
-      if (result.point3D.valid) {
+      if (use_all_track || result.point3D.valid) {
         points.push_back(result.point3D.point3D);
       }
     }
@@ -265,21 +268,26 @@ std::vector<double> ComputeRMSEByClusterCentroid(const std::vector<std::vector<i
 }
 
 std::vector<std::vector<int>> DBSCANClusterIndices(const std::vector<MatchTrack> &match_tracks_total, const std::vector<int> &indices, double eps,
-                                                   int min_pts) {
+                                                   int min_pts, bool use_all_track, int min_track_size) {
+  DCHECK_GE(min_track_size, 2);
+  if (match_tracks_total.size() + 1 < min_track_size) {
+    return {};
+  }
+
   std::vector<std::vector<int>> clusters;
-  std::vector<bool> visited(match_tracks_total.size(), false);
+  std::vector<int8_t> visited(match_tracks_total.size(), false);
 
   auto distance = [](const Eigen::Vector3d &a, const Eigen::Vector3d &b) { return (a - b).norm(); };
 
   for (size_t idx_i = 0; idx_i < indices.size(); ++idx_i) {
     int i = indices[idx_i];
-    if (!match_tracks_total[i].point3D.valid || visited[i]) continue;
+    if (!(use_all_track || match_tracks_total[i].point3D.valid) || visited[i]) continue;
 
     visited[i] = true;
     std::vector<int> neighbors;
 
     for (int j : indices) {
-      if (!match_tracks_total[j].point3D.valid) continue;
+      if (!(use_all_track || match_tracks_total[j].point3D.valid)) continue;
       if (distance(match_tracks_total[i].point3D.point3D, match_tracks_total[j].point3D.point3D) < eps) {
         neighbors.push_back(j);
       }
@@ -301,7 +309,7 @@ std::vector<std::vector<int>> DBSCANClusterIndices(const std::vector<MatchTrack>
 
         std::vector<int> sub_neighbors;
         for (int k : indices) {
-          if (!match_tracks_total[k].point3D.valid) continue;
+          if (!(use_all_track || match_tracks_total[k].point3D.valid)) continue;
           if (distance(match_tracks_total[j].point3D.point3D, match_tracks_total[k].point3D.point3D) < eps) {
             sub_neighbors.push_back(k);
           }
@@ -320,15 +328,17 @@ std::vector<std::vector<int>> DBSCANClusterIndices(const std::vector<MatchTrack>
       cluster.push_back(j);
     }
 
-    clusters.push_back(cluster);
+    if (cluster.size() >= min_track_size) {
+      clusters.push_back(cluster);
+    }
   }
 
   return clusters;
 }
 
 void PrintClusterMetrics(std::vector<MatchTrack> &match_tracks_valid, std::vector<std::vector<int>> &clusters,
-                         std::vector<std::vector<std::vector<int>>> &sub_clusters) {
-  std::vector<double> cluster_rmses = ComputeRMSEByClusterCentroid(clusters, match_tracks_valid);
+                         std::vector<std::vector<std::vector<int>>> &sub_clusters, bool use_all_track) {
+  std::vector<double> cluster_rmses = ComputeRMSEByClusterCentroid(clusters, match_tracks_valid, use_all_track);
   Histogram hist;
   for (int i = 0; i < clusters.size(); ++i) {
     // only use cluster with more than 1 match track
@@ -372,22 +382,29 @@ std::vector<MatchTrack> MergeMatchTracks(const std::vector<MatchTrack> &match_tr
   return match_tracks_ret;
 }
 
-bool MergeTrack(const std::vector<MatchTrack> &match_tracks, std::vector<MatchTrack> &match_tracks_merged) {
+bool MergeTrack(const std::vector<MatchTrack> &match_tracks, std::vector<MatchTrack> &match_tracks_merged, bool use_all_track, int min_track_size) {
   std::vector<MatchTrack> match_tracks_valid;
 
   std::copy_if(match_tracks.begin(), match_tracks.end(), std::back_inserter(match_tracks_valid),
-               [](const MatchTrack &mt) { return mt.point3D.valid; });
+               [use_all_track](const MatchTrack &mt) { return use_all_track || mt.point3D.valid; });
 
-  std::vector<std::vector<int>> clusters = ClusterByBFS(match_tracks_valid);
+  std::vector<std::vector<int>> clusters = ClusterByBFS(match_tracks_valid, use_all_track);
   DLOG(INFO) << "Cluster: " << match_tracks_valid.size() << " match pairs -> " << clusters.size() << " match tracks.";
 
+  int count = 0;
   std::vector<std::vector<std::vector<int>>> sub_clusters(clusters.size());
 #pragma omp parallel for
   for (int i = 0; i < static_cast<int>(clusters.size()); ++i) {
-    sub_clusters[i] = DBSCANClusterIndices(match_tracks_valid, clusters[i], 0.03, 2);
+    sub_clusters[i] = DBSCANClusterIndices(match_tracks_valid, clusters[i], 0.03, 2, use_all_track, min_track_size);
+#pragma omp critical
+    {
+      if (++count % 10000 == 0) {
+        DLOG(INFO) << "Triangulate point " << count;
+      }
+    }
   }
 
-  PrintClusterMetrics(match_tracks_valid, clusters, sub_clusters);
+  PrintClusterMetrics(match_tracks_valid, clusters, sub_clusters, use_all_track);
 
   match_tracks_merged = MergeMatchTracks(match_tracks_valid, sub_clusters);
   DLOG(INFO) << "Finally, merge " << match_tracks_valid.size() << " match track into " << match_tracks_merged.size() << " tracks ";

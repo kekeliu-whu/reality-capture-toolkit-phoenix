@@ -26,19 +26,22 @@ struct SfmConfig {
   bool refine_extra_params    = true;
   double min_tri_angle        = 5;
 
-  int outer_opt_num                            = 3;
-  double reproject_error_outlier_thresholds[3] = {10, 4, 2};       // pixels, equal to outer_opt_num
-  double lidar_error_outlier_thresholds[3]     = {0.8, 0.4, 0.2};  // meters, equal to outer_opt_num
+  int outer_opt_num_two_view                   = 1;
+  int outer_opt_num_multi_view                 = 3;
+  double reproject_error_outlier_thresholds[3] = {10, 4, 2};       // pixels, it's length is equal to outer_opt_num_multi_view
+  double lidar_error_outlier_thresholds[3]     = {0.8, 0.4, 0.2};  // meters, it's length is equal to outer_opt_num_multi_view
 
   double reproject_cauchy_loss_scale = 1.5;  // pixels, half of the smallest reproject_error_outlier_thresholds
   double lidar_cauchy_loss_scale     = 0.1;  // meters, half of the smallest lidar_error_outlier_thresholds
-  double lidar_loss_scale            = 10;
+  double lidar_loss_scale            = 0.2;
 
   double pose_prior_rotation_weight    = 0.2 * M_PI / 180.0;
   double pose_prior_translation_weight = 0.05;
   double pose_prior_scale_weight       = 1;
 
   int ba_optimization_num_threads = 1;
+
+  bool use_all_track = false;
 
   SfmConfig(int cores_used) { ba_optimization_num_threads = cores_used; }
 };
@@ -143,6 +146,6 @@ void AddPosePriorsToProblem(const SfmConfig &config, ceres::Problem &problem, co
 void PrintResidualHistogram(double threshold, ceres::Problem &problem, const std::vector<ceres::ResidualBlockId> &residual_block_ids,
                             const std::string &name);
 
-bool MergeTrack(const std::vector<MatchTrack> &match_tracks, std::vector<MatchTrack> &match_tracks_merged);
+bool MergeTrack(const std::vector<MatchTrack> &match_tracks, std::vector<MatchTrack> &match_tracks_merged, bool use_all_track, int min_track_size);
 
 }  // namespace xcolor

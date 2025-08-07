@@ -191,9 +191,8 @@ int main(int argc, char** argv) {
 
       // Replace with new parameters as needed; here is an example:
       ((double*)params.data())[0] = camera_param[0];
-      ((double*)params.data())[1] = camera_param[1];
-      ((double*)params.data())[2] = width / 2;
-      ((double*)params.data())[3] = height / 2;
+      ((double*)params.data())[1] = width / 2;
+      ((double*)params.data())[2] = height / 2;
 
       if (updateParams(db, cam_id, params)) {
         DLOG(INFO) << "Camera " << cam_id << "'s params has been updated: fx = " << camera_param[0] << ", fy = " << camera_param[1]

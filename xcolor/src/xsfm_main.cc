@@ -17,21 +17,21 @@
 #include <rapidjson/rapidjson.h>
 #include <yaml-cpp/yaml.h>
 #include <boost/filesystem.hpp>
+#include <boost/format.hpp>
 
 #include "common/histogram.h"
 #include "core/xsfm_lib.h"
 #include "io/read_write.h"
+#include "io/xml_io.h"
 
-DEFINE_string(point_cloud_filename, "D:/project_3d/data/sfm-share/output_dir_s20_first-oldest-outdoor-shareuav1f/colorized.las_normals.pcd",
-              "Point cloud filename");
-DEFINE_string(output_path, "D:/project_3d/data/sfm-share/output_dir_s20_first-oldest-outdoor-shareuav1f", "Output path");
-DEFINE_string(database_filename, "D:/project_3d/data/sfm-share/output_dir_s20_first-oldest-outdoor-shareuav1f/xsfm.db", "Database filename");
-DEFINE_string(initial_pose_dirname, "D:/project_3d/data/sfm-share/output_dir_s20_first-oldest-outdoor-shareuav1f/", "Initial pose filename");
-DEFINE_int32(pose_type, 1, "Pose type, =0 for s10, =1 for s20, =2 for export s20 poses");
-//////////////////////// only used when pose_type = 2 begin ////////////////////////
-DEFINE_string(calibration_filename, "D:/project_3d/data/sfm-share/output_dir_s20_first-oldest-outdoor-shareuav1f/calibration.yaml", "");
-DEFINE_string(images_path, "D:/project_3d/data/sfm-share/output_dir_s20_first-oldest-outdoor-shareuav1f/undistort", "");
-//////////////////////// only used when pose_type = 2 end   ////////////////////////
+DEFINE_string(point_cloud_filename, "D:/ProjectX/project-3d/data/sfm/area3/sfm/colorized.las_normals.pcd", "Point cloud filename");
+DEFINE_string(point_cloud_offset_filename, "D:/ProjectX/project-3d/data/sfm/area3/sfm/colorized.las_offset.csv", "Point cloud offset filename");
+DEFINE_string(database_filename, "D:/ProjectX/project-3d/data/sfm/area3/sfm/xsfm.db", "Database filename");
+DEFINE_string(initial_pose_filename, "D:/ProjectX/project-3d/data/sfm/area3/sfm/images/ImgPose.txt", "Initial pose filename");
+DEFINE_string(calibration_filename, "D:/ProjectX/project-3d/data/sfm/area3/sfm/calibration.yaml", "");
+DEFINE_string(images_path, "D:/ProjectX/project-3d/data/sfm/area3/sfm/images", "");
+
+DEFINE_string(output_path, "D:/ProjectX/project-3d/data/sfm/area3/sfm", "Output path");
 
 void SaveTriangulatedPoints(const std::vector<xcolor::MatchTrack> &match_tracks, const std::string &filename) {
   pcl::PointCloud<pcl::PointXYZINormal> point_cloud_out;
@@ -45,7 +45,7 @@ void SaveTriangulatedPoints(const std::vector<xcolor::MatchTrack> &match_tracks,
       point_cloud_out.push_back(np);
     }
   }
-  DLOG(INFO) << pcl::io::savePCDFileBinary(filename, point_cloud_out);
+  DLOG(INFO) << "savePCDFileBinary: " << pcl::io::savePCDFileBinary(filename, point_cloud_out);
 }
 
 void SaveImagePoses(const std::string &filename, const std::unordered_set<colmap::image_t> &optimized_image_ids,
@@ -95,9 +95,9 @@ void SaveCameraParams(const std::string &filename, const std::unordered_map<colm
   std::ofstream infile(filename);
   infile << "camera_id model_id fx fy cx cy params..." << std::endl;
   for (auto &e : cameras) {
-    infile << std::fixed << std::setprecision(6) << e.first << " " << (int)e.second.model_id << " " << e.second.params[0] << " " << e.second.params[1]
-           << " " << e.second.params[2] << " " << e.second.params[3] << " " << e.second.params[4] << " " << e.second.params[5] << " "
-           << e.second.params[6] << " " << e.second.params[7] << std::endl;
+    infile << std::fixed << std::setprecision(6) << e.first << " " << (int)e.second.model_id << " " << e.second.params[0] << " " << e.second.params[0]
+           << " " << e.second.params[1] << " " << e.second.params[2] << " " << e.second.params[3] << " " << e.second.params[4] << " "
+           << e.second.params[5] << " " << e.second.params[6] << std::endl;
   }
 }
 
@@ -149,18 +149,40 @@ bool TryTriangulate(const xcolor::SfmConfig &config, const colmap::Image &image1
   return true;
 }
 
+void ComputeSurfel(const pcl::PointCloud<pcl::PointXYZINormal> &point_cloud, const std::vector<int> &k_indices, Eigen::Vector3d &surfel_center,
+                   Eigen::Vector3d &surfel_normal, double &surfel_std) {
+  int k = k_indices.size();
+
+  Eigen::Vector3d center = Eigen::Vector3d::Zero();
+  for (int i = 0; i < k; i++) {
+    center += point_cloud[k_indices[i]].getVector3fMap().cast<double>();
+  }
+  center /= k;
+
+  Eigen::Matrix3d covariance = Eigen::Matrix3d::Zero();
+  for (int i = 0; i < k; i++) {
+    Eigen::Vector3d diff = point_cloud[k_indices[i]].getVector3fMap().cast<double>() - center;
+    covariance += diff * diff.transpose();
+  }
+  covariance /= k;
+
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eigensolver(covariance);
+  Eigen::Matrix3d eigenvectors = eigensolver.eigenvectors();
+  Eigen::Vector3d normal       = eigenvectors.col(0);
+
+  surfel_center = center;
+  surfel_normal = normal;
+  surfel_std    = std::sqrt(std::max(0.0, eigensolver.eigenvalues()[0]));  // standard deviation along the normal direction
+}
+
 void RunMultipleViewBA(const xcolor::SfmConfig &config, const pcl::KdTreeFLANN<pcl::PointXYZINormal> &kdtree,
                        const pcl::PointCloud<pcl::PointXYZINormal> &point_cloud,
                        const std::unordered_map<colmap::image_t, colmap::Rigid3d> &pose_priors,
                        std::unordered_map<colmap::image_t, colmap::Image> &images, std::unordered_map<colmap::camera_t, colmap::Camera> &cameras,
                        std::vector<xcolor::MatchTrack> &match_tracks) {
-  for (int iter = 0; iter < config.outer_opt_num; ++iter) {
-    ceres::Problem::Options problem_options;
-    problem_options.loss_function_ownership = ceres::DO_NOT_TAKE_OWNERSHIP;
-    ceres::Problem problem{problem_options};
-    auto loss_function_image = std::make_shared<ceres::CauchyLoss>(config.reproject_cauchy_loss_scale);
-    auto loss_function_lidar = std::make_shared<ceres::ScaledLoss>(new ceres::CauchyLoss(config.lidar_cauchy_loss_scale), config.lidar_loss_scale,
-                                                                   ceres::DO_NOT_TAKE_OWNERSHIP);
+  for (int iter = 0; iter < config.outer_opt_num_multi_view; ++iter) {
+    ceres::Problem problem;
+    auto loss_function_image = new ceres::CauchyLoss(config.reproject_cauchy_loss_scale);
     std::vector<ceres::ResidualBlockId> residual_block_ids;
     std::vector<ceres::ResidualBlockId> lidar_residual_block_ids;
 
@@ -172,15 +194,16 @@ void RunMultipleViewBA(const xcolor::SfmConfig &config, const pcl::KdTreeFLANN<p
       auto &match_pair = match_tracks[i];
       auto &point3D    = match_tracks[i].point3D.point3D;
 
-      Eigen::Vector3d lidar_point;
-      Eigen::Vector3d lidar_normal;
-      std::vector<float> distances;
-      std::vector<int> indices;
-      kdtree.nearestKSearch(pcl::PointXYZINormal{(float)point3D.x(), (float)point3D.y(), (float)point3D.z()}, 1, indices, distances);
+      int k = 8;
+      std::vector<float> k_distances;
+      std::vector<int> k_indices;
+      kdtree.nearestKSearch(pcl::PointXYZINormal{(float)point3D.x(), (float)point3D.y(), (float)point3D.z()}, k, k_indices, k_distances);
+      CHECK_EQ(k_indices.size(), k);
 
-      auto nearest_point = point_cloud[indices[0]];
-      lidar_point        = nearest_point.getVector3fMap().cast<double>();
-      lidar_normal       = nearest_point.getNormalVector3fMap().cast<double>();
+      Eigen::Vector3d surfel_center;
+      Eigen::Vector3d surfel_normal;
+      double surfel_std;
+      ComputeSurfel(point_cloud, k_indices, surfel_center, surfel_normal, surfel_std);
 
       match_tracks[i].point3D.valid = 1;
 
@@ -196,10 +219,12 @@ void RunMultipleViewBA(const xcolor::SfmConfig &config, const pcl::KdTreeFLANN<p
           auto &camera         = cameras[point_on_image.camera_id];
           CHECK(image.HasPose()) << "Image " << point_on_image.image_id << " has no pose.";
           optimized_image_ids.insert(point_on_image.image_id);
-          xcolor::AddReprojectFactorToProblem(problem, point3D, point_on_image.point_pixel, image, camera, loss_function_image.get(),
-                                              residual_block_ids);
+          xcolor::AddReprojectFactorToProblem(problem, point3D, point_on_image.point_pixel, image, camera, loss_function_image, residual_block_ids);
         }
-        xcolor::AddLidarFactorToProblem(problem, point3D, lidar_point, lidar_normal, loss_function_lidar.get(), lidar_residual_block_ids);
+        double weight = 1 / sqrt(pow(0.05 / 6, 2) + surfel_std * surfel_std);
+        auto loss_function_lidar =
+            new ceres::ScaledLoss(new ceres::CauchyLoss(config.lidar_cauchy_loss_scale), weight * config.lidar_loss_scale, ceres::TAKE_OWNERSHIP);
+        xcolor::AddLidarFactorToProblem(problem, point3D, surfel_center, surfel_normal, loss_function_lidar, lidar_residual_block_ids);
       }
     }
     DLOG(INFO) << optimized_image_ids.size() << " images are used.";
@@ -236,13 +261,11 @@ void RunTwoViewBA(const xcolor::SfmConfig &config, const pcl::KdTreeFLANN<pcl::P
                   const pcl::PointCloud<pcl::PointXYZINormal> &point_cloud, const std::unordered_map<colmap::image_t, colmap::Rigid3d> &pose_priors,
                   std::unordered_map<colmap::image_t, colmap::Image> &images, std::unordered_map<colmap::camera_t, colmap::Camera> &cameras,
                   std::vector<xcolor::MatchTrack> &match_tracks) {
-  for (int iter = 0; iter < config.outer_opt_num; ++iter) {
-    ceres::Problem::Options problem_options;
-    problem_options.loss_function_ownership = ceres::DO_NOT_TAKE_OWNERSHIP;
-    ceres::Problem problem{problem_options};
-    auto loss_function_image = std::make_shared<ceres::CauchyLoss>(config.reproject_cauchy_loss_scale);
-    auto loss_function_lidar = std::make_shared<ceres::ScaledLoss>(new ceres::CauchyLoss(config.lidar_cauchy_loss_scale), config.lidar_loss_scale,
-                                                                   ceres::DO_NOT_TAKE_OWNERSHIP);
+  for (int iter = 0; iter < config.outer_opt_num_two_view; ++iter) {
+    ceres::Problem problem;
+    auto loss_function_image = new ceres::CauchyLoss(config.reproject_cauchy_loss_scale);
+    auto loss_function_lidar =
+        new ceres::ScaledLoss(new ceres::CauchyLoss(config.lidar_cauchy_loss_scale), config.lidar_loss_scale, ceres::TAKE_OWNERSHIP);
     std::vector<ceres::ResidualBlockId> residual_block_ids;
     std::vector<ceres::ResidualBlockId> lidar_residual_block_ids;
 
@@ -275,17 +298,15 @@ void RunTwoViewBA(const xcolor::SfmConfig &config, const pcl::KdTreeFLANN<pcl::P
 
 #pragma omp critical
       {
-        if (++count % 10000 == 0) {
+        if (++count % 40000 == 0) {
           DLOG(INFO) << "Triangulate point " << count;
         }
 
         optimized_image_ids.insert(point_on_image1.image_id);
         optimized_image_ids.insert(point_in_image2.image_id);
-        xcolor::AddReprojectFactorToProblem(problem, point3D, point_on_image1.point_pixel, image1, camera1, loss_function_image.get(),
-                                            residual_block_ids);
-        xcolor::AddReprojectFactorToProblem(problem, point3D, point_in_image2.point_pixel, image2, camera2, loss_function_image.get(),
-                                            residual_block_ids);
-        xcolor::AddLidarFactorToProblem(problem, point3D, lidar_point, lidar_normal, loss_function_lidar.get(), lidar_residual_block_ids);
+        xcolor::AddReprojectFactorToProblem(problem, point3D, point_on_image1.point_pixel, image1, camera1, loss_function_image, residual_block_ids);
+        xcolor::AddReprojectFactorToProblem(problem, point3D, point_in_image2.point_pixel, image2, camera2, loss_function_image, residual_block_ids);
+        xcolor::AddLidarFactorToProblem(problem, point3D, lidar_point, lidar_normal, loss_function_lidar, lidar_residual_block_ids);
       }
     }
     DLOG(INFO) << optimized_image_ids.size() << " images are used.";
@@ -319,11 +340,12 @@ void RunTwoViewBA(const xcolor::SfmConfig &config, const pcl::KdTreeFLANN<pcl::P
 }
 
 void RunSFM(const xcolor::SfmConfig &config, std::vector<xcolor::MatchTrack> &match_tracks, const std::string &point_cloud_filename,
-            std::unordered_map<colmap::image_t, colmap::Image> &images, std::unordered_map<colmap::camera_t, colmap::Camera> &cameras) {
+            std::unordered_map<colmap::image_t, colmap::Image> &images, std::unordered_map<colmap::camera_t, colmap::Camera> &cameras,
+            std::vector<xcolor::MatchTrack> &match_tracks_merged) {
   pcl::PointCloud<pcl::PointXYZINormal> point_cloud;
   int load_ply_status = pcl::io::loadPCDFile(point_cloud_filename, point_cloud);
   CHECK_NE(load_ply_status, -1);
-  DLOG(INFO) << "Load " << point_cloud.size() << " points.";
+  DLOG(INFO) << "Load " << point_cloud.size() << " lidar points.";
 
   // build kdtree
   pcl::KdTreeFLANN<pcl::PointXYZINormal> kdtree;
@@ -336,8 +358,7 @@ void RunSFM(const xcolor::SfmConfig &config, std::vector<xcolor::MatchTrack> &ma
 
   RunTwoViewBA(config, kdtree, point_cloud, pose_priors, images, cameras, match_tracks);
 
-  std::vector<xcolor::MatchTrack> match_tracks_merged;
-  MergeTrack(match_tracks, match_tracks_merged);
+  MergeTrack(match_tracks, match_tracks_merged, config.use_all_track, 3);
 
   RunMultipleViewBA(config, kdtree, point_cloud, pose_priors, images, cameras, match_tracks_merged);
 
@@ -355,64 +376,7 @@ void RunSFM(const xcolor::SfmConfig &config, std::vector<xcolor::MatchTrack> &ma
   }
 }
 
-std::unordered_map<std::string, colmap::Rigid3d> ReadImagePosesType0(const std::string &filename) {
-  std::unordered_map<std::string, colmap::Rigid3d> image_to_pose;
-
-  std::ifstream file(filename);
-  CHECK(file) << filename;
-
-  std::string json_str{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
-
-  rapidjson::Document doc;
-  rapidjson::StringStream string_stream{json_str.c_str()};
-  doc.ParseStream(string_stream);
-
-  std::optional<colmap::Rigid3d> last_pose = std::nullopt;
-  auto &frames                             = doc["frames"];
-  for (int i = 0; i < frames.Size(); ++i) {
-    auto &frame = frames[i];
-
-    auto &mat = frame["transform_matrix"];
-    Eigen::Matrix4d T;
-    T << mat[0][0].GetDouble(), mat[0][1].GetDouble(), mat[0][2].GetDouble(), mat[0][3].GetDouble(), mat[1][0].GetDouble(), mat[1][1].GetDouble(),
-        mat[1][2].GetDouble(), mat[1][3].GetDouble(), mat[2][0].GetDouble(), mat[2][1].GetDouble(), mat[2][2].GetDouble(), mat[2][3].GetDouble(), 0,
-        0, 0, 1;
-
-    colmap::Rigid3d pose_cg_to_world;
-    pose_cg_to_world.rotation = T.block<3, 3>(0, 0);
-    pose_cg_to_world.rotation.normalize();
-    pose_cg_to_world.translation = T.block<3, 1>(0, 3);
-
-    std::string file_path = frame["file_path"].GetString();
-    auto file             = boost::filesystem::path(file_path);
-    auto timestamp        = frame["timestamp"].GetUint64();
-
-    auto real_filename = file.parent_path().string() + "/" + std::to_string(timestamp) + ".png";
-
-    colmap::Rigid3d pose_cg_from_world = colmap::Inverse(pose_cg_to_world);
-
-    colmap::Rigid3d pose_cv_from_world;
-
-    Eigen::Matrix3d mat_cg_to_cv;
-    mat_cg_to_cv << 1, 0, 0, 0, -1, 0, 0, 0, -1;
-    pose_cv_from_world.translation = mat_cg_to_cv * pose_cg_from_world.translation;
-    pose_cv_from_world.rotation    = Eigen::Quaterniond(mat_cg_to_cv) * pose_cg_from_world.rotation;
-    if (last_pose.has_value()) {
-      if (pose_cv_from_world.rotation.angularDistance(last_pose->rotation) * 180 / M_PI > 1.0 ||
-          (pose_cv_from_world.translation - last_pose->translation).norm() > 0.3) {
-        last_pose                    = pose_cv_from_world;
-        image_to_pose[real_filename] = pose_cv_from_world;
-      }
-    } else {
-      last_pose                    = pose_cv_from_world;
-      image_to_pose[real_filename] = pose_cv_from_world;
-    }
-  }
-
-  return image_to_pose;
-}
-
-std::unordered_map<std::string, colmap::Rigid3d> ReadImagePosesType1(const std::string &filename) {
+std::unordered_map<std::string, colmap::Rigid3d> ReadImagePoses(const std::string &filename, const Eigen::Vector2d &offset) {
   std::unordered_map<std::string, colmap::Rigid3d> image_to_pose;
 
   std::ifstream file(filename);
@@ -421,53 +385,145 @@ std::unordered_map<std::string, colmap::Rigid3d> ReadImagePosesType1(const std::
   std::string line;
   std::getline(file, line);
 
-  std::string index;
-  double tx, ty, tz, qx, qy, qz, qw, timestamp;
-  std::optional<colmap::Rigid3d> last_pose = std::nullopt;
-  while (file >> index >> tx >> ty >> tz >> qx >> qy >> qz >> qw >> timestamp) {
-    std::string file_path = (index.find("left") != std::string::npos ? "left/" : "right/") + index + ".jpg";
+  std::string file_path;
+  double tx, ty, tz, roll, pitch, yaw, qx, qy, qz, qw, timestamp;
+  std::map<std::string, std::optional<colmap::Rigid3d>> image_to_last_pose_map;
+  while (file >> file_path >> tx >> ty >> tz >> roll >> pitch >> yaw >> qx >> qy >> qz >> qw >> timestamp) {
     colmap::Rigid3d pose_world_from_cv;
-    pose_world_from_cv.translation     = Eigen::Vector3d(tx, ty, tz);
+    pose_world_from_cv.translation     = Eigen::Vector3d(tx - offset.x(), ty - offset.y(), tz);
     pose_world_from_cv.rotation        = Eigen::Quaterniond(qw, qx, qy, qz).normalized();
     colmap::Rigid3d pose_cv_from_world = colmap::Inverse(pose_world_from_cv);
-    if (last_pose.has_value()) {
-      if (pose_cv_from_world.rotation.angularDistance(last_pose->rotation) * 180 / M_PI > 1.0 ||
-          (pose_cv_from_world.translation - last_pose->translation).norm() > 0.3) {
-        last_pose                = pose_cv_from_world;
+
+    std::string camera_dirname = boost::filesystem::path(file_path).parent_path().string();
+
+    auto &camera_to_last_pose = image_to_last_pose_map[camera_dirname];
+    if (camera_to_last_pose.has_value()) {
+      if (pose_cv_from_world.rotation.angularDistance(camera_to_last_pose->rotation) * 180 / M_PI > 1.0 ||
+          (pose_cv_from_world.translation - camera_to_last_pose->translation).norm() > 0.3) {
+        camera_to_last_pose      = pose_cv_from_world;
         image_to_pose[file_path] = pose_cv_from_world;
       } else {
         DLOG(INFO) << "Ignore image " << file_path;
       }
     } else {
-      last_pose                = pose_cv_from_world;
+      camera_to_last_pose      = pose_cv_from_world;
       image_to_pose[file_path] = pose_cv_from_world;
     }
   }
 
+  DLOG(INFO) << "Read " << image_to_pose.size() << " image poses from " << filename;
   return image_to_pose;
 }
 
-std::unordered_map<std::string, colmap::Rigid3d> ReadImagePoses(int type, const std::string &pose_dirname) {
-  std::unordered_map<std::string, colmap::Rigid3d> ret;
-  switch (type) {
-    case 0: {
-      ret = ReadImagePosesType0(pose_dirname + "/transforms.json");
-    } break;
-    case 1:
-    case 2: {
-      std::unordered_map<std::string, colmap::Rigid3d> ret_left  = ReadImagePosesType1(pose_dirname + "/leftImgPose.txt");
-      std::unordered_map<std::string, colmap::Rigid3d> ret_right = ReadImagePosesType1(pose_dirname + "/rightImgPose.txt");
-      ret.insert(ret_left.begin(), ret_left.end());
-      ret.insert(ret_right.begin(), ret_right.end());
-    } break;
-    default: {
-      DLOG(FATAL) << "Unknown pose type: " << type;
-      break;
+void ReadPointCloudOffset(const std::string &filename, Eigen::Vector2d &offset, double &lon, double &lat) {
+  std::ifstream infile(filename);
+  if (infile.is_open()) {
+    std::string line;
+    std::getline(infile, line);  // Skip the header line
+    if (std::getline(infile, line)) {
+      std::replace(line.begin(), line.end(), ',', ' ');
+      std::istringstream iss(line);
+      iss >> offset.x() >> offset.y() >> lon >> lat;
     }
+    infile.close();
+  } else {
+    DLOG(ERROR) << "Failed to open file: " << filename;
+  }
+}
+
+void SaveXml(const std::string &filename, const std::unordered_map<colmap::image_t, colmap::Image> &images,
+             const std::unordered_map<colmap::camera_t, colmap::Camera> &cameras, std::vector<xcolor::MatchTrack> &match_tracks_merged,
+             double longitude, double latitude) {
+  BlocksExchange be;
+
+  SpatialReferenceSystem srs;
+  srs.id         = 0;
+  srs.name       = (boost::format("Local East-North-Up(ENU); origin: %.9fN %.9fE") % latitude % longitude).str();
+  srs.definition = (boost::format("ENU:%.9f,%.9f") % latitude % longitude).str();
+  be.addSpatialReferenceSystem(srs);
+
+  be.block.srs_id = srs.id;
+
+  for (auto &[camera_id, camera] : cameras) {
+    std::unordered_map<colmap::image_t, colmap::Image> select_images;
+    for (auto &[image_id, image] : images) {
+      if (image.CameraId() == camera_id) {
+        select_images[image_id] = image;
+      }
+    }
+    if (select_images.empty()) {
+      continue;
+    }
+
+    Photogroup pg;
+    pg.aspect_ratio            = 1.0;
+    pg.camera_model_type       = "Perspective";
+    pg.camera_orientation      = "XRightYDown";
+    pg.distortion.k1           = camera.params[3];
+    pg.distortion.k2           = camera.params[4];
+    pg.distortion.p1           = camera.params[5];
+    pg.distortion.p2           = camera.params[6];
+    pg.distortion.k3           = 0;
+    pg.principal_point.x       = camera.PrincipalPointX();
+    pg.principal_point.y       = camera.PrincipalPointY();
+    pg.sensor_size             = 24;
+    pg.focal_length_pixels     = camera.FocalLength();
+    pg.focal_length            = camera.FocalLength() / std::max(camera.width, camera.height) * pg.sensor_size;
+    pg.image_dimensions.width  = camera.width;
+    pg.image_dimensions.height = camera.height;
+    for (auto &[image_id, image] : select_images) {
+      Photo photo;
+      photo.id                 = image_id;
+      photo.far_depth          = 200;
+      photo.near_depth         = 2;
+      photo.median_depth       = 40;
+      photo.component          = camera_id;
+      photo.image_path         = FLAGS_images_path + "/" + image.Name();
+      auto pos                 = colmap::Inverse(image.CamFromWorld()).translation;
+      auto rot                 = image.CamFromWorld().rotation.matrix();
+      photo.pose.center.x      = pos.x();
+      photo.pose.center.y      = pos.y();
+      photo.pose.center.z      = pos.z();
+      photo.pose.rotation.m_00 = rot(0, 0);
+      photo.pose.rotation.m_01 = rot(0, 1);
+      photo.pose.rotation.m_02 = rot(0, 2);
+      photo.pose.rotation.m_10 = rot(1, 0);
+      photo.pose.rotation.m_11 = rot(1, 1);
+      photo.pose.rotation.m_12 = rot(1, 2);
+      photo.pose.rotation.m_20 = rot(2, 0);
+      photo.pose.rotation.m_21 = rot(2, 1);
+      photo.pose.rotation.m_22 = rot(2, 2);
+      pg.photos.push_back(photo);
+    }
+    be.block.photogroups.push_back(pg);
   }
 
-  DLOG(INFO) << "Read " << ret.size() << " image poses from " << pose_dirname;
-  return ret;
+  for (auto &track : match_tracks_merged) {
+    TiePoint tp;
+    tp.color.blue  = 1;
+    tp.color.green = 1;
+    tp.color.red   = 1;
+    tp.position.x  = track.point3D.point3D.x();
+    tp.position.y  = track.point3D.point3D.y();
+    tp.position.z  = track.point3D.point3D.z();
+    std::set<colmap::image_t> image_ids;
+    for (auto &point2D_on_image : track.point2D_on_imageN) {
+      if (image_ids.find(point2D_on_image->image_id) != image_ids.end()) {
+        DLOG(WARNING) << "dup point2D";
+        continue;
+      }
+      image_ids.insert(point2D_on_image->image_id);
+
+      Measurement mea;
+      mea.photo_id = point2D_on_image->image_id;
+      mea.x        = point2D_on_image->point_pixel.x();
+      mea.y        = point2D_on_image->point_pixel.y();
+      tp.measurements.push_back(mea);
+    }
+    be.addTiePoint(tp);
+  }
+
+  be.saveToXML(filename);
 }
 
 int main(int argc, char **argv) {
@@ -490,90 +546,12 @@ int main(int argc, char **argv) {
   std::unordered_map<colmap::image_t, colmap::Image> images;
   std::unordered_map<colmap::camera_t, colmap::Camera> cameras;
 
-  if (FLAGS_pose_type == 2) {
-    try {
-      std::unordered_map<std::string, colmap::Rigid3d> image_to_pose = ReadImagePoses(FLAGS_pose_type, FLAGS_initial_pose_dirname);
-
-      CHECK(boost::filesystem::is_regular_file(FLAGS_calibration_filename));
-
-      YAML::Node config = YAML::LoadFile(FLAGS_calibration_filename);
-
-      YAML::Node left_cam = config["intrinsic"]["fisheye_left"];
-      double left_a11     = left_cam["projection_parameters"]["A11"].as<double>();
-      double left_a22     = left_cam["projection_parameters"]["A22"].as<double>();
-      int left_width      = 0;
-      int left_height     = 0;
-      for (const auto &[image_name, pose] : image_to_pose) {
-        if (image_name.find("left") != std::string::npos) {
-          auto img = cv::imread(FLAGS_images_path + "/" + image_name);
-          if (img.empty()) {
-            DLOG(INFO) << "Read width & height from " + FLAGS_images_path + "/" + image_name << " failed.";
-          } else {
-            left_width  = img.cols;
-            left_height = img.rows;
-            break;
-          }
-        }
-      }
-
-      YAML::Node right_cam = config["intrinsic"]["fisheye_right"];
-      double right_a11     = right_cam["projection_parameters"]["A11"].as<double>();
-      double right_a22     = right_cam["projection_parameters"]["A22"].as<double>();
-      int right_width      = 0;
-      int right_height     = 0;
-      for (const auto &[image_name, pose] : image_to_pose) {
-        if (image_name.find("right") != std::string::npos) {
-          auto img = cv::imread(FLAGS_images_path + "/" + image_name);
-          if (img.empty()) {
-            DLOG(INFO) << "Read width & height from " + FLAGS_images_path + "/" + image_name << " failed.";
-          } else {
-            right_width  = img.cols;
-            right_height = img.rows;
-            break;
-          }
-        }
-      }
-
-      DLOG(INFO) << "left camera: " << left_a11 << ", " << left_a22 << ", " << left_width << ", " << left_height;
-      DLOG(INFO) << "right camera: " << right_a11 << ", " << right_a22 << ", " << right_width << ", " << right_height;
-
-      // write into image-poses.txt and camera-params.txt
-      std::ofstream image_poses_file(FLAGS_output_path + "/image-poses.txt");
-      image_poses_file << "camera_id image_name x y z rw rx ry rz" << std::endl;
-      for (const auto &[image_name, pose] : image_to_pose) {
-        if (image_name.find("left") != std::string::npos) {
-          image_poses_file << "1 " + image_name + " ";
-        } else {
-          image_poses_file << "2 " + image_name + " ";
-        }
-        auto pose_c2w = colmap::Inverse(pose);
-        image_poses_file << pose_c2w.translation.x() << " " << pose_c2w.translation.y() << " " << pose_c2w.translation.z() << " "
-                         << pose_c2w.rotation.w() << " " << pose_c2w.rotation.x() << " " << pose_c2w.rotation.y() << " " << pose_c2w.rotation.z()
-                         << std::endl;
-      }
-      image_poses_file.close();
-
-      std::ofstream camera_params_file(FLAGS_output_path + "/camera-params.txt");
-      camera_params_file << "camera_id model_id fx fy cx cy params..." << std::endl;
-      camera_params_file << "1 4 " << left_a11 << " " << left_a22 << " " << left_width / 2 << " " << left_height / 2 << " 0 0 0 0" << std::endl;
-      camera_params_file << "2 4 " << right_a11 << " " << right_a22 << " " << right_width / 2 << " " << right_height / 2 << " 0 0 0 0" << std::endl;
-      camera_params_file.close();
-
-      DLOG(INFO) << "done.";
-      std::cout << "done." << std::endl;
-      return 0;
-    } catch (const YAML::Exception &e) {
-      DLOG(ERROR) << "YAML error: " << e.what();
-      return 1;
-    } catch (const std::exception &e) {
-      DLOG(ERROR) << "Error: " << e.what();
-      return 1;
-    }
-  }
-
   // reload images
+  double longitude, latitude;
   {
-    std::unordered_map<std::string, colmap::Rigid3d> image_to_pose = ReadImagePoses(FLAGS_pose_type, FLAGS_initial_pose_dirname);
+    Eigen::Vector2d offset;
+    ReadPointCloudOffset(FLAGS_point_cloud_offset_filename, offset, longitude, latitude);
+    std::unordered_map<std::string, colmap::Rigid3d> image_to_pose = ReadImagePoses(FLAGS_initial_pose_filename, offset);
 
     std::unordered_set<std::string> image_names;
     for (const auto &pair : image_to_pose) {
@@ -603,7 +581,9 @@ int main(int argc, char **argv) {
     DLOG(INFO) << "Loading " << match_tracks.size() << " image pairs from " << FLAGS_database_filename;
   }
 
-  RunSFM(config, match_tracks, FLAGS_point_cloud_filename, images, cameras);
+  std::vector<xcolor::MatchTrack> match_tracks_merged;
+  RunSFM(config, match_tracks, FLAGS_point_cloud_filename, images, cameras, match_tracks_merged);
+  SaveXml(FLAGS_output_path + "/mvs.xml", images, cameras, match_tracks_merged, longitude, latitude);
 
   DLOG(INFO) << "done.";
   std::cout << "done." << std::endl;

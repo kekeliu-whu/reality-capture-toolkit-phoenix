@@ -36,6 +36,7 @@ find_package(Glog REQUIRED)
 find_package(GTest CONFIG REQUIRED)
 find_package(mimalloc CONFIG REQUIRED)
 find_package(yaml-cpp CONFIG REQUIRED)
+find_package(tinyxml CONFIG REQUIRED)
 
 include_directories(
   src
@@ -66,6 +67,7 @@ set(PGO_PRIVATE_LIBS
   ${OpenCV_LIBS}
   rapidjson
   yaml-cpp::yaml-cpp
+  unofficial-tinyxml::unofficial-tinyxml
 )
 
 function(add_private_tool name)
