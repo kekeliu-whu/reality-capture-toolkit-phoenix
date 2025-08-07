@@ -24,14 +24,14 @@
 #include "io/read_write.h"
 #include "io/xml_io.h"
 
-DEFINE_string(point_cloud_filename, "D:/ProjectX/project-3d/data/sfm/area3/sfm/colorized.las_normals.pcd", "Point cloud filename");
-DEFINE_string(point_cloud_offset_filename, "D:/ProjectX/project-3d/data/sfm/area3/sfm/colorized.las_offset.csv", "Point cloud offset filename");
-DEFINE_string(database_filename, "D:/ProjectX/project-3d/data/sfm/area3/sfm/xsfm.db", "Database filename");
-DEFINE_string(initial_pose_filename, "D:/ProjectX/project-3d/data/sfm/area3/sfm/images/ImgPose.txt", "Initial pose filename");
-DEFINE_string(calibration_filename, "D:/ProjectX/project-3d/data/sfm/area3/sfm/calibration.yaml", "");
-DEFINE_string(images_path, "D:/ProjectX/project-3d/data/sfm/area3/sfm/images", "");
+DEFINE_string(point_cloud_filename, "D:/ProjectX/project-3d/data/sfm/area2-1/sfm/colorized.las_normals.pcd", "Point cloud filename");
+DEFINE_string(point_cloud_offset_filename, "D:/ProjectX/project-3d/data/sfm/area2-1/sfm/colorized.las_offset.csv", "Point cloud offset filename");
+DEFINE_string(database_filename, "D:/ProjectX/project-3d/data/sfm/area2-1/sfm/xsfm.db", "Database filename");
+DEFINE_string(initial_pose_filename, "D:/ProjectX/project-3d/data/sfm/area2-1/sfm/images/ImgPose.txt", "Initial pose filename");
+DEFINE_string(calibration_filename, "D:/ProjectX/project-3d/data/sfm/area2-1/sfm/calibration.yaml", "");
+DEFINE_string(images_path, "D:/ProjectX/project-3d/data/sfm/area2-1/sfm/images", "");
 
-DEFINE_string(output_path, "D:/ProjectX/project-3d/data/sfm/area3/sfm", "Output path");
+DEFINE_string(output_path, "D:/ProjectX/project-3d/data/sfm/area2-1/sfm", "Output path");
 
 void SaveTriangulatedPoints(const std::vector<xcolor::MatchTrack> &match_tracks, const std::string &filename) {
   pcl::PointCloud<pcl::PointXYZINormal> point_cloud_out;
@@ -134,15 +134,15 @@ bool TryTriangulate(const xcolor::SfmConfig &config, const colmap::Image &image1
 
   // if lidar error is too large, the match will be ignored
   auto lidar_error = xcolor::ComputeLidarError(point3D, lidar_point, lidar_normal);
-  if (std::abs(lidar_error) > config.lidar_error_outlier_thresholds[iter]) {
+  if (std::abs(lidar_error) > config.lidar_error_outlier_thresholds_twoview[iter]) {
     return false;
   }
 
   // if reprojection error is too large, the match will be ignored
   auto projection_error1 = xcolor::ComputePixelError(point3D, point_on_image1.point_pixel, image1, camera1);
   auto projection_error2 = xcolor::ComputePixelError(point3D, point_in_image2.point_pixel, image2, camera2);
-  if (projection_error1.norm() > config.reproject_error_outlier_thresholds[iter] ||
-      projection_error2.norm() > config.reproject_error_outlier_thresholds[iter]) {
+  if (projection_error1.norm() > config.reproject_error_outlier_thresholds_twoview[iter] ||
+      projection_error2.norm() > config.reproject_error_outlier_thresholds_twoview[iter]) {
     return false;
   }
 
@@ -188,6 +188,7 @@ void RunMultipleViewBA(const xcolor::SfmConfig &config, const pcl::KdTreeFLANN<p
 
     std::unordered_set<colmap::image_t> optimized_image_ids;
 
+    xcolor::Histogram average_depths;
     int count = 0;
 #pragma omp parallel for
     for (int i = 0; i < match_tracks.size(); ++i) {
@@ -205,26 +206,61 @@ void RunMultipleViewBA(const xcolor::SfmConfig &config, const pcl::KdTreeFLANN<p
       double surfel_std;
       ComputeSurfel(point_cloud, k_indices, surfel_center, surfel_normal, surfel_std);
 
-      match_tracks[i].point3D.valid = 1;
-
 #pragma omp critical
       {
         if (++count % 10000 == 0) {
           DLOG(INFO) << "Triangulate point " << count;
         }
 
-        for (int k = 0; k < match_pair.point2D_on_imageN.size(); ++k) {
-          auto &point_on_image = *match_pair.point2D_on_imageN[k];
+        std::vector<int> valid_indices;
+        for (int j = 0; j < match_pair.point2D_on_imageN.size(); ++j) {
+          auto &point_on_image = *match_pair.point2D_on_imageN[j];
           auto &image          = images[point_on_image.image_id];
           auto &camera         = cameras[point_on_image.camera_id];
           CHECK(image.HasPose()) << "Image " << point_on_image.image_id << " has no pose.";
-          optimized_image_ids.insert(point_on_image.image_id);
-          xcolor::AddReprojectFactorToProblem(problem, point3D, point_on_image.point_pixel, image, camera, loss_function_image, residual_block_ids);
+          // if the point is not visible in the image, ignore it
+          if (xcolor::ComputePixelError(point3D, point_on_image.point_pixel, image, camera).norm() >
+              config.reproject_error_outlier_thresholds_multiview[iter]) {
+            continue;
+          }
+          valid_indices.push_back(j);
         }
-        double weight = 1 / sqrt(pow(0.05 / 6, 2) + surfel_std * surfel_std);
-        auto loss_function_lidar =
-            new ceres::ScaledLoss(new ceres::CauchyLoss(config.lidar_cauchy_loss_scale), weight * config.lidar_loss_scale, ceres::TAKE_OWNERSHIP);
-        xcolor::AddLidarFactorToProblem(problem, point3D, surfel_center, surfel_normal, loss_function_lidar, lidar_residual_block_ids);
+
+        if (valid_indices.size() < config.min_track_len) {
+          match_tracks[i].point3D.valid = 0;
+          DLOG(INFO) << "Match " << i << " has only " << valid_indices.size() << " valid points, skip it.";
+        } else {
+          match_tracks[i].point3D.valid = 1;
+
+          double average_depth = 0;
+          for (int j = 0; j < valid_indices.size(); ++j) {
+            auto &point_on_image = *match_pair.point2D_on_imageN[valid_indices[j]];
+            auto &image          = images[point_on_image.image_id];
+            auto &camera         = cameras[point_on_image.camera_id];
+            optimized_image_ids.insert(point_on_image.image_id);
+            xcolor::AddReprojectFactorToProblem(problem, point3D, point_on_image.point_pixel, image, camera, loss_function_image, residual_block_ids);
+
+            average_depth += (colmap::Inverse(image.CamFromWorld()).translation - match_pair.point3D.point3D).norm() / valid_indices.size();
+          }
+
+          average_depths.Add(average_depth);
+
+          auto lidar_error = xcolor::ComputeLidarError(point3D, surfel_center, surfel_normal);
+          if (std::abs(lidar_error) < config.lidar_error_outlier_thresholds_multiview[iter]) {
+            double weight_by_depth;
+            if (config.enable_weight_by_depth) {
+              double alpha    = -log(0.2) / (40 * 40);
+              weight_by_depth = exp(-alpha * average_depth * average_depth);
+            } else {
+              weight_by_depth = 1.0;
+            }
+
+            double weight            = 1 / sqrt(pow(0.05 / 6, 2) + surfel_std * surfel_std);
+            auto loss_function_lidar = new ceres::ScaledLoss(new ceres::CauchyLoss(config.lidar_cauchy_weight),
+                                                             weight_by_depth * weight * config.lidar_weight_scale, ceres::TAKE_OWNERSHIP);
+            xcolor::AddLidarFactorToProblem(problem, point3D, surfel_center, surfel_normal, loss_function_lidar, lidar_residual_block_ids);
+          }
+        }
       }
     }
     DLOG(INFO) << optimized_image_ids.size() << " images are used.";
@@ -236,8 +272,9 @@ void RunMultipleViewBA(const xcolor::SfmConfig &config, const pcl::KdTreeFLANN<p
     int valid_count = std::accumulate(match_tracks.begin(), match_tracks.end(), 0, [](int sum, auto &a) { return sum + a.point3D.valid; });
     DLOG(INFO) << valid_count << "/" << match_tracks.size() << " (" << valid_count * 100.0 / match_tracks.size() << "%) matches are valid.";
 
-    xcolor::PrintResidualHistogram(config.reproject_error_outlier_thresholds[iter], problem, residual_block_ids, "image");
-    xcolor::PrintResidualHistogram(config.lidar_error_outlier_thresholds[iter], problem, lidar_residual_block_ids, "lidar");
+    //DLOG(INFO) << "Average depth: " << average_depths.ToString(20);
+    xcolor::PrintResidualHistogram(config.reproject_error_outlier_thresholds_multiview[iter], problem, residual_block_ids, "image");
+    xcolor::PrintResidualHistogram(config.reproject_error_outlier_thresholds_multiview[iter], problem, lidar_residual_block_ids, "lidar");
     SaveTriangulatedPoints(match_tracks, FLAGS_output_path + "/triangulated-multi" + std::to_string(iter) + ".pcd");
 
     ceres::Solver::Summary summary;
@@ -248,8 +285,8 @@ void RunMultipleViewBA(const xcolor::SfmConfig &config, const pcl::KdTreeFLANN<p
     ceres::Solve(options, &problem, &summary);
     DLOG(INFO) << summary.FullReport();
 
-    xcolor::PrintResidualHistogram(config.reproject_error_outlier_thresholds[iter], problem, residual_block_ids, "image_refined");
-    xcolor::PrintResidualHistogram(config.lidar_error_outlier_thresholds[iter], problem, lidar_residual_block_ids, "lidar_refined");
+    xcolor::PrintResidualHistogram(config.reproject_error_outlier_thresholds_multiview[iter], problem, residual_block_ids, "image_refined");
+    xcolor::PrintResidualHistogram(config.lidar_error_outlier_thresholds_multiview[iter], problem, lidar_residual_block_ids, "lidar_refined");
     SaveTriangulatedPoints(match_tracks, FLAGS_output_path + "/triangulated-multi" + std::to_string(iter) + "-refined.pcd");
 
     SaveImagePoses(FLAGS_output_path + "/image-poses.txt", optimized_image_ids, images, pose_priors);
@@ -265,7 +302,7 @@ void RunTwoViewBA(const xcolor::SfmConfig &config, const pcl::KdTreeFLANN<pcl::P
     ceres::Problem problem;
     auto loss_function_image = new ceres::CauchyLoss(config.reproject_cauchy_loss_scale);
     auto loss_function_lidar =
-        new ceres::ScaledLoss(new ceres::CauchyLoss(config.lidar_cauchy_loss_scale), config.lidar_loss_scale, ceres::TAKE_OWNERSHIP);
+        new ceres::ScaledLoss(new ceres::CauchyLoss(config.lidar_cauchy_weight), config.lidar_weight_scale, ceres::TAKE_OWNERSHIP);
     std::vector<ceres::ResidualBlockId> residual_block_ids;
     std::vector<ceres::ResidualBlockId> lidar_residual_block_ids;
 
@@ -318,8 +355,8 @@ void RunTwoViewBA(const xcolor::SfmConfig &config, const pcl::KdTreeFLANN<pcl::P
     int valid_count = std::accumulate(match_tracks.begin(), match_tracks.end(), 0, [](int sum, auto &a) { return sum + a.point3D.valid; });
     DLOG(INFO) << valid_count << "/" << match_tracks.size() << " (" << valid_count * 100.0 / match_tracks.size() << "%) matches are valid.";
 
-    xcolor::PrintResidualHistogram(config.reproject_error_outlier_thresholds[iter], problem, residual_block_ids, "image");
-    xcolor::PrintResidualHistogram(config.lidar_error_outlier_thresholds[iter], problem, lidar_residual_block_ids, "lidar");
+    xcolor::PrintResidualHistogram(config.reproject_error_outlier_thresholds_twoview[iter], problem, residual_block_ids, "image");
+    xcolor::PrintResidualHistogram(config.lidar_error_outlier_thresholds_twoview[iter], problem, lidar_residual_block_ids, "lidar");
     SaveTriangulatedPoints(match_tracks, FLAGS_output_path + "/triangulated" + std::to_string(iter) + ".pcd");
 
     ceres::Solver::Summary summary;
@@ -330,8 +367,8 @@ void RunTwoViewBA(const xcolor::SfmConfig &config, const pcl::KdTreeFLANN<pcl::P
     ceres::Solve(options, &problem, &summary);
     DLOG(INFO) << summary.FullReport();
 
-    xcolor::PrintResidualHistogram(config.reproject_error_outlier_thresholds[iter], problem, residual_block_ids, "image_refined");
-    xcolor::PrintResidualHistogram(config.lidar_error_outlier_thresholds[iter], problem, lidar_residual_block_ids, "lidar_refined");
+    xcolor::PrintResidualHistogram(config.reproject_error_outlier_thresholds_twoview[iter], problem, residual_block_ids, "image_refined");
+    xcolor::PrintResidualHistogram(config.lidar_error_outlier_thresholds_twoview[iter], problem, lidar_residual_block_ids, "lidar_refined");
     SaveTriangulatedPoints(match_tracks, FLAGS_output_path + "/triangulated" + std::to_string(iter) + "-refined.pcd");
 
     SaveImagePoses(FLAGS_output_path + "/image-poses.txt", optimized_image_ids, images, pose_priors);
@@ -339,9 +376,9 @@ void RunTwoViewBA(const xcolor::SfmConfig &config, const pcl::KdTreeFLANN<pcl::P
   }
 }
 
-void RunSFM(const xcolor::SfmConfig &config, std::vector<xcolor::MatchTrack> &match_tracks, const std::string &point_cloud_filename,
-            std::unordered_map<colmap::image_t, colmap::Image> &images, std::unordered_map<colmap::camera_t, colmap::Camera> &cameras,
-            std::vector<xcolor::MatchTrack> &match_tracks_merged) {
+void RunSFM(const xcolor::SfmConfig &config, const std::string &point_cloud_filename, std::unordered_map<colmap::image_t, colmap::Image> &images,
+            std::unordered_map<colmap::camera_t, colmap::Camera> &cameras, std::vector<xcolor::MatchTrack> &match_tracks_coarse,
+            std::vector<xcolor::MatchTrack> &match_tracks_fine) {
   pcl::PointCloud<pcl::PointXYZINormal> point_cloud;
   int load_ply_status = pcl::io::loadPCDFile(point_cloud_filename, point_cloud);
   CHECK_NE(load_ply_status, -1);
@@ -356,11 +393,11 @@ void RunSFM(const xcolor::SfmConfig &config, std::vector<xcolor::MatchTrack> &ma
     pose_priors[image.ImageId()] = image.CamFromWorld();
   }
 
-  RunTwoViewBA(config, kdtree, point_cloud, pose_priors, images, cameras, match_tracks);
+  RunTwoViewBA(config, kdtree, point_cloud, pose_priors, images, cameras, match_tracks_coarse);
 
-  MergeTrack(match_tracks, match_tracks_merged, config.use_all_track, 3);
+  MergeTrack(match_tracks_coarse, match_tracks_fine, config.use_all_track, config.min_track_len);
 
-  RunMultipleViewBA(config, kdtree, point_cloud, pose_priors, images, cameras, match_tracks_merged);
+  RunMultipleViewBA(config, kdtree, point_cloud, pose_priors, images, cameras, match_tracks_fine);
 
   {
     std::vector<colmap::Point3D> points3D;
@@ -432,8 +469,8 @@ void ReadPointCloudOffset(const std::string &filename, Eigen::Vector2d &offset, 
 }
 
 void SaveXml(const std::string &filename, const std::unordered_map<colmap::image_t, colmap::Image> &images,
-             const std::unordered_map<colmap::camera_t, colmap::Camera> &cameras, std::vector<xcolor::MatchTrack> &match_tracks_merged,
-             double longitude, double latitude) {
+             const std::unordered_map<colmap::camera_t, colmap::Camera> &cameras, std::vector<xcolor::MatchTrack> &match_tracks, double longitude,
+             double latitude) {
   BlocksExchange be;
 
   SpatialReferenceSystem srs;
@@ -498,7 +535,7 @@ void SaveXml(const std::string &filename, const std::unordered_map<colmap::image
     be.block.photogroups.push_back(pg);
   }
 
-  for (auto &track : match_tracks_merged) {
+  for (auto &track : match_tracks) {
     TiePoint tp;
     tp.color.blue  = 1;
     tp.color.green = 1;
@@ -542,7 +579,7 @@ int main(int argc, char **argv) {
 
   xcolor::SfmConfig config{cores_used};
 
-  std::vector<xcolor::MatchTrack> match_tracks;
+  std::vector<xcolor::MatchTrack> match_tracks_coarse;
   std::unordered_map<colmap::image_t, colmap::Image> images;
   std::unordered_map<colmap::camera_t, colmap::Camera> cameras;
 
@@ -577,13 +614,13 @@ int main(int argc, char **argv) {
     }
     DLOG(INFO) << "Image count with pose: " << image_count << "/" << images.size() << " (" << image_count * 100.0 / images.size() << "%)";
 
-    match_tracks = GenerateMatchPairs(corr_graph, images, config);
-    DLOG(INFO) << "Loading " << match_tracks.size() << " image pairs from " << FLAGS_database_filename;
+    match_tracks_coarse = GenerateMatchPairs(corr_graph, images, config);
+    DLOG(INFO) << "Loading " << match_tracks_coarse.size() << " image pairs from " << FLAGS_database_filename;
   }
 
-  std::vector<xcolor::MatchTrack> match_tracks_merged;
-  RunSFM(config, match_tracks, FLAGS_point_cloud_filename, images, cameras, match_tracks_merged);
-  SaveXml(FLAGS_output_path + "/mvs.xml", images, cameras, match_tracks_merged, longitude, latitude);
+  std::vector<xcolor::MatchTrack> match_tracks_fine;
+  RunSFM(config, FLAGS_point_cloud_filename, images, cameras, match_tracks_coarse, match_tracks_fine);
+  SaveXml(FLAGS_output_path + "/mvs.xml", images, cameras, match_tracks_fine, longitude, latitude);
 
   DLOG(INFO) << "done.";
   std::cout << "done." << std::endl;

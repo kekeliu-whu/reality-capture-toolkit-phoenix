@@ -208,7 +208,7 @@ void AddPosePriorsToProblem(const SfmConfig &config, ceres::Problem &problem, co
     auto &pose       = images.at(image_id).CamFromWorld();
     auto &pose_prior = pose_priors.at(image_id);
     problem.AddResidualBlock(PosePriorCostFunction::Create(pose_prior.rotation, pose_prior.translation, info_matrix),
-                             new ceres::ScaledLoss(nullptr, config.pose_prior_scale_weight, ceres::TAKE_OWNERSHIP),
+                             new ceres::ScaledLoss(nullptr, config.pose_prior_weight_scale, ceres::TAKE_OWNERSHIP),
                              pose.rotation.coeffs().data(), pose.translation.data());
     problem.SetManifold(pose.rotation.coeffs().data(), new ceres::EigenQuaternionManifold());
   }
