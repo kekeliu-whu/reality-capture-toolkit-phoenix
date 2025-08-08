@@ -5,7 +5,7 @@
 #include <pcl/io/pcd_io.h>
 #include <fstream>
 
-#include "read_write.h"
+#include "io/colmap_io.h"
 
 namespace xcolor {
 

@@ -6,7 +6,7 @@
 #include "common/types.h"
 #include "core/utils.h"
 #include "core/xcolor_lib.h"
-#include "io/read_write.h"
+#include "io/colmap_io.h"
 
 DEFINE_string(images_path, "D:/BaiduNetdiskDownload/s10-colmap/images", "Images path");
 DEFINE_string(sfm_result_path, "D:/BaiduNetdiskDownload/s10-colmap", "SFM databaset filename");

@@ -13,7 +13,7 @@ endif()
 
 if(MSVC)
   add_compile_options(/MP)
-  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/MD /Zi /O2 /Ob1")
+  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/MD /Zi /O2 /Ob3")
 endif()
 
 add_definitions(-D_USE_MATH_DEFINES)
@@ -47,12 +47,14 @@ include_directories(
 
 set(
   PGO_PRIVATE_SRCS
+  src/common/histogram.cc
   src/core/xcolor_lib.cc
-  src/io/read_write.cc
   src/core/xsfm_lib.cc
   src/core/utils.cc
-  src/common/histogram.cc
-  src/io/read_write.cc
+  src/core/run_ba.cc
+  src/io/colmap_io.cc
+  src/io/xml_io.cc
+  src/io/io_utils.cc
 )
 
 set(PGO_PRIVATE_LIBS

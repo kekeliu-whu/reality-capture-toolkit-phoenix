@@ -1,7 +1,5 @@
 #pragma once
 
-#include <colmap/scene/database.h>
-#include <pcl/io/ply_io.h>
 #include <pcl/point_cloud.h>
 
 namespace xcolor {

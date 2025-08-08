@@ -2,54 +2,14 @@
 
 #include <ceres/ceres.h>
 #include <colmap/estimators/cost_functions.h>
-#include <colmap/geometry/triangulation.h>
 #include <colmap/scene/database.h>
 #include <colmap/scene/database_cache.h>
-#include <colmap/scene/reconstruction.h>
-#include <colmap/scene/reconstruction_io.h>
-#include <glog/logging.h>
-#include <omp.h>
 #include <pcl/io/pcd_io.h>
-#include <pcl/io/ply_io.h>
-#include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/point_types.h>
-#include <boost/filesystem.hpp>
+
+#include "core/sfm_config.h"
 
 namespace xcolor {
-
-struct SfmConfig {
-  int min_num_matches         = 15;
-  bool ignore_watermarks      = false;
-  bool refine_focal_length    = true;
-  bool refine_principal_point = true;
-  bool refine_extra_params    = true;
-  double min_tri_angle        = 5;
-
-  int outer_opt_num_two_view                           = 1;
-  double reproject_error_outlier_thresholds_twoview[1] = {6};    // pixels
-  double lidar_error_outlier_thresholds_twoview[1]     = {0.6};  // meters
-
-  int outer_opt_num_multi_view                           = 3;
-  double reproject_error_outlier_thresholds_multiview[3] = {5, 4, 3};        // pixels
-  double lidar_error_outlier_thresholds_multiview[3]     = {0.4, 0.3, 0.15};  // meters
-
-  double reproject_cauchy_loss_scale = 1.5;  // pixels, half of the smallest reproject_error_outlier_thresholds
-
-  double lidar_cauchy_weight  = 0.1;  // meters, half of the smallest lidar_error_outlier_thresholds
-  double lidar_weight_scale   = 0.2;
-  bool enable_weight_by_depth = true;
-
-  double pose_prior_rotation_weight    = 0.2 * M_PI / 180.0;
-  double pose_prior_translation_weight = 0.05;
-  double pose_prior_weight_scale       = 1;
-
-  int ba_optimization_num_threads = 1;
-
-  bool use_all_track = false;
-  int min_track_len  = 3;
-
-  SfmConfig(int cores_used) { ba_optimization_num_threads = cores_used; }
-};
 
 struct Point2DInfo {
   typedef std::shared_ptr<Point2DInfo> Ptr;
@@ -62,15 +22,23 @@ struct Point2DInfo {
 struct Point3DInfo {
   typedef std::shared_ptr<Point3DInfo> Ptr;
 
-  bool valid = false;  // =false means this point3D is not used in the optimization
   Eigen::Vector3d point3D;
   ceres::ResidualBlockId residual_block_id       = nullptr;
   ceres::ResidualBlockId lidar_residual_block_id = nullptr;
 };
 
+enum class TrackConstraintType {
+  kUnconstrained,  // no constraints
+  kVisualOnly,     // only have visual constraints
+  kVisualAndLidar  // have both visual and lidar constraints
+};
+
 struct MatchTrack {
   std::vector<Point2DInfo::Ptr> point2D_on_imageN;
   Point3DInfo point3D;
+  TrackConstraintType constraint_type;
+
+  MatchTrack() { constraint_type = TrackConstraintType::kUnconstrained; }
 };
 
 class LidarPlaneCostFunction {
@@ -151,6 +119,11 @@ void AddPosePriorsToProblem(const SfmConfig &config, ceres::Problem &problem, co
 void PrintResidualHistogram(double threshold, ceres::Problem &problem, const std::vector<ceres::ResidualBlockId> &residual_block_ids,
                             const std::string &name);
 
-bool MergeTrack(const std::vector<MatchTrack> &match_tracks, std::vector<MatchTrack> &match_tracks_merged, bool use_all_track, int min_track_size);
+bool MergeTrack(const std::vector<MatchTrack> &match_tracks, std::vector<MatchTrack> &match_tracks_merged, int min_track_size);
+
+void ComputeSurfel(const pcl::PointCloud<pcl::PointXYZINormal> &point_cloud, const std::vector<int> &k_indices, Eigen::Vector3d &surfel_center,
+                   Eigen::Vector3d &surfel_normal, double &surfel_std) ;
+
+void PrintMatchTrackStatistics(const std::vector<xcolor::MatchTrack> &match_tracks) ;
 
 }  // namespace xcolor

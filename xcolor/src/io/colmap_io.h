@@ -1,5 +1,7 @@
 #pragma once
 
+#include <colmap/scene/point3d.h>
+
 #include "common/types.h"
 
 namespace xcolor {

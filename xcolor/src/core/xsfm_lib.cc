@@ -3,31 +3,23 @@
 
 #include <ceres/ceres.h>
 #include <colmap/estimators/cost_functions.h>
-#include <colmap/geometry/triangulation.h>
 #include <colmap/scene/database.h>
 #include <colmap/scene/database_cache.h>
-#include <colmap/scene/reconstruction.h>
-#include <colmap/scene/reconstruction_io.h>
 #include <glog/logging.h>
-#include <omp.h>
 #include <pcl/io/pcd_io.h>
-#include <pcl/io/ply_io.h>
-#include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/point_types.h>
-#include <boost/filesystem.hpp>
 
 #include "common/histogram.h"
-#include "io/read_write.h"
+#include "io/colmap_io.h"
 
 namespace xcolor {
 
-std::vector<std::vector<int>> ClusterByBFS(const std::vector<MatchTrack> &match_tracks, bool use_all_track) {
+std::vector<std::vector<int>> ClusterByBFS(const std::vector<MatchTrack> &match_tracks) {
   int N = int(match_tracks.size());
   std::unordered_map<Point2DInfo::Ptr, std::vector<int>> pt2pairs;
 
   std::vector<int8_t> valid(N, false);
   for (int i = 0; i < N; ++i) {
-    if (!(use_all_track || match_tracks[i].point3D.valid)) continue;
     valid[i] = true;
     for (auto &pt : match_tracks[i].point2D_on_imageN) {
       pt2pairs[pt].push_back(i);
@@ -67,7 +59,7 @@ std::vector<std::vector<int>> ClusterByBFS(const std::vector<MatchTrack> &match_
 }
 
 // 将colmap的所有匹配对读取进入Track，每个Track包含两个Point2DInfo
-// 单一的一个特征点只有一个Point2DInfo实例，例如(image_id, point2D_idx)这个特征点只使用一个Point2DInfo实例
+// 单一的一个特征点只有一个Point2DInfo实例，例如(image_id, point2D_idx)这个特征点只对应Point2DInfo实例（通过智能指针实现）
 std::vector<MatchTrack> GenerateMatchPairs(const colmap::CorrespondenceGraph &corr_graph,
                                            const std::unordered_map<colmap::image_t, colmap::Image> &images, const SfmConfig &config) {
   std::vector<MatchTrack> match_tracks;
@@ -208,8 +200,8 @@ void AddPosePriorsToProblem(const SfmConfig &config, ceres::Problem &problem, co
     auto &pose       = images.at(image_id).CamFromWorld();
     auto &pose_prior = pose_priors.at(image_id);
     problem.AddResidualBlock(PosePriorCostFunction::Create(pose_prior.rotation, pose_prior.translation, info_matrix),
-                             new ceres::ScaledLoss(nullptr, config.pose_prior_weight_scale, ceres::TAKE_OWNERSHIP),
-                             pose.rotation.coeffs().data(), pose.translation.data());
+                             new ceres::ScaledLoss(nullptr, config.pose_prior_weight_scale, ceres::TAKE_OWNERSHIP), pose.rotation.coeffs().data(),
+                             pose.translation.data());
     problem.SetManifold(pose.rotation.coeffs().data(), new ceres::EigenQuaternionManifold());
   }
 }
@@ -231,8 +223,7 @@ void PrintResidualHistogram(double threshold, ceres::Problem &problem, const std
   DLOG(INFO) << name << ": " << hist.ToString(10);
 }
 
-std::vector<double> ComputeRMSEByClusterCentroid(const std::vector<std::vector<int>> &clusters, const std::vector<MatchTrack> &match_tracks,
-                                                 bool use_all_track) {
+std::vector<double> ComputeRMSEByClusterCentroid(const std::vector<std::vector<int>> &clusters, const std::vector<MatchTrack> &match_tracks) {
   std::vector<double> rmse_list;
 
   for (const auto &cluster : clusters) {
@@ -241,10 +232,7 @@ std::vector<double> ComputeRMSEByClusterCentroid(const std::vector<std::vector<i
     std::vector<Eigen::Vector3d> points;
 
     for (int idx : cluster) {
-      auto result = match_tracks[idx];
-      if (use_all_track || result.point3D.valid) {
-        points.push_back(result.point3D.point3D);
-      }
+      points.push_back(match_tracks[idx].point3D.point3D);
     }
 
     Eigen::Vector3d center(0, 0, 0);
@@ -268,7 +256,7 @@ std::vector<double> ComputeRMSEByClusterCentroid(const std::vector<std::vector<i
 }
 
 std::vector<std::vector<int>> DBSCANClusterIndices(const std::vector<MatchTrack> &match_tracks_total, const std::vector<int> &indices, double eps,
-                                                   int min_pts, bool use_all_track, int min_track_size) {
+                                                   int min_pts, int min_track_size) {
   DCHECK_GE(min_track_size, 2);
   if (match_tracks_total.size() + 1 < min_track_size) {
     return {};
@@ -281,13 +269,12 @@ std::vector<std::vector<int>> DBSCANClusterIndices(const std::vector<MatchTrack>
 
   for (size_t idx_i = 0; idx_i < indices.size(); ++idx_i) {
     int i = indices[idx_i];
-    if (!(use_all_track || match_tracks_total[i].point3D.valid) || visited[i]) continue;
+    if (visited[i]) continue;
 
     visited[i] = true;
     std::vector<int> neighbors;
 
     for (int j : indices) {
-      if (!(use_all_track || match_tracks_total[j].point3D.valid)) continue;
       if (distance(match_tracks_total[i].point3D.point3D, match_tracks_total[j].point3D.point3D) < eps) {
         neighbors.push_back(j);
       }
@@ -309,7 +296,6 @@ std::vector<std::vector<int>> DBSCANClusterIndices(const std::vector<MatchTrack>
 
         std::vector<int> sub_neighbors;
         for (int k : indices) {
-          if (!(use_all_track || match_tracks_total[k].point3D.valid)) continue;
           if (distance(match_tracks_total[j].point3D.point3D, match_tracks_total[k].point3D.point3D) < eps) {
             sub_neighbors.push_back(k);
           }
@@ -337,8 +323,8 @@ std::vector<std::vector<int>> DBSCANClusterIndices(const std::vector<MatchTrack>
 }
 
 void PrintClusterMetrics(std::vector<MatchTrack> &match_tracks_valid, std::vector<std::vector<int>> &clusters,
-                         std::vector<std::vector<std::vector<int>>> &sub_clusters, bool use_all_track) {
-  std::vector<double> cluster_rmses = ComputeRMSEByClusterCentroid(clusters, match_tracks_valid, use_all_track);
+                         std::vector<std::vector<std::vector<int>>> &sub_clusters) {
+  std::vector<double> cluster_rmses = ComputeRMSEByClusterCentroid(clusters, match_tracks_valid);
   Histogram hist;
   for (int i = 0; i < clusters.size(); ++i) {
     // only use cluster with more than 1 match track
@@ -382,20 +368,20 @@ std::vector<MatchTrack> MergeMatchTracks(const std::vector<MatchTrack> &match_tr
   return match_tracks_ret;
 }
 
-bool MergeTrack(const std::vector<MatchTrack> &match_tracks, std::vector<MatchTrack> &match_tracks_merged, bool use_all_track, int min_track_size) {
+bool MergeTrack(const std::vector<MatchTrack> &match_tracks_coarse, std::vector<MatchTrack> &match_tracks_fine, int min_track_size) {
   std::vector<MatchTrack> match_tracks_valid;
 
-  std::copy_if(match_tracks.begin(), match_tracks.end(), std::back_inserter(match_tracks_valid),
-               [use_all_track](const MatchTrack &mt) { return use_all_track || mt.point3D.valid; });
+  std::copy_if(match_tracks_coarse.begin(), match_tracks_coarse.end(), std::back_inserter(match_tracks_valid),
+               [](const MatchTrack &mt) { return mt.constraint_type != TrackConstraintType::kUnconstrained; });
 
-  std::vector<std::vector<int>> clusters = ClusterByBFS(match_tracks_valid, use_all_track);
+  std::vector<std::vector<int>> clusters = ClusterByBFS(match_tracks_valid);
   DLOG(INFO) << "Cluster: " << match_tracks_valid.size() << " match pairs -> " << clusters.size() << " match tracks.";
 
   int count = 0;
   std::vector<std::vector<std::vector<int>>> sub_clusters(clusters.size());
 #pragma omp parallel for
   for (int i = 0; i < static_cast<int>(clusters.size()); ++i) {
-    sub_clusters[i] = DBSCANClusterIndices(match_tracks_valid, clusters[i], 0.03, 2, use_all_track, min_track_size);
+    sub_clusters[i] = DBSCANClusterIndices(match_tracks_valid, clusters[i], 0.03, 2, min_track_size);
 #pragma omp critical
     {
       if (++count % 10000 == 0) {
@@ -404,12 +390,49 @@ bool MergeTrack(const std::vector<MatchTrack> &match_tracks, std::vector<MatchTr
     }
   }
 
-  PrintClusterMetrics(match_tracks_valid, clusters, sub_clusters, use_all_track);
+  PrintClusterMetrics(match_tracks_valid, clusters, sub_clusters);
 
-  match_tracks_merged = MergeMatchTracks(match_tracks_valid, sub_clusters);
-  DLOG(INFO) << "Finally, merge " << match_tracks_valid.size() << " match track into " << match_tracks_merged.size() << " tracks ";
+  match_tracks_fine = MergeMatchTracks(match_tracks_valid, sub_clusters);
+  DLOG(INFO) << "Finally, merge " << match_tracks_valid.size() << " match track into " << match_tracks_fine.size() << " tracks ";
 
   return true;
+}
+
+void ComputeSurfel(const pcl::PointCloud<pcl::PointXYZINormal> &point_cloud, const std::vector<int> &k_indices, Eigen::Vector3d &surfel_center,
+                   Eigen::Vector3d &surfel_normal, double &surfel_std) {
+  int k = k_indices.size();
+
+  Eigen::Vector3d center = Eigen::Vector3d::Zero();
+  for (int i = 0; i < k; i++) {
+    center += point_cloud[k_indices[i]].getVector3fMap().cast<double>();
+  }
+  center /= k;
+
+  Eigen::Matrix3d covariance = Eigen::Matrix3d::Zero();
+  for (int i = 0; i < k; i++) {
+    Eigen::Vector3d diff = point_cloud[k_indices[i]].getVector3fMap().cast<double>() - center;
+    covariance += diff * diff.transpose();
+  }
+  covariance /= k;
+
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eigensolver(covariance);
+  Eigen::Matrix3d eigenvectors = eigensolver.eigenvectors();
+  Eigen::Vector3d normal       = eigenvectors.col(0);
+
+  surfel_center = center;
+  surfel_normal = normal;
+  surfel_std    = std::sqrt(std::max(0.0, eigensolver.eigenvalues()[0]));  // standard deviation along the normal direction
+}
+
+void PrintMatchTrackStatistics(const std::vector<xcolor::MatchTrack> &match_tracks) {
+  int matched_visual_only_count      = std::accumulate(match_tracks.begin(), match_tracks.end(), 0, [](int sum, auto &e) {
+    return sum + (e.constraint_type == xcolor::TrackConstraintType::kVisualOnly);
+  });
+  int matched_visual_and_lidar_count = std::accumulate(match_tracks.begin(), match_tracks.end(), 0, [](int sum, auto &e) {
+    return sum + (e.constraint_type == xcolor::TrackConstraintType::kVisualAndLidar);
+  });
+  DLOG(INFO) << "matched_visual_only: " << matched_visual_only_count * 100.0 / match_tracks.size()
+             << "% matched_visual_and_lidar_count: " << matched_visual_and_lidar_count * 100.0 / match_tracks.size() << "%";
 }
 
 }  // namespace xcolor

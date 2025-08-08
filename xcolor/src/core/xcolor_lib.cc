@@ -6,7 +6,6 @@
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 #include <pcl/io/pcd_io.h>
-#include <pcl/range_image/range_image_planar.h>
 #include <opencv2/opencv.hpp>
 
 #include "common/types.h"
