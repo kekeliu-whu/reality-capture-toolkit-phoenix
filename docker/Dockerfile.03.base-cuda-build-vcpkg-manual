@@ -15,7 +15,7 @@ RUN mkdir /buildspace && cd /buildspace \
     && ./bootstrap-vcpkg.sh
 
 RUN for i in $(seq 1 20); do \
-    /buildspace/vcpkg/vcpkg install boost pcl colmap[cuda] opencv cgal pdal rapidjson gtest mimalloc[override] crashpad yaml-cpp --recurse && break || { \
+    /buildspace/vcpkg/vcpkg install boost pcl colmap[cuda] ceres[cuda] opencv cgal pdal rapidjson gtest mimalloc[override] crashpad yaml-cpp tinyxml --recurse && break || { \
       echo "Attempt $i failed. Retrying in 10 seconds..."; sleep 10; }; \
   done; \
   if [ $i -eq 20 ]; then echo "Installation failed after 20 attempts." && exit 1; fi; \
