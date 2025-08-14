@@ -1,6 +1,6 @@
-
 #include "io/xml_io.h"
 
+#include <proj.h>
 #include <tinyxml.h>
 #include <boost/format.hpp>
 #include <fstream>
@@ -286,11 +286,57 @@ class BlocksExchange {
   }
 };
 
+namespace {
+
+Eigen::Vector2d GetLocalENU(const Eigen::Vector2d& coord, const Eigen::Vector2d& offset, const std::string& proj_str, const Eigen::Vector2d& origin) {
+  Eigen::Vector2d coord_with_offset = coord + offset;
+
+  // 初始化PROJ上下文
+  PJ_CONTEXT* ctx = proj_context_create();
+
+  // 构建源投影和目标ENU投影字符串
+  std::ostringstream oss;
+  oss << "+proj=aeqd +lat_0=" << std::fixed << std::setprecision(9) << origin.y() 
+      << " +lon_0=" << std::fixed << std::setprecision(9) << origin.x() 
+      << " +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs";
+  std::string target_enu_proj_str = oss.str();
+
+  // 直接创建从源投影到目标ENU的转换管道
+  PJ* transformer = proj_create_crs_to_crs(ctx, proj_str.c_str(), target_enu_proj_str.c_str(), nullptr);
+
+  if (!transformer) {
+    proj_context_destroy(ctx);
+    return Eigen::Vector2d::Zero();
+  }
+
+  // 执行直接转换
+  PJ_COORD coord_source = proj_coord(coord_with_offset.x(), coord_with_offset.y(), 0, 0);
+  PJ_COORD coord_enu    = proj_trans(transformer, PJ_FWD, coord_source);
+
+  Eigen::Vector2d result = Eigen::Vector2d::Zero();
+  if (coord_enu.xy.x != HUGE_VAL && coord_enu.xy.y != HUGE_VAL) {
+    result.x() = coord_enu.xy.x;  // East
+    result.y() = coord_enu.xy.y;  // North
+  }
+
+  // 清理资源
+  proj_destroy(transformer);
+  proj_context_destroy(ctx);
+
+  return result;
+}
+
+}  // namespace
+
 namespace xcolor {
 
 void SaveXml(const std::string& filename, const std::unordered_map<colmap::image_t, colmap::Image>& images,
-             const std::unordered_map<colmap::camera_t, colmap::Camera>& cameras, std::vector<MatchTrack>& match_tracks, double longitude,
-             double latitude, const std::string& images_path) {
+             const std::unordered_map<colmap::camera_t, colmap::Camera>& cameras, std::vector<MatchTrack>& match_tracks,
+             const Eigen::Vector2d& offset, const std::string& proj_str, const std::string& images_path) {
+  // todo kk
+  double longitude = 113.4772024985;
+  double latitude  = 22.8849155248;
+
   BlocksExchange be;
 
   SpatialReferenceSystem srs;
@@ -330,26 +376,27 @@ void SaveXml(const std::string& filename, const std::unordered_map<colmap::image
     pg.image_dimensions.height = camera.height;
     for (auto& [image_id, image] : select_images) {
       Photo photo;
-      photo.id                 = image_id;
-      photo.far_depth          = 200;
-      photo.near_depth         = 2;
-      photo.median_depth       = 40;
-      photo.component          = 1;
-      photo.image_path         = images_path + "/" + image.Name();
-      auto pos                 = colmap::Inverse(image.CamFromWorld()).translation;
-      auto rot                 = image.CamFromWorld().rotation.matrix();
-      photo.pose.center.x      = pos.x();
-      photo.pose.center.y      = pos.y();
-      photo.pose.center.z      = pos.z();
-      photo.pose.rotation.m_00 = rot(0, 0);
-      photo.pose.rotation.m_01 = rot(0, 1);
-      photo.pose.rotation.m_02 = rot(0, 2);
-      photo.pose.rotation.m_10 = rot(1, 0);
-      photo.pose.rotation.m_11 = rot(1, 1);
-      photo.pose.rotation.m_12 = rot(1, 2);
-      photo.pose.rotation.m_20 = rot(2, 0);
-      photo.pose.rotation.m_21 = rot(2, 1);
-      photo.pose.rotation.m_22 = rot(2, 2);
+      photo.id                  = image_id;
+      photo.far_depth           = 200;
+      photo.near_depth          = 2;
+      photo.median_depth        = 40;
+      photo.component           = 1;
+      photo.image_path          = images_path + "/" + image.Name();
+      auto pos                  = colmap::Inverse(image.CamFromWorld()).translation;
+      auto rot                  = image.CamFromWorld().rotation.matrix();
+      Eigen::Vector2d local_enu = GetLocalENU(pos.head<2>(), offset, proj_str, Eigen::Vector2d(longitude, latitude));
+      photo.pose.center.x       = local_enu.x();
+      photo.pose.center.y       = local_enu.y();
+      photo.pose.center.z       = pos.z();
+      photo.pose.rotation.m_00  = rot(0, 0);
+      photo.pose.rotation.m_01  = rot(0, 1);
+      photo.pose.rotation.m_02  = rot(0, 2);
+      photo.pose.rotation.m_10  = rot(1, 0);
+      photo.pose.rotation.m_11  = rot(1, 1);
+      photo.pose.rotation.m_12  = rot(1, 2);
+      photo.pose.rotation.m_20  = rot(2, 0);
+      photo.pose.rotation.m_21  = rot(2, 1);
+      photo.pose.rotation.m_22  = rot(2, 2);
       pg.photos.push_back(photo);
     }
     be.block.photogroups.push_back(pg);
@@ -358,12 +405,13 @@ void SaveXml(const std::string& filename, const std::unordered_map<colmap::image
   int dupPoint2D_count = 0;
   for (auto& track : match_tracks) {
     TiePoint tp;
-    tp.color.blue  = 1;
-    tp.color.green = 1;
-    tp.color.red   = 1;
-    tp.position.x  = track.point3D.point3D.x();
-    tp.position.y  = track.point3D.point3D.y();
-    tp.position.z  = track.point3D.point3D.z();
+    tp.color.blue             = 1;
+    tp.color.green            = 1;
+    tp.color.red              = 1;
+    Eigen::Vector2d local_enu = GetLocalENU(track.point3D.point3D.head<2>(), offset, proj_str, Eigen::Vector2d(longitude, latitude));
+    tp.position.x             = local_enu.x();
+    tp.position.y             = local_enu.y();
+    tp.position.z             = track.point3D.point3D.z();
     std::set<colmap::image_t> image_ids;
     for (auto& point2D_on_image : track.point2D_on_imageN) {
       if (image_ids.find(point2D_on_image->image_id) != image_ids.end()) {

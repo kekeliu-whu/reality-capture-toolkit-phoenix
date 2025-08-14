@@ -1,26 +1,21 @@
 #include <glog/logging.h>
 #include <omp.h>
 #include <pcl/filters/bilateral.h>
-#include <pcl/filters/fast_bilateral.h>
-#include <pcl/filters/fast_bilateral_omp.h>
-#include <pcl/filters/voxel_grid.h>
 #include <pcl/io/pcd_io.h>
-#include <pcl/io/ply_io.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/search/kdtree.h>
-#include <proj.h>
 #include <Eigen/Eigen>
 #include <boost/filesystem.hpp>
 #include <fstream>
-#include <pcl/filters/impl/fast_bilateral.hpp>
-#include <pcl/filters/impl/fast_bilateral_omp.hpp>
+#include <pdal/Options.hpp>
+#include <pdal/PointTable.hpp>
+#include <pdal/StageFactory.hpp>
 #include <thread>
 #include <vector>
+#include <nlohmann/json.hpp>
 
-#include "map/utils.h"
-
-DEFINE_string(las_filename, "D:/ProjectX/project-3d/data/sfm/output_dir/colorized.las", "Input project path");
+DEFINE_string(las_filename, "D:/ProjectX/project-3d/data/sfm/area3/sfm/colorized.las", "Input project path");
 DEFINE_bool(output_full, false, "Output full point cloud");
 
 static constexpr double kDownsampleVoxelSize    = 0.05;
@@ -30,10 +25,74 @@ static constexpr double kSmoothMaxSearchRadius  = 0.3;
 static constexpr double kSmoothSigmaD           = 0.05;
 static constexpr double kSmoothSigmaN           = 0.05;
 
-#include <pdal/Options.hpp>
-#include <pdal/PointTable.hpp>
-#include <pdal/StageFactory.hpp>
-#include <pdal/io/LasReader.hpp>
+class VoxelLoc {
+ public:
+  int64_t x, y, z;
+
+  VoxelLoc(int64_t vx = 0, int64_t vy = 0, int64_t vz = 0) : x(vx), y(vy), z(vz) {}
+
+  bool operator==(const VoxelLoc &other) const { return (x == other.x && y == other.y && z == other.z); }
+};
+
+// Hash value
+namespace std {
+template <>
+struct hash<VoxelLoc> {
+  int64_t operator()(const VoxelLoc &s) const {
+    using std::hash;
+    using std::size_t;
+    constexpr uint64_t HASH_P = 116101;
+    constexpr uint64_t MAX_N  = 10000000000UL;
+    return ((((s.z) * HASH_P) % MAX_N + (s.y)) * HASH_P) % MAX_N + (s.x);
+  }
+};
+}  // namespace std
+
+struct M_POINT {
+  Eigen::Vector3d center;
+  int count = 0;
+};
+
+template <typename PointType>
+void DownsamplePointCloudInternal(const pcl::PointCloud<PointType> &cloud_in, pcl::PointCloud<PointType> &cloud_out, double voxel_size) {
+  if (voxel_size < 0.01) {
+    return;
+  }
+
+  std::unordered_map<VoxelLoc, M_POINT> feat_map;
+
+  for (int i = 0; i < cloud_in.size(); i++) {
+    Eigen::Vector3d p_c = cloud_in[i].getVector3fMap().template cast<double>();
+    int loc_xyz[3];
+    for (int j = 0; j < 3; j++) {
+      loc_xyz[j] = p_c[j] / voxel_size;
+      if (loc_xyz[j] < 0) {
+        loc_xyz[j] -= 1;
+      }
+    }
+
+    VoxelLoc position(loc_xyz[0], loc_xyz[1], loc_xyz[2]);
+    auto iter = feat_map.find(position);
+    if (iter != feat_map.end()) {
+      iter->second.center += p_c;
+      iter->second.count++;
+    } else {
+      M_POINT p;
+      p.center           = p_c;
+      p.count            = 1;
+      feat_map[position] = p;
+    }
+  }
+
+  cloud_out.clear();
+  cloud_out.resize(feat_map.size());
+
+  int i = 0;
+  for (auto iter = feat_map.begin(); iter != feat_map.end(); ++iter) {
+    cloud_out[i].getVector3fMap() = iter->second.center.cast<float>() / iter->second.count;
+    i++;
+  }
+}
 
 void SaveLasOffset(const std::string &filename, double offset_x, double offset_y, double lon, double lat) {
   std::ofstream ofs(filename);
@@ -45,35 +104,21 @@ void SaveLasOffset(const std::string &filename, double offset_x, double offset_y
   ofs << std::fixed << std::setprecision(9) << offset_x << "," << offset_y << "," << lon << "," << lat << std::endl;
 }
 
-void ComputeOriginalLonLat(const std::string &proj_str, double offset_x, double offset_y, double &lon, double &lat) {
-  // 初始化PROJ上下文
-  PJ_CONTEXT *ctx = proj_context_create();
+void SaveLasOffsetJson(const std::string &filename, double offset_x, double offset_y, const std::string &proj4_str) {
+  nlohmann::json j;
+  j["offset_x"] = offset_x;
+  j["offset_y"] = offset_y;
+  j["proj4_string"] = proj4_str;
 
-  //// 创建投影对象
-  PJ *proj = proj_create(ctx, proj_str.c_str());
-
-  DCHECK(proj) << "Failed to create projection object with PROJ string: " << proj;
-
-  // 投影坐标原点 (x_0, y_0) = (500000, 0)
-  double x = offset_x;
-  double y = offset_y;
-
-  // 执行反向投影（投影坐标 -> 地理坐标）
-  PJ_COORD coord_proj = proj_coord(x, y, 0, 0);
-  PJ_COORD coord_geo  = proj_trans(proj, PJ_INV, coord_proj);
-
-  DCHECK(coord_geo.lp.lam != HUGE_VAL && coord_geo.lp.phi != HUGE_VAL);
-
-  // 转换为度数（PROJ返回的是弧度）
-  lon = coord_geo.lp.lam * 180.0 / M_PI;
-  lat = coord_geo.lp.phi * 180.0 / M_PI;
-
-  // 清理资源
-  proj_destroy(proj);
-  proj_context_destroy(ctx);
+  std::ofstream ofs(filename);
+  if (!ofs.is_open()) {
+    DLOG(FATAL) << "Failed to open file: " << filename;
+    return;
+  }
+  ofs << j.dump(4) << std::endl;
 }
 
-void LoadLAS(const std::string &filename, pcl::PointCloud<pcl::PointXYZI>::Ptr &cloud, double &offset_x, double &offset_y, double &lon, double &lat) {
+void LoadLAS(const std::string &filename, pcl::PointCloud<pcl::PointXYZI>::Ptr &cloud, double &offset_x, double &offset_y, std::string &proj_str) {
   cloud.reset(new pcl::PointCloud<pcl::PointXYZI>);
 
   pdal::StageFactory factory;
@@ -90,9 +135,9 @@ void LoadLAS(const std::string &filename, pcl::PointCloud<pcl::PointXYZI>::Ptr &
   pdal::MetadataNode metadata = reader->getMetadata();
   offset_x                    = metadata.findChild("offset_x").value<double>();
   offset_y                    = metadata.findChild("offset_y").value<double>();
-  std::string proj_str        = metadata.findChild("srs").findChild("proj4").value<std::string>();
-  ComputeOriginalLonLat(proj_str, offset_x, offset_y, lon, lat);
-  DLOG(INFO) << std::fixed << std::setprecision(9) << "LAS offset: X=" << offset_x << ", Y=" << offset_y << ", longitude=" << lon << " latitude=" << lat;
+  proj_str                    = metadata.findChild("srs").findChild("proj4").value<std::string>();
+
+  DLOG(INFO) << std::fixed << std::setprecision(9) << "LAS offset: X=" << offset_x << ", Y=" << offset_y;
 
   cloud->width    = view->size();
   cloud->height   = 1;
@@ -119,16 +164,14 @@ void SavePointCloud(const std::string &filename, const pcl::PointCloud<pcl::Poin
   }
 }
 
-void PcaEstimateNormalNoDirect(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &cloud,
-                               int k,
-                               double downsample_voxel_size,
+void PcaEstimateNormalNoDirect(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &cloud, int k, double downsample_voxel_size,
                                std::vector<Eigen::Vector3f> &normals) {
   normals.resize(cloud->size());
 
   DLOG(INFO) << "Building kdtree for normal estimation...";
   pcl::KdTreeFLANN<pcl::PointXYZI>::Ptr tree(new pcl::KdTreeFLANN<pcl::PointXYZI>);
   pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZI>);
-  DownsamplePointCloud(cloud, cloud_downsampled, downsample_voxel_size);
+  DownsamplePointCloudInternal<pcl::PointXYZI>(*cloud, *cloud_downsampled, downsample_voxel_size);
   tree->setInputCloud(cloud_downsampled);
 
   DLOG(INFO) << "Estimating normals...";
@@ -161,11 +204,7 @@ void PcaEstimateNormalNoDirect(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &
   }
 }
 
-void SmoothPointCloud(const std::vector<Eigen::Vector3f> &normals,
-                      int kNearestNeighbors,
-                      double max_search_radius,
-                      double sigma_d,
-                      double sigma_n,
+void SmoothPointCloud(const std::vector<Eigen::Vector3f> &normals, int kNearestNeighbors, double max_search_radius, double sigma_d, double sigma_n,
                       pcl::PointCloud<pcl::PointXYZI>::Ptr &cloud) {
   pcl::search::KdTree<pcl::PointXYZI>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZI>);
   tree->setInputCloud(cloud);
@@ -212,13 +251,14 @@ int main(int argc, char **argv) {
   DCHECK(boost::filesystem::is_regular_file(FLAGS_las_filename));
 
   DLOG(INFO) << "Loading LAS file...";
-  double offset_x, offset_y, lon, lat;
-  LoadLAS(FLAGS_las_filename, cloud, offset_x, offset_y, lon, lat);
+  double offset_x, offset_y;
+  std::string proj_str;
+  LoadLAS(FLAGS_las_filename, cloud, offset_x, offset_y, proj_str);
   DLOG(INFO) << "Loaded " << cloud->size() << " points.";
 
   if (!FLAGS_output_full) {
     pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZI>);
-    DownsamplePointCloud(cloud, cloud_downsampled, kDownsampleVoxelSize);
+    DownsamplePointCloudInternal<pcl::PointXYZI>(*cloud, *cloud_downsampled, kDownsampleVoxelSize);
     cloud = cloud_downsampled;
     DLOG(INFO) << "Downsampled to " << cloud->size() << " points.";
   }
@@ -243,8 +283,8 @@ int main(int argc, char **argv) {
   pcl::io::savePCDFileBinary(FLAGS_las_filename + "_normals.pcd", *cloud_with_normals);
   DLOG(INFO) << "Save to " << FLAGS_las_filename + "_normals.pcd";
 
-  DLOG(INFO) << "Save to " << FLAGS_las_filename + "_offset.csv";
-  SaveLasOffset(FLAGS_las_filename + "_offset.csv", offset_x, offset_y, lon, lat);
+  DLOG(INFO) << "Save to " << FLAGS_las_filename + "_offset.json";
+  SaveLasOffsetJson(FLAGS_las_filename + "_offset.json", offset_x, offset_y, proj_str);
 
   std::cout << "done." << std::endl;
 

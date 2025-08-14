@@ -37,6 +37,8 @@ find_package(GTest CONFIG REQUIRED)
 find_package(mimalloc CONFIG REQUIRED)
 find_package(yaml-cpp CONFIG REQUIRED)
 find_package(tinyxml CONFIG REQUIRED)
+find_package(PDAL CONFIG REQUIRED)
+find_package(PROJ CONFIG REQUIRED)
 
 include_directories(
   src
@@ -55,6 +57,25 @@ set(
   src/io/colmap_io.cc
   src/io/xml_io.cc
   src/io/io_utils.cc
+  src/common/histogram.h
+  src/common/types.h
+  src/core/run_ba.h
+  src/core/sfm_config.h
+  src/core/utils.h
+  src/core/xcolor_lib.h
+  src/core/xsfm_lib.h
+  src/io/colmap_io.h
+  src/io/io_utils.h
+  src/io/xml_io.h
+  src/tools/internal/camera.h
+  src/tools/internal/poly_fisheye_camera.h
+  src/tools/internal/utils/cv_utils.h
+  src/tools/internal/utils/eigen_utils.h
+  src/tools/internal/utils/gpl.h
+  src/tools/internal/utils/math_utils.h
+  src/tools/internal/utils/polynomial.h
+  src/tools/internal/utils/ros_utils.h
+  src/tools/internal/utils/sys_utils.h
 )
 
 set(PGO_PRIVATE_LIBS
@@ -70,6 +91,8 @@ set(PGO_PRIVATE_LIBS
   rapidjson
   yaml-cpp::yaml-cpp
   unofficial-tinyxml::unofficial-tinyxml
+  $<TARGET_NAME:pdalcpp>
+  PROJ::proj
 )
 
 function(add_private_tool name)
@@ -80,6 +103,7 @@ endfunction()
 add_private_tool(xcolor_main src/xcolor_main.cc)
 add_private_tool(xsfm src/xsfm_main.cc)
 add_private_tool(xsfm_reset_s20_cameras src/tools/xsfm_reset_s20_cameras.cc)
+add_private_tool(process_point_cloud_s20 src/tools/process_point_cloud_s20.cc)
 add_private_tool(xsfm_undistort_s20_images
   src/tools/xsfm_undistort_s20_images.cc
   src/tools/internal/poly_fisheye_camera.cc

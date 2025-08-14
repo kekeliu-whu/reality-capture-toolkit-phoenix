@@ -2,7 +2,6 @@
 #include <colmap/scene/database.h>
 #include <colmap/scene/image.h>
 #include <colmap/scene/reconstruction.h>
-#include <pcl/io/pcd_io.h>
 #include <fstream>
 
 #include "io/colmap_io.h"

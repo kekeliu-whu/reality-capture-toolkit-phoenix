@@ -1,9 +1,5 @@
 #pragma once
 
-#include <math.h>
-
-
-
 namespace xcolor {
 
 struct SfmConfig {
@@ -12,11 +8,11 @@ struct SfmConfig {
   bool refine_focal_length    = true;
   bool refine_principal_point = true;
   bool refine_extra_params    = true;
-  double min_tri_angle        = 5;
+  double min_tri_angle        = 1.5;
 
   int outer_opt_num_two_view                           = 1;
-  double reproject_error_outlier_thresholds_twoview[1] = {6};    // pixels
-  double lidar_error_outlier_thresholds_twoview[1]     = {0.6};  // meters
+  double reproject_error_outlier_thresholds_twoview[1] = {5};    // pixels
+  double lidar_error_outlier_thresholds_twoview[1]     = {0.4};  // meters
 
   int outer_opt_num_multi_view                           = 3;
   double reproject_error_outlier_thresholds_multiview[3] = {5, 4, 3};         // pixels
@@ -39,4 +35,4 @@ struct SfmConfig {
   SfmConfig(int cores_used) { ba_optimization_num_threads = cores_used; }
 };
 
-}
+}  // namespace xcolor

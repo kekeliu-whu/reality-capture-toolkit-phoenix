@@ -8,7 +8,6 @@ if [ "$#" -lt 1 ]; then
   exit 1
 fi
 
-CODE_BIN=todokk
 COLMAP_EXE=/d/Library/vcpkg/packages/colmap_x64-windows/tools/colmap/colmap.exe
 CAMERA_PARAMS="1483,3300,4400,0,0,0,0"
 

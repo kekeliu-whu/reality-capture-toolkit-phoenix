@@ -1,6 +1,7 @@
 #define SOPHUS_DISABLE_ENSURES
 
 #include <ceres/ceres.h>
+#include <glog/logging.h>
 #include <pcl/kdtree/kdtree.h>
 #include <pcl/registration/gicp.h>
 

@@ -7,7 +7,6 @@
 
 
 #include <string>
-#include <vector>
 #include <memory>
 
 #include <ros/types.h>

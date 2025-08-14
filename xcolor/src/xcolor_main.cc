@@ -2,6 +2,7 @@
 #include <colmap/scene/reconstruction.h>
 #include <glog/logging.h>
 #include <omp.h>
+#include <pcl/io/ply_io.h>
 
 #include "common/types.h"
 #include "core/utils.h"

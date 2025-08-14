@@ -21,6 +21,7 @@ if (Protobuf_VERBOSE)
 endif ()
 
 add_subdirectory(thirdparty/sophus)
+add_subdirectory(thirdparty/ulog_cpp)
 add_subdirectory(thirdparty/ros)
 
 
@@ -65,6 +66,9 @@ list(APPEND
     src/proto_io.cc
     src/utils.cc
     src/crypto.cc
+    include/migration/crypto.h
+    include/migration/proto_io.h
+    include/migration/utils.h
 )
 
 set(
@@ -76,6 +80,7 @@ set(
     rosbag
     OpenSSL::Crypto
     yaml-cpp::yaml-cpp
+    ulog_cpp
 )
 
 # add_executable(test_proto src/test_proto.cc ${PROJECT_SRCS})

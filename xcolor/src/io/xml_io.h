@@ -8,7 +8,8 @@
 namespace xcolor {
 
 void SaveXml(const std::string &filename, const std::unordered_map<colmap::image_t, colmap::Image> &images,
-             const std::unordered_map<colmap::camera_t, colmap::Camera> &cameras, std::vector<MatchTrack> &match_tracks, double longitude,
-             double latitude, const std::string &images_path);
+             const std::unordered_map<colmap::camera_t, colmap::Camera> &cameras, std::vector<MatchTrack> &match_tracks, 
+             const Eigen::Vector2d &offset,
+             const std::string &proj_str, const std::string &images_path);
 
 }

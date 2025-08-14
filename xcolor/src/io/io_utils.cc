@@ -19,7 +19,7 @@ void SaveTriangulatedPoints(const std::vector<xcolor::MatchTrack> &match_tracks,
 void SaveImagePoses(const std::string &filename_txt, const std::string &filename_bin, const std::unordered_set<colmap::image_t> &optimized_image_ids,
                     const std::unordered_map<colmap::image_t, colmap::Image> &images,
                     const std::unordered_map<colmap::camera_t, colmap::Rigid3d> &pose_priors) {
-  DLOG(INFO) << "Saving image poses to " << filename_bin;
+  DLOG(INFO) << "Saving image poses into " << filename_bin;
   std::vector<colmap::Image> images_out;
   for (auto &image_id : optimized_image_ids) {
     auto &image          = images.at(image_id);
@@ -34,7 +34,7 @@ void SaveImagePoses(const std::string &filename_txt, const std::string &filename
   LOG_IF(WARNING, optimized_image_ids.size() != images_out.size()) << images_out.size() << " / " << optimized_image_ids.size() << " poses is valid";
   xcolor::WriteImagesBinary(filename_bin, images_out);
 
-  DLOG(INFO) << "Saving image poses to " << filename_txt;
+  DLOG(INFO) << "Saving image poses into " << filename_txt;
   std::ofstream infile(filename_txt);
   infile << "camera_id image_name x y z rw rx ry rz" << std::endl;
   for (auto &image_id : optimized_image_ids) {
@@ -53,14 +53,14 @@ void SaveImagePoses(const std::string &filename_txt, const std::string &filename
 
 void SaveCameraParams(const std::string &filename_txt, const std::string &filename_bin,
                       const std::unordered_map<colmap::camera_t, colmap::Camera> &cameras) {
-  DLOG(INFO) << "Saving camera params to " << filename_bin;
+  DLOG(INFO) << "Saving camera params into " << filename_bin;
   std::vector<colmap::Camera> cameras_out;
   for (auto &[image_id, _] : cameras) {
     cameras_out.push_back(cameras.at(image_id));
   }
   xcolor::WriteCamerasBinary(filename_bin, cameras_out);
 
-  DLOG(INFO) << "Saving camera params to " << filename_txt;
+  DLOG(INFO) << "Saving camera params into " << filename_txt;
   std::ofstream infile(filename_txt);
   infile << "camera_id model_id fx fy cx cy params..." << std::endl;
   for (auto &e : cameras) {

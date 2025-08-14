@@ -1,4 +1,3 @@
-
 #include "xsfm_lib.h"
 
 #include <ceres/ceres.h>
@@ -16,45 +15,50 @@ namespace xcolor {
 
 std::vector<std::vector<int>> ClusterByBFS(const std::vector<MatchTrack> &match_tracks) {
   int N = int(match_tracks.size());
-  std::unordered_map<Point2DInfo::Ptr, std::vector<int>> pt2pairs;
+  // 并查集结构
+  std::vector<int> parent(N);
+  for (int i = 0; i < N; ++i) parent[i] = i;
 
-  std::vector<int8_t> valid(N, false);
-  for (int i = 0; i < N; ++i) {
-    valid[i] = true;
-    for (auto &pt : match_tracks[i].point2D_on_imageN) {
-      pt2pairs[pt].push_back(i);
+  // 查找根
+  auto find = [&](int x) {
+    while (parent[x] != x) {
+      parent[x] = parent[parent[x]];
+      x = parent[x];
     }
-  }
+    return x;
+  };
 
-  std::vector<int8_t> seen(N, false);
-  std::vector<std::vector<int>> clusters;
+  // 合并
+  auto unite = [&](int x, int y) {
+    int fx = find(x), fy = find(y);
+    if (fx != fy) parent[fx] = fy;
+  };
 
+  // 建立点到track的映射
+  std::unordered_map<Point2DInfo::Ptr, int> pt2track;
   for (int i = 0; i < N; ++i) {
-    if (seen[i] || !valid[i]) continue;
-    std::vector<int> cluster;
-    std::queue<int> q;
-    q.push(i);
-    seen[i] = true;
-
-    while (!q.empty()) {
-      int u = q.front();
-      q.pop();
-      cluster.push_back(u);
-
-      for (auto &pt : match_tracks[u].point2D_on_imageN) {
-        for (int v : pt2pairs[pt]) {
-          if (!seen[v] && valid[v]) {
-            seen[v] = true;
-            q.push(v);
-          }
-        }
-        pt2pairs[pt].clear();
+    for (auto &pt : match_tracks[i].point2D_on_imageN) {
+      auto it = pt2track.find(pt);
+      if (it != pt2track.end()) {
+        unite(i, it->second);
+      } else {
+        pt2track[pt] = i;
       }
     }
-
-    clusters.push_back(std::move(cluster));
   }
 
+  // 收集每个集合的成员
+  std::unordered_map<int, std::vector<int>> clusters_map;
+  for (int i = 0; i < N; ++i) {
+    int root = find(i);
+    clusters_map[root].push_back(i);
+  }
+
+  std::vector<std::vector<int>> clusters;
+  clusters.reserve(clusters_map.size());
+  for (auto &kv : clusters_map) {
+    clusters.push_back(std::move(kv.second));
+  }
   return clusters;
 }
 
@@ -84,6 +88,7 @@ std::vector<MatchTrack> GenerateMatchPairs(const colmap::CorrespondenceGraph &co
         point_on_image0->image_id    = image1_id;
         point_on_image0->camera_id   = images.at(image1_id).CameraId();
         point_on_image0->point_pixel = image1_points2D.at(match.point2D_idx1).xy;
+        point_on_image0->point2D_idx = match.point2D_idx1;
 
         map[std::pair{image1_id, match.point2D_idx1}] = point_on_image0;
       }
@@ -96,6 +101,7 @@ std::vector<MatchTrack> GenerateMatchPairs(const colmap::CorrespondenceGraph &co
         point_on_image1->image_id    = image2_id;
         point_on_image1->camera_id   = images.at(image2_id).CameraId();
         point_on_image1->point_pixel = image2_points2D.at(match.point2D_idx2).xy;
+        point_on_image1->point2D_idx = match.point2D_idx2;
 
         map[std::pair{image2_id, match.point2D_idx2}] = point_on_image1;
       }
@@ -133,12 +139,6 @@ void ParameterizeCameras(const SfmConfig &config, ceres::Problem &problem, std::
         problem.SetManifold(camera.params.data(), new ceres::SubsetManifold(camera.params.size(), const_camera_params));
       }
     }
-  }
-}
-
-void ParameterizePoses(const SfmConfig &config, ceres::Problem &problem, std::unordered_map<colmap::camera_t, colmap::Image> &images) {
-  for (auto &image : images) {
-    problem.SetManifold(image.second.CamFromWorld().rotation.coeffs().data(), new ceres::EigenQuaternionManifold());
   }
 }
 
@@ -374,6 +374,7 @@ bool MergeTrack(const std::vector<MatchTrack> &match_tracks_coarse, std::vector<
   std::copy_if(match_tracks_coarse.begin(), match_tracks_coarse.end(), std::back_inserter(match_tracks_valid),
                [](const MatchTrack &mt) { return mt.constraint_type != TrackConstraintType::kUnconstrained; });
 
+  DLOG(INFO) << "MergeTrack: " << match_tracks_valid.size() << " valid match tracks.";
   std::vector<std::vector<int>> clusters = ClusterByBFS(match_tracks_valid);
   DLOG(INFO) << "Cluster: " << match_tracks_valid.size() << " match pairs -> " << clusters.size() << " match tracks.";
 
@@ -385,10 +386,12 @@ bool MergeTrack(const std::vector<MatchTrack> &match_tracks_coarse, std::vector<
 #pragma omp critical
     {
       if (++count % 10000 == 0) {
-        DLOG(INFO) << "Triangulate point " << count;
+        DLOG(INFO) << "DBSCANCluster point set " << count;
       }
     }
   }
+
+  DLOG(INFO) << "DBSCAN clustering finished.";
 
   PrintClusterMetrics(match_tracks_valid, clusters, sub_clusters);
 

@@ -1,16 +1,26 @@
-# Stage 1: Builder
-FROM registry.cn-hangzhou.aliyuncs.com/c137/reality-capture-toolkit:base-cuda AS builder
+# Stage 1: Build Dependencies
+FROM registry.cn-hangzhou.aliyuncs.com/c137/reality-capture-toolkit:base-cuda AS base
 
-# install packages
+# install packages for vcpkg
 RUN apt-get update \
     && apt-get install -q -y libtool python3-jinja2 flex bison libxtst-dev autoconf automake autoconf-archive \
        unzip zip '^libxcb.*-dev' libx11-xcb-dev libgl1-mesa-dev libxrender-dev libxi-dev  libxkbcommon-dev libxkbcommon-x11-dev gfortran \
        libxi-dev libgl1-mesa-dev libglu1-mesa-dev mesa-common-dev libxrandr-dev libxxf86vm-dev \
        pkg-config python3.12-venv libxcursor-dev libxdamage-dev libxinerama-dev \
+       clang \
     && rm -rf /var/lib/apt/lists/*
 
+# install cudss
+RUN apt-get update \
+    && apt-get install -q -y cudss \
+    && rm -rf /var/lib/apt/lists/*
+
+
+# Stage 2: Builder
+FROM base AS builder
+
 RUN mkdir /buildspace && cd /buildspace \
-    && git clone -b develop https://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@github.com/kekeliu-whu/vcpkg.git \
+    && git clone -b develop https://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@github.com/kekeliu-whu/vcpkg.git \
     && cd /buildspace/vcpkg \
     && ./bootstrap-vcpkg.sh
 
@@ -22,8 +32,8 @@ RUN for i in $(seq 1 20); do \
   rm -rf /buildspace/vcpkg/downloads /buildspace/vcpkg/buildtrees /buildspace/vcpkg/packages /var/lib/apt/lists/* /root/.cache/vcpkg
 
 
-# Stage 2: Final Runtime Image
-FROM registry.cn-hangzhou.aliyuncs.com/c137/reality-capture-toolkit:base-cuda
+# Stage 3: Final Runtime Image
+FROM base
 
 COPY --from=builder /buildspace/vcpkg /buildspace/vcpkg
 

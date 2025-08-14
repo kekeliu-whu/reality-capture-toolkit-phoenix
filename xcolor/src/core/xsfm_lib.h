@@ -16,6 +16,7 @@ struct Point2DInfo {
 
   colmap::image_t image_id;
   colmap::camera_t camera_id;
+  colmap::point2D_t point2D_idx;
   Eigen::Vector2d point_pixel;
 };
 
@@ -101,8 +102,6 @@ std::vector<MatchTrack> GenerateMatchPairs(const colmap::CorrespondenceGraph &co
 
 void ParameterizeCameras(const SfmConfig &config, ceres::Problem &problem, std::unordered_map<colmap::camera_t, colmap::Camera> &cameras);
 
-void ParameterizePoses(const SfmConfig &config, ceres::Problem &problem, std::unordered_map<colmap::camera_t, colmap::Image> &images);
-
 Eigen::Vector2d ComputePixelError(Eigen::Vector3d &point3D, const Eigen::Vector2d &point2D, const colmap::Image &image, const colmap::Camera &camera);
 
 double ComputeLidarError(Eigen::Vector3d &point3D, const Eigen::Vector3d &center, const Eigen::Vector3d &normal);
@@ -122,8 +121,8 @@ void PrintResidualHistogram(double threshold, ceres::Problem &problem, const std
 bool MergeTrack(const std::vector<MatchTrack> &match_tracks, std::vector<MatchTrack> &match_tracks_merged, int min_track_size);
 
 void ComputeSurfel(const pcl::PointCloud<pcl::PointXYZINormal> &point_cloud, const std::vector<int> &k_indices, Eigen::Vector3d &surfel_center,
-                   Eigen::Vector3d &surfel_normal, double &surfel_std) ;
+                   Eigen::Vector3d &surfel_normal, double &surfel_std);
 
-void PrintMatchTrackStatistics(const std::vector<xcolor::MatchTrack> &match_tracks) ;
+void PrintMatchTrackStatistics(const std::vector<xcolor::MatchTrack> &match_tracks);
 
 }  // namespace xcolor
