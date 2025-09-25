@@ -1,0 +1,3 @@
+[submodule "xcolor"]
+	path = xcolor
+	url = https://github.com/kekeliu-whu/glomap
