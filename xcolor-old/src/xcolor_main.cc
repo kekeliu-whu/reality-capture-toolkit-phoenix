@@ -21,7 +21,7 @@ int main(int argc, char **argv) {
   FLAGS_logtostderr = 1;
 
   int cores      = std::thread::hardware_concurrency();
-  int cores_used = std::max(cores - 4, 1);
+  int cores_used = std::max(cores - 6, 1);
   DLOG(INFO) << "Using " << cores_used << "/" << cores << " cores.";
   omp_set_dynamic(0);
   omp_set_num_threads(cores_used);

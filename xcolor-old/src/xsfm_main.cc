@@ -90,11 +90,11 @@ void ReadPointCloudOffset(const std::string &filename, Eigen::Vector2d &offset, 
   if (infile.is_open()) {
     nlohmann::json j;
     infile >> j;
-    
+
     offset.x() = j["offset_x"];
     offset.y() = j["offset_y"];
-    proj_str = j["proj4_string"];
-    
+    proj_str   = j["proj4_string"];
+
     DLOG(INFO) << "Read point cloud offset: " << offset.transpose() << ", proj_str: " << proj_str;
   } else {
     DLOG(FATAL) << "Failed to open file: " << filename;
@@ -110,7 +110,7 @@ int main(int argc, char **argv) {
   FLAGS_logtostderr = 1;
 
   int cores      = std::thread::hardware_concurrency();
-  int cores_used = std::max(cores - 4, 1);
+  int cores_used = std::max(cores - 6, 1);
   DLOG(INFO) << "Using " << cores_used << "/" << cores << " cores.";
   omp_set_dynamic(0);
   omp_set_num_threads(cores_used);
