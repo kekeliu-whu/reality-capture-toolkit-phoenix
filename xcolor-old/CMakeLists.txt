@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(xcolor)
+project(xcolor-old)
 
 if(CMAKE_TOOLCHAIN_FILE)
     include(${CMAKE_TOOLCHAIN_FILE})
