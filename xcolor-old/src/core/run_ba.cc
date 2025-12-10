@@ -4,7 +4,7 @@
 #include <colmap/geometry/triangulation.h>
 #include <colmap/scene/database.h>
 #include <colmap/scene/reconstruction.h>
-#include <glog/logging.h>
+#include <spdlog/spdlog.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/point_types.h>
@@ -99,8 +99,8 @@ void RunTwoViewBA(const xcolor::SfmConfig &config, const std::string &output_pat
       Eigen::Vector3d lidar_point;
       Eigen::Vector3d lidar_normal;
 
-      CHECK(image1.HasPose()) << "Image " << point_on_image1.image_id << " has no pose.";
-      CHECK(image2.HasPose()) << "Image " << point_in_image2.image_id << " has no pose.";
+      if (!image1.HasPose()) { spdlog::error("Image {} has no pose.", point_on_image1.image_id); exit(1); }
+      if (!image2.HasPose()) { spdlog::error("Image {} has no pose.", point_in_image2.image_id); exit(1); }
 
       constraint_type = TryTriangulate(config, image1, image2, camera1, camera2, point_on_image1, point_in_image2, kdtree, point_cloud, iter, point3D,
                                        lidar_point, lidar_normal);
@@ -111,7 +111,7 @@ void RunTwoViewBA(const xcolor::SfmConfig &config, const std::string &output_pat
 #pragma omp critical
       {
         if (++count % 40000 == 0) {
-          DLOG(INFO) << "Triangulate point " << count;
+          spdlog::debug("Triangulate point {}", count);
         }
 
         optimized_image_ids.insert(point_on_image1.image_id);
@@ -121,8 +121,8 @@ void RunTwoViewBA(const xcolor::SfmConfig &config, const std::string &output_pat
         xcolor::AddLidarFactorToProblem(problem, point3D, lidar_point, lidar_normal, loss_function_lidar, lidar_residual_block_ids);
       }
     }
-    DLOG(INFO) << optimized_image_ids.size() << " images are used.";
-    DLOG(INFO) << images.size() << " images in total.";
+    spdlog::debug("{} images are used.", optimized_image_ids.size());
+    spdlog::debug("{} images in total.", images.size());
     ParameterizeCameras(config, problem, cameras);
 
     AddPosePriorsToProblem(config, problem, pose_priors, optimized_image_ids, images);
@@ -142,7 +142,7 @@ void RunTwoViewBA(const xcolor::SfmConfig &config, const std::string &output_pat
     options.dense_linear_algebra_library_type  = ceres::CUDA;
     options.sparse_linear_algebra_library_type = ceres::CUDA_SPARSE;
     ceres::Solve(options, &problem, &summary);
-    DLOG(INFO) << summary.FullReport();
+    spdlog::debug("{}", summary.FullReport());
 
     xcolor::PrintResidualHistogram(config.reproject_error_outlier_thresholds_twoview[iter], problem, residual_block_ids, "image_refined");
     xcolor::PrintResidualHistogram(config.lidar_error_outlier_thresholds_twoview[iter], problem, lidar_residual_block_ids, "lidar_refined");
@@ -188,7 +188,10 @@ void RunMultipleViewBA(const xcolor::SfmConfig &config, const std::string &outpu
       std::vector<float> k_distances;
       std::vector<int> k_indices;
       kdtree.nearestKSearch(pcl::PointXYZINormal{(float)point3D.x(), (float)point3D.y(), (float)point3D.z()}, k, k_indices, k_distances);
-      CHECK_EQ(k_indices.size(), k);
+      if (k_indices.size() != k) {
+        spdlog::error("CHECK_EQ failed: k_indices.size() == k");
+        exit(1);
+      }
 
       Eigen::Vector3d surfel_center;
       Eigen::Vector3d surfel_normal;
@@ -198,7 +201,7 @@ void RunMultipleViewBA(const xcolor::SfmConfig &config, const std::string &outpu
 #pragma omp critical
       {
         if (++count % 10000 == 0) {
-          DLOG(INFO) << "Triangulate point " << count;
+          spdlog::debug("Triangulate point {}", count);
         }
 
         std::vector<int> valid_indices;
@@ -206,7 +209,7 @@ void RunMultipleViewBA(const xcolor::SfmConfig &config, const std::string &outpu
           auto &point_on_image = *match_pair.point2D_on_imageN[j];
           auto &image          = images[point_on_image.image_id];
           auto &camera         = cameras[point_on_image.camera_id];
-          CHECK(image.HasPose()) << "Image " << point_on_image.image_id << " has no pose.";
+          if (!image.HasPose()) { spdlog::error("Image {} has no pose.", point_on_image.image_id); exit(1); }
           // if the point is not visible in the image, ignore it
           if (xcolor::ComputePixelError(point3D, point_on_image.point_pixel, image, camera).norm() >
               config.reproject_error_outlier_thresholds_multiview[iter]) {
@@ -265,14 +268,14 @@ void RunMultipleViewBA(const xcolor::SfmConfig &config, const std::string &outpu
         }
       }
     }
-    DLOG(INFO) << optimized_image_ids.size() << " images are used.";
-    DLOG(INFO) << images.size() << " images in total.";
+    spdlog::debug("{} images are used.", optimized_image_ids.size());
+    spdlog::debug("{} images in total.", images.size());
     ParameterizeCameras(config, problem, cameras);
 
     AddPosePriorsToProblem(config, problem, pose_priors, optimized_image_ids, images);
 
     PrintMatchTrackStatistics(match_tracks);
-    DLOG(INFO) << "Average depth: " << average_depths.ToString(20);
+    spdlog::debug("Average depth: {}", average_depths.ToString(20));
     xcolor::PrintResidualHistogram(config.reproject_error_outlier_thresholds_multiview[iter], problem, residual_block_ids, "image");
     xcolor::PrintResidualHistogram(config.reproject_error_outlier_thresholds_multiview[iter], problem, lidar_residual_block_ids, "lidar");
     SaveTriangulatedPoints(match_tracks, output_path + "/triangulated-multi" + std::to_string(iter) + ".pcd");
@@ -287,7 +290,7 @@ void RunMultipleViewBA(const xcolor::SfmConfig &config, const std::string &outpu
     options.dense_linear_algebra_library_type  = ceres::CUDA;
     options.sparse_linear_algebra_library_type = ceres::CUDA_SPARSE;
     ceres::Solve(options, &problem, &summary);
-    DLOG(INFO) << summary.FullReport();
+    spdlog::debug("{}", summary.FullReport());
 
     xcolor::PrintResidualHistogram(config.reproject_error_outlier_thresholds_multiview[iter], problem, residual_block_ids, "image_refined");
     xcolor::PrintResidualHistogram(config.lidar_error_outlier_thresholds_multiview[iter], problem, lidar_residual_block_ids, "lidar_refined");

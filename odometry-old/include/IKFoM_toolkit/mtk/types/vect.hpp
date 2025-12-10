@@ -126,13 +126,13 @@ struct vect : public Eigen::Matrix<_scalar, D, 1, _Options> {
 	}
 
 	void hat(Eigen::VectorXd& v, Eigen::MatrixXd &res) {
-		std::cout << "wrong idx" << std::endl;
+		spdlog::info("wrong idx");
 	}
 	void Jacob_right_inv(Eigen::VectorXd& v, Eigen::MatrixXd &res) {
-		std::cout << "wrong idx" << std::endl;
+		spdlog::info("wrong idx");
 	}
 	void Jacob_right(Eigen::VectorXd& v, Eigen::MatrixXd &res) {
-		std::cout << "wrong idx" << std::endl;
+		spdlog::info("wrong idx");
 	}
 
 	void S2_hat(Eigen::Matrix<scalar, 3, 3> &res)
@@ -253,13 +253,13 @@ struct matrix : public Eigen::Matrix<_scalar, M, N, _Options> {
 	}
 
 	void hat(Eigen::VectorXd& v, Eigen::MatrixXd &res) {
-		std::cout << "wrong idx" << std::endl;
+		spdlog::info("wrong idx");
 	}
 	void Jacob_right_inv(Eigen::VectorXd& v, Eigen::MatrixXd &res) {
-		std::cout << "wrong idx" << std::endl;
+		spdlog::info("wrong idx");
 	}
 	void Jacob_right(Eigen::VectorXd& v, Eigen::MatrixXd &res) {
-		std::cout << "wrong idx" << std::endl;
+		spdlog::info("wrong idx");
 	}
 
 	void S2_hat(Eigen::Matrix<scalar, 3, 3> &res)
@@ -347,13 +347,13 @@ struct Scalar {
 	}
 
 	void hat(Eigen::VectorXd& v, Eigen::MatrixXd &res) {
-		std::cout << "wrong idx" << std::endl;
+		spdlog::info("wrong idx");
 	}
 	void Jacob_right_inv(Eigen::VectorXd& v, Eigen::MatrixXd &res) {
-		std::cout << "wrong idx" << std::endl;
+		spdlog::info("wrong idx");
 	}
 	void Jacob_right(Eigen::VectorXd& v, Eigen::MatrixXd &res) {
-		std::cout << "wrong idx" << std::endl;
+		spdlog::info("wrong idx");
 	}
 };
 
@@ -386,13 +386,13 @@ struct PositiveScalar {
 	}
 
 	void hat(Eigen::VectorXd& v, Eigen::MatrixXd &res) {
-		std::cout << "wrong idx" << std::endl;
+		spdlog::info("wrong idx");
 	}
 	void Jacob_right_inv(Eigen::VectorXd& v, Eigen::MatrixXd &res) {
-		std::cout << "wrong idx" << std::endl;
+		spdlog::info("wrong idx");
 	}
 	void Jacob_right(Eigen::VectorXd& v, Eigen::MatrixXd &res) {
-		std::cout << "wrong idx" << std::endl;
+		spdlog::info("wrong idx");
 	}
 
 	void S2_hat(Eigen::Matrix<scalar, 3, 3> &res)
@@ -450,13 +450,13 @@ struct Complex : public std::complex<_scalar>{
 	}
 
 	void hat(Eigen::VectorXd& v, Eigen::MatrixXd &res) {
-		std::cout << "wrong idx" << std::endl;
+		spdlog::info("wrong idx");
 	}
 	void Jacob_right_inv(Eigen::VectorXd& v, Eigen::MatrixXd &res) {
-		std::cout << "wrong idx" << std::endl;
+		spdlog::info("wrong idx");
 	}
 	void Jacob_right(Eigen::VectorXd& v, Eigen::MatrixXd &res) {
-		std::cout << "wrong idx" << std::endl;
+		spdlog::info("wrong idx");
 	}
 
 	void oplus(MTK::vectview<const scalar, DOF> vec, scalar scale = 1) {

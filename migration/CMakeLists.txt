@@ -15,6 +15,8 @@ find_package(Glog REQUIRED)
 find_package(GTest REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(fmt REQUIRED)
+find_package(spdlog REQUIRED)
 
 if (Protobuf_VERBOSE)
     message(STATUS "Using Protocol Buffers ${protobuf_VERSION}")
@@ -81,6 +83,7 @@ set(
     OpenSSL::Crypto
     yaml-cpp::yaml-cpp
     ulog_cpp
+    spdlog::spdlog_header_only
 )
 
 # add_executable(test_proto src/test_proto.cc ${PROJECT_SRCS})

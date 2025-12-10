@@ -34,13 +34,14 @@
 // POSSIBILITY OF SUCH DAMAGE.
 #include <fmt/format.h>
 #include <geometry_msgs/Vector3.h>
-#include <glog/logging.h>
+#include <gflags/gflags.h>
 #include <livox_ros_driver/CustomMsg.h>
 #include <omp.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <so3_math.h>
+#include <spdlog/spdlog.h>
 #include <Eigen/Core>
 #include <boost/filesystem.hpp>
 #include <csignal>
@@ -174,7 +175,7 @@ void RGBpointBodyLidarToIMU(PointType const *const pi, PointType *const po) {
 void livox_pcl_cbk(const livox_ros_driver::CustomMsg::ConstPtr &msg) {
   double preprocess_start_time = omp_get_wtime();
   if (msg->header.stamp.toSec() < last_timestamp_lidar) {
-    LOG(ERROR) << "lidar loop back, clear buffer";
+    spdlog::error("lidar loop back, clear buffer");
     lidar_buffer.clear();
   }
   last_timestamp_lidar = msg->header.stamp.toSec();
@@ -199,7 +200,7 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in) {
   double timestamp = msg->header.stamp.toSec();
 
   if (timestamp < last_timestamp_imu) {
-    LOG(WARNING) << "imu loop back, clear buffer";
+    spdlog::warn("imu loop back, clear buffer");
     imu_buffer.clear();
   }
 
@@ -238,7 +239,7 @@ struct LidarScan {
 bool readPointCloud(const std::string &filename, std::vector<Point> &points) {
   std::ifstream file(filename, std::ios::binary);
   if (!file) {
-    std::cerr << "无法打开点云文件: " << filename << std::endl;
+    spdlog::error("Open file failed: {}", filename);
     return false;
   }
 
@@ -246,8 +247,8 @@ bool readPointCloud(const std::string &filename, std::vector<Point> &points) {
   file.read(reinterpret_cast<char *>(&scan.scan_data_len), sizeof(uint64_t));
   file.read(reinterpret_cast<char *>(&scan.scan_data.point_num), sizeof(uint64_t));
 
-  std::cout << "点云数据长度: " << scan.scan_data_len << std::endl;
-  std::cout << "点数量: " << scan.scan_data.point_num << std::endl;
+  spdlog::info("scan_data_len: {}", scan.scan_data_len);
+  spdlog::info("point_num: {}", scan.scan_data.point_num);
 
   points.resize(scan.scan_data.point_num);
   file.read(reinterpret_cast<char *>(points.data()), scan.scan_data.point_num * sizeof(Point));
@@ -261,14 +262,13 @@ bool readPointCloud(const std::string &filename, std::vector<Point> &points) {
       if (points[i].timestamp < min_time) min_time = points[i].timestamp;
       if (points[i].timestamp > max_time) max_time = points[i].timestamp;
     }
-    std::cout << "点云数据时间范围: " << std::fixed << std::setprecision(6) << min_time << " - " << max_time
-              << std::endl;
+    spdlog::info("Point cloud data time range: {} - {}", min_time, max_time);
   }
 
   return true;
 }
 
-// LiDAR文件读取类
+// LiDAR file reader class
 class LidarFileReader {
  private:
   std::ifstream file_;
@@ -286,25 +286,27 @@ class LidarFileReader {
         is_initialized_(false),
         file_ended_(false) {
     if (!boost::filesystem::exists(filename)) {
-      LOG(FATAL) << "LiDAR file does not exist: " << filename;
+      spdlog::critical("LiDAR file does not exist: {}", filename);
+      exit(1);
     }
 
     file_ = std::ifstream(filename.c_str(), std::ios::binary);
     if (!file_) {
-      LOG(FATAL) << "Failed to open LiDAR file: " << filename;
+      spdlog::critical("Failed to open LiDAR file: {}", filename);
+      exit(1);
     }
 
-    // 跳过标题行
+    // Skip header line
     int64_t scan_data_len;
     file_.read(reinterpret_cast<char *>(&scan_data_len), sizeof(uint64_t));
     int64_t point_num;
     file_.read(reinterpret_cast<char *>(&point_num), sizeof(uint64_t));
 
-    LOG(INFO) << "Opened LiDAR file: " << filename;
+    spdlog::info("Opened LiDAR file: {}", filename);
   }
 
-  // 读取一帧点云数据
-  // 返回值：成功读取返回true，文件结束返回false
+  // Read one frame of point cloud data
+  // Return value: true if successfully read, false if file ended
   bool readOneScan(livox_ros_driver::CustomMsg::Ptr &scan_msg) {
     if (file_ended_ || !file_) {
       return false;
@@ -326,7 +328,7 @@ class LidarFileReader {
         return false;
       }
 
-      // 初始化第一帧
+      // Initialize first frame
       if (!is_initialized_) {
         last_frame_time_       = pt.timestamp;
         scan_msg->header.stamp = ros::Time(pt.timestamp);
@@ -334,26 +336,26 @@ class LidarFileReader {
         is_initialized_        = true;
       }
 
-      // 检查是否超过当前帧的时间范围
+      // Check if current frame time range is exceeded
       if (pt.timestamp - last_frame_time_ >= frame_interval_ && scan_msg->point_num > 0) {
-        // 当前行是下一帧的第一个点，需要回退并在下次调用时处理
-        // 由于无法回退文件指针到行首，我们需要保存这个点
-        // 为简化处理，将这个点添加到下一帧
-        // 更新帧时间为这个点的时间
+        // Current line is the first point of next frame, need to roll back and process in next call
+        // Since file pointer cannot be rolled back to line start, we need to save this point
+        // For simplified processing, add this point to next frame
+        // Update frame time to this point's time
         last_frame_time_ = pt.timestamp;
 
-        LOG(INFO) << "Read a scan with " << scan_msg->point_num << " points.";
-        // 返回当前帧（不包含这个新点）
+        spdlog::info("Read a scan with {} points.", scan_msg->point_num);
+        // Return current frame (excluding this new point)
         return scan_msg->point_num > 0;
       }
 
-      // 如果是新帧的开始（点数为0且已初始化）
+      // If it's the start of a new frame (point count is 0 and initialized)
       if (scan_msg->point_num == 0 && is_initialized_) {
         scan_msg->header.stamp = ros::Time(last_frame_time_);
         scan_msg->timebase     = static_cast<uint64_t>(last_frame_time_ * 1e9);
       }
 
-      // 添加点到当前帧
+      // Add point to current frame
       livox_ros_driver::CustomPoint point;
       point.x            = pt.x;
       point.y            = pt.y;
@@ -367,7 +369,7 @@ class LidarFileReader {
       scan_msg->point_num++;
     }
 
-    // 文件结束，返回最后一帧（如果有数据）
+    // File ended, return last frame (if there is data)
     return scan_msg->point_num > 0;
   }
 
@@ -376,20 +378,20 @@ class LidarFileReader {
   void setFrameInterval(double interval) { frame_interval_ = interval; }
 };
 
-// 从IMU文件读取数据并填充到缓冲区
+// Read data from IMU file and fill into buffer
 void load_imu_data_from_file(const std::string &filename) {
   if (!boost::filesystem::exists(filename)) {
-    LOG(ERROR) << "IMU file does not exist: " << filename;
+    spdlog::error("IMU file does not exist: {}", filename);
     throw std::runtime_error("IMU file not found");
   }
 
   FILE *imu_file = fopen(filename.c_str(), "r");
   if (!imu_file) {
-    LOG(ERROR) << "Failed to open IMU file: " << filename;
+    spdlog::error("Failed to open IMU file: {}", filename);
     throw std::runtime_error("Failed to open IMU file");
   }
 
-  // 跳过标题行
+  // Skip header line
   char header[1024];
   fgets(header, sizeof(header), imu_file);
 
@@ -398,7 +400,7 @@ void load_imu_data_from_file(const std::string &filename) {
 
   double t, ax, ay, az, gx, gy, gz;
   while (fscanf(imu_file, "%lf,%lf,%lf,%lf,%lf,%lf,%lf", &t, &ax, &ay, &az, &gx, &gy, &gz) == 7) {
-    // 跳过重复的IMU数据
+    // Skip duplicate IMU data
     if (!is_first_imu && ax == last_ax && ay == last_ay && az == last_az) {
       continue;
     }
@@ -422,7 +424,7 @@ void load_imu_data_from_file(const std::string &filename) {
   }
 
   fclose(imu_file);
-  LOG(INFO) << "Loaded IMU data from: " << filename;
+  spdlog::info("Loaded IMU data from: {}", filename);
 }
 
 double lidar_mean_scantime = 0.0;
@@ -439,7 +441,7 @@ bool   sync_packages(MeasureGroup &meas) {
     if (meas.lidar->points.size() <= 1)  // time too little
     {
       lidar_end_time = meas.lidar_beg_time + lidar_mean_scantime;
-      LOG(WARNING) << "Too few input point cloud!\n";
+      spdlog::warn("Too few input point cloud!");
     } else if (meas.lidar->points.back().curvature / double(1000) < 0.5 * lidar_mean_scantime) {
       lidar_end_time = meas.lidar_beg_time + lidar_mean_scantime;
     } else {
@@ -524,7 +526,7 @@ Matrix<double, Eigen::Dynamic, 1> h_share_model(state_ikfom &s, esekfom::dyn_sha
 
   if (effct_feat_num < 1) {
     ekfom_data.valid = false;
-    LOG(WARNING) << "No Effective Points! \n";
+    spdlog::warn("No Effective Points!");
     return {};
   }
 
@@ -578,21 +580,18 @@ Matrix<double, Eigen::Dynamic, 1> h_share_model(state_ikfom &s, esekfom::dyn_sha
 
 int main(int argc, char **argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  google::InitGoogleLogging(argv[0]);
-
-  FLAGS_logtostderr = 1;
 
   std::vector<Point> points;
   readPointCloud(FLAGS_lidar_filename, points);
 
   if (!std::filesystem::exists(FLAGS_output_dir)) {
-    LOG(INFO) << "Creating " << FLAGS_output_dir << "...";
+    spdlog::info("Creating {}...", FLAGS_output_dir);
     std::filesystem::create_directories(FLAGS_output_dir);
   }
 
   int cores      = std::thread::hardware_concurrency();
   int cores_used = std::max(cores - 4, 1);
-  LOG(INFO) << "Using " << cores_used << "/" << cores << " cores.";
+  spdlog::info("Using {}/{} cores.", cores_used, cores);
   omp_set_dynamic(0);
   omp_set_num_threads(cores_used);
 
@@ -656,20 +655,20 @@ int main(int argc, char **argv) {
   fprintf(fp_traj, "#timestamp_s tx ty tz qx qy qz qw\n");
   fflush(fp_traj);
 
-  /*** 加载IMU数据 ***/
+  /*** Load IMU data ***/
   try {
     load_imu_data_from_file(FLAGS_imu_filename);
   } catch (const std::exception &e) {
-    LOG(ERROR) << "Failed to load IMU data: " << e.what();
+    spdlog::error("Failed to load IMU data: {}", e.what());
     return -1;
   }
 
-  /*** 创建LiDAR文件读取器 ***/
+  /*** Create LiDAR file reader ***/
   LidarFileReader *lidar_reader = nullptr;
   try {
-    lidar_reader = new LidarFileReader(FLAGS_lidar_filename, 0.1);  // 0.1秒一帧
+    lidar_reader = new LidarFileReader(FLAGS_lidar_filename, 0.1);  // 0.1 seconds per frame
   } catch (const std::exception &e) {
-    LOG(ERROR) << "Failed to create LiDAR reader: " << e.what();
+    spdlog::error("Failed to create LiDAR reader: {}", e.what());
     return -1;
   }
 
@@ -677,18 +676,18 @@ int main(int argc, char **argv) {
   signal(SIGINT, SigHandle);
 
   int count = 0;
-  // 主处理循环：逐帧读取并处理LiDAR数据
+  // Main processing loop: read and process LiDAR data frame by frame
   while (!lidar_reader->isFileEnded() && !flg_exit) {
-    // 读取一帧点云数据
+    // Read one frame of point cloud data
     livox_ros_driver::CustomMsg::Ptr scan_msg;
     if (lidar_reader->readOneScan(scan_msg)) {
-      // 将点云数据送入处理流程
+      // Send point cloud data to processing pipeline
       if (scan_msg && scan_msg->point_num > 0) {
         livox_pcl_cbk(scan_msg);
       }
     }
 
-    // 处理同步的数据包
+    // Process synchronized data packages
     if (sync_packages(Measures)) {
       if (flg_first_scan)  // skip the first lidar scan
       {
@@ -710,7 +709,7 @@ int main(int argc, char **argv) {
       pos_lid     = state_point.pos + state_point.rot.toRotationMatrix() * state_point.offset_T_L_I;
 
       if (feats_undistort == nullptr || feats_undistort->empty()) {
-        LOG(WARNING) << "No point, skip this scan!";
+        spdlog::warn("No point, skip this scan!");
         continue;
       }
 
@@ -731,7 +730,7 @@ int main(int argc, char **argv) {
           std::vector<pointWithCov> pv_list = ComputePvList(state_point);
           BuildVoxelMap(pv_list, max_voxel_size, max_layer, layer_size, max_points_size, max_points_size,
                         min_eigen_value, voxel_map);
-          LOG(INFO) << "Initialize voxel map done.";
+          spdlog::info("Initialize voxel map done.");
 
           init_map = true;
         }
@@ -740,7 +739,7 @@ int main(int argc, char **argv) {
 
       /*** ICP and iterated Kalman filter update ***/
       if (feats_down_size < 5) {
-        LOG(WARNING) << "No point, skip this scan!\n";
+        spdlog::warn("No point, skip this scan!");
         continue;
       }
 
@@ -769,7 +768,7 @@ int main(int argc, char **argv) {
         int                 size = feats_undistort->points.size();
         PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
 
-        LOG(INFO) << "Adding " << size << " points to the map.";
+        spdlog::info("Adding {} points to the map.", size);
         for (int i = 0; i < size; i++) {
           RGBpointBodyToWorld(&feats_undistort->points[i], &laserCloudWorld->points[i]);
           pcl_wait_save->push_back({laserCloudWorld->points[i].x, laserCloudWorld->points[i].y,
@@ -788,21 +787,17 @@ int main(int argc, char **argv) {
         aver_time_solve = aver_time_solve * (frame_num - 1) / frame_num + (solve_time + solve_H_time) / frame_num;
         aver_time_const_H_time = aver_time_const_H_time * (frame_num - 1) / frame_num + solve_time / frame_num;
 
-        LOG(INFO) << fmt::format(
-            "[ mapping ]: frame id: %5d time: IMU + Map + Input Downsample: %9.6f ave match: %9.6f ave solve: %9.6f  "
-            "ave ICP: %9.6f  map incre: %9.6f ave total: %9.6f icp: %9.6f construct H: %9.6f \n",
+        spdlog::info(
+            "[ mapping ]: frame id: {:5d} time: IMU + Map + Input Downsample: {:.6f} ave match: {:.6f} ave solve: "
+            "{:.6f} "
+            "ave ICP: {:.6f} map incre: {:.6f} ave total: {:.6f} icp: {:.6f} construct H: {:.6f}",
             frame_num, t1 - t0, aver_time_match, aver_time_solve, t3 - t1, t5 - t3, aver_time_consu, aver_time_icp,
             aver_time_const_H_time);
-
-        LOG(INFO) << setw(20) << Measures.lidar_beg_time - first_lidar_time << " " << state_point.pos.transpose() << " "
-                  << state_point.offset_T_L_I.transpose() << " " << state_point.vel.transpose() << " "
-                  << state_point.bg.transpose() << " " << state_point.ba.transpose() << " " << state_point.grav << " "
-                  << feats_undistort->points.size();
       }
     }
   }
 
-  // 清理资源
+  // Clean up resources
   if (lidar_reader) {
     delete lidar_reader;
     lidar_reader = nullptr;
@@ -813,7 +808,7 @@ int main(int argc, char **argv) {
   // 2. pcd save will largely influence the real-time performences
   if (pcl_wait_save->size() > 0 && pcd_save_en) {
     pcl::PCDWriter pcd_writer;
-    cout << "current scan saved to " << FLAGS_output_dir + "/scans.pcd" << endl;
+    spdlog::info("current scan saved to {}", FLAGS_output_dir + "/scans.pcd");
     pcd_writer.writeBinary(FLAGS_output_dir + "/scans.pcd", *pcl_wait_save);
   }
 

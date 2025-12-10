@@ -1,4 +1,4 @@
-#include <glog/logging.h>
+#include <spdlog/spdlog.h>
 
 #include "imu_processing.h"
 
@@ -89,13 +89,13 @@ void ImuProcess::IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 
     cov_acc = cov_acc * (N - 1.0) / N + (cur_acc - mean_acc).cwiseProduct(cur_acc - mean_acc) * (N - 1.0) / (N * N);
     cov_gyr = cov_gyr * (N - 1.0) / N + (cur_gyr - mean_gyr).cwiseProduct(cur_gyr - mean_gyr) * (N - 1.0) / (N * N);
 
-    // cout<<"acc norm: "<<cur_acc.norm()<<" "<<mean_acc.norm()<<endl;
+    // spdlog::info("acc norm: {} {}", cur_acc.norm(), mean_acc.norm());
 
     N++;
   }
   state_ikfom init_state = kf_state.get_x();
   init_state.grav        = S2(V3D(0, 0, -G_m_s2));
-  LOG(INFO) << "init " << mean_acc;
+  spdlog::info("init {} {} {}", mean_acc(0), mean_acc(1), mean_acc(2));
   init_state.rot          = Eigen::Quaterniond::FromTwoVectors(mean_acc, V3D(0, 0, 1.0));
   init_state.offset_T_L_I = Lidar_T_wrt_IMU;
   init_state.offset_R_L_I = Lidar_R_wrt_IMU;
@@ -125,8 +125,7 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
   /*** sort point clouds by offset time ***/
   pcl_out = *(meas.lidar);
   sort(pcl_out.points.begin(), pcl_out.points.end(), time_list);
-  // cout<<"[ IMU Process ]: Process lidar from "<<pcl_beg_time<<" to "<<pcl_end_time<<", " \
-  //          <<meas.imu.size()<<" imu msgs from "<<imu_beg_time<<" to "<<imu_end_time<<endl;
+  // spdlog::info("[ IMU Process ]: Process lidar from {} to {}, {} imu msgs from {} to {}", pcl_beg_time, pcl_end_time, meas.imu.size(), imu_beg_time, imu_end_time);
 
   /*** Initialize IMU pose ***/
   state_ikfom imu_state = kf_state.get_x();
@@ -202,7 +201,7 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
     auto head = it_kp - 1;
     auto tail = it_kp;
     R_imu << MAT_FROM_ARRAY(head->rot);
-    // cout<<"head imu acc: "<<acc_imu.transpose()<<endl;
+    // spdlog::info("head imu acc: {}", acc_imu.transpose());
     vel_imu << VEC_FROM_ARRAY(head->vel);
     pos_imu << VEC_FROM_ARRAY(head->pos);
     acc_imu << VEC_FROM_ARRAY(tail->acc);
@@ -242,7 +241,10 @@ void ImuProcess::Process(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 1
   if (meas.imu.empty()) {
     return;
   };
-  CHECK(meas.lidar != nullptr);
+  if (meas.lidar == nullptr) {
+    spdlog::error("meas.lidar == nullptr");
+    exit(1);
+  }
 
   if (imu_need_init_) {
     /// The very first lidar frame
@@ -259,7 +261,7 @@ void ImuProcess::Process(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 1
 
       cov_acc = cov_acc_scale;
       cov_gyr = cov_gyr_scale;
-      LOG(INFO) << "IMU Initial Done";
+      spdlog::info("IMU Initial Done");
     }
 
     return;
@@ -270,5 +272,5 @@ void ImuProcess::Process(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 1
   t2 = omp_get_wtime();
   t3 = omp_get_wtime();
 
-  // cout<<"[ IMU Process ]: Time: "<<t3 - t1<<endl;
+  // spdlog::info("[ IMU Process ]: Time: {}", t3 - t1);
 }

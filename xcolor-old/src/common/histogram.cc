@@ -22,14 +22,17 @@
 
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
-#include "glog/logging.h"
+#include <spdlog/spdlog.h>
 
 namespace xcolor {
 
 void Histogram::Add(double value) { values_.push_back(value); }
 
 std::string Histogram::ToString(const int buckets) const {
-  CHECK_GE(buckets, 1);
+  if (buckets < 1) {
+    spdlog::error("CHECK_GE failed: buckets >= 1");
+    exit(1);
+  }
   if (values_.empty()) {
     return "Count: 0";
   }
@@ -46,7 +49,10 @@ std::string Histogram::ToString(const int buckets) const {
   if (min == max) {
     return result;
   }
-  CHECK_LT(min, max);
+  if (min >= max) {
+    spdlog::error("CHECK_LT failed: min < max");
+    exit(1);
+  }
   float lower_bound = min;
   int   total_count = 0;
   for (int i = 0; i != buckets; ++i) {

@@ -1,9 +1,9 @@
 #define SOPHUS_DISABLE_ENSURES
 
 #include <ceres/ceres.h>
-#include <glog/logging.h>
 #include <pcl/kdtree/kdtree.h>
 #include <pcl/registration/gicp.h>
+#include <spdlog/spdlog.h>
 
 #include "factor/gravity_factor.h"
 #include "factor/local_parameterization_se3.h"
@@ -58,8 +58,8 @@ bool MatchGICP(pcl::PointCloud<pcl::PointXYZI>::Ptr &target,
                int gicp_max_iterations,
                double gicp_transform_epsilon) {
   pcl::GeneralizedIterativeClosestPoint<pcl::PointXYZI, pcl::PointXYZI> gicp;
-  DCHECK(source.get());
-  DCHECK(target.get());
+  if (!source.get()) { spdlog::error("Check failed"); exit(1); }
+  if (!target.get()) { spdlog::error("Check failed"); exit(1); }
   gicp.setInputSource(source);
   gicp.setInputTarget(target);
 
@@ -73,7 +73,7 @@ bool MatchGICP(pcl::PointCloud<pcl::PointXYZI>::Ptr &target,
 
   double score = CalcFitnessScore(target, source, T_source_to_target, 2.0);
   if (score < gicp_fitness_score_threshold) {
-    DLOG(INFO) << "good match: " << score;
+    spdlog::debug("good match: {}", score);
     return true;
   }
   return false;
@@ -159,11 +159,14 @@ void AddLoopClosureConstraints(ceres::Problem &problem,
     }
 
     if (candidate_scan_ids.empty()) {
-      DLOG(WARNING) << "candidate scan ids empty";
+      spdlog::debug("candidate scan ids empty");
       continue;
     }
 
-    CHECK_GT(candidate_scan_ids.size(), 0);
+    if (candidate_scan_ids.size() <= 0) {
+      spdlog::error("candidate_scan_ids.size() <= 0");
+      exit(1);
+    }
     int source_id = candidate_scan_ids[rand() % candidate_scan_ids.size()];
 
     if (edges_used.find({target_id, source_id}) != edges_used.end() ||
@@ -175,10 +178,22 @@ void AddLoopClosureConstraints(ceres::Problem &problem,
     Sophus::SE3d T_source_to_target(submaps[target_id].pose.inverse() *
                                     submaps[source_id].pose);
 
-    CHECK_GE(source_id, 0);
-    CHECK_LT(source_id, submaps.size());
-    CHECK_GE(target_id, 0);
-    CHECK_LT(target_id, submaps.size());
+    if (source_id < 0) {
+      spdlog::error("CHECK_GE failed: source_id >= 0");
+      exit(1);
+    }
+    if (source_id >= submaps.size()) {
+      spdlog::error("CHECK_LT failed: source_id < submaps.size()");
+      exit(1);
+    }
+    if (target_id < 0) {
+      spdlog::error("CHECK_GE failed: target_id >= 0");
+      exit(1);
+    }
+    if (target_id >= submaps.size()) {
+      spdlog::error("CHECK_LT failed: target_id < submaps.size()");
+      exit(1);
+    }
 
     if (MatchGICP(submaps[target_id].cloud, submaps[source_id].cloud,
                   T_source_to_target, config.gicp_fitness_score_threshold(),
@@ -228,7 +243,7 @@ void Optimize(std::vector<TimestampedPointCloud> &submaps,
     options.max_num_iterations           = config.inner_iteration_num();
     ceres::Solver::Summary summary;
     ceres::Solve(options, &problem, &summary);
-    DLOG(INFO) << summary.FullReport();
+    spdlog::debug("{}", summary.FullReport());
 
     // clean up non-prior constraints for the next iteration
     RemoveNonPriorConstraints(problem, prior_residual_blocks);

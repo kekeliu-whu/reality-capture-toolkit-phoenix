@@ -2,7 +2,6 @@
 #include <crashpad/client/crashpad_client.h>
 #include <crashpad/client/settings.h>
 #include <gflags/gflags.h>
-#include <glog/logging.h>
 #include <omp.h>
 
 #include "common/msg_conversions.h"
@@ -34,17 +33,6 @@ bool StartCrashpad(const base::FilePath::StringType& db_path, const base::FilePa
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-  /////////////////////////////////// setup glog ///////////////////////////////////
-  google::InitGoogleLogging(argv[0]);
-  // EncryptedLogSink *sink = new EncryptedLogSink();
-  // google::AddLogSink(sink);
-  FLAGS_logtostderr = 1;
-
-  std::shared_ptr<void> done{nullptr, [](void*) {
-                               DLOG(INFO) << "Shutdown glog.";
-                               google::ShutdownGoogleLogging();
-                             }};
-
 /////////////////////////////////// setup minidump ///////////////////////////////////
 #ifdef __linux__
   base::FilePath::StringType db_path      = "dump";
@@ -59,7 +47,7 @@ int main(int argc, char** argv) {
   /////////////////////////////////// setup omp ///////////////////////////////////
   int cores      = std::thread::hardware_concurrency();
   int cores_used = std::max(cores - 4, 1);
-  DLOG(INFO) << "Using " << cores_used << "/" << cores << " cores.";
+  spdlog::debug("Using {}/{} cores.", cores_used, cores);
   omp_set_dynamic(0);
   omp_set_num_threads(cores_used);
 
@@ -71,7 +59,7 @@ int main(int argc, char** argv) {
   ReadImuFile(FLAGS_project_dir + "/imu.dat", imu_msg_list);
   ReadEncoderFile(FLAGS_project_dir + "/encoder.dat", encoder_msg_list);
 
-  DLOG(INFO) << "Calibration: " << calib.DebugString();
+  spdlog::debug("Calibration: {}", calib.DebugString());
   SlamCore core(FromProto(calib));
   for (auto& msg : imu_msg_list.imu_msgs()) {
     core.AddSensorData(FromProto(msg));

@@ -10,50 +10,50 @@
 #include <string>
 #include <vector>
 
-// 空间参考系统定义
+// Spatial Reference System Definition
 struct SpatialReferenceSystem {
   int id;
   std::string name;
   std::string definition;
 };
 
-// 图像尺寸
+// Image Dimensions
 struct ImageDimensions {
   int width;
   int height;
 };
 
-// 主点坐标
+// Principal Point Coordinates
 struct PrincipalPoint {
   double x;
   double y;
 };
 
-// 畸变参数
+// Distortion Parameters
 struct Distortion {
-  double k1, k2, k3;  // 径向畸变系数
-  double p1, p2;      // 切向畸变系数
+  double k1, k2, k3;  // Radial Distortion Coefficients
+  double p1, p2;      // Tangential Distortion Coefficients
 };
 
-// 3x3旋转矩阵
+// 3x3 Rotation Matrix
 struct RotationMatrix {
   double m_00, m_01, m_02;
   double m_10, m_11, m_12;
   double m_20, m_21, m_22;
 };
 
-// 相机中心坐标
+// Camera Center Coordinates
 struct CameraCenter {
   double x, y, z;
 };
 
-// 相机姿态
+// Camera Pose
 struct Pose {
   RotationMatrix rotation;
   CameraCenter center;
 };
 
-// 照片信息
+// Photo Information
 struct Photo {
   int id;
   std::string image_path;
@@ -64,7 +64,7 @@ struct Photo {
   Pose pose;
 };
 
-// 照片组
+// Photo Group
 struct Photogroup {
   ImageDimensions image_dimensions;
   std::string camera_model_type;
@@ -78,37 +78,37 @@ struct Photogroup {
   std::vector<Photo> photos;
 };
 
-// 3D位置
+// 3D Position
 struct Position3D {
   double x, y, z;
 };
 
-// RGB颜色
+// RGB Color
 struct Color {
   double red, green, blue;
 };
 
-// 测量点（图像坐标）
+// Measurement Point (Image Coordinates)
 struct Measurement {
   int photo_id;
   double x, y;
 };
 
-// 连接点
+// Tie Point
 struct TiePoint {
   Position3D position;
   Color color;
   std::vector<Measurement> measurements;
 };
 
-// 块（Block）
+// Block
 struct Block {
   int srs_id;
   std::vector<Photogroup> photogroups;
   std::vector<TiePoint> tie_points;
 };
 
-// 主要的BlocksExchange类
+// Main BlocksExchange class
 class BlocksExchange {
  public:
   std::string file_version;
@@ -117,7 +117,7 @@ class BlocksExchange {
 
   BlocksExchange() : file_version("3.2") {}
 
-  // 保存到XML文件
+  // Save to XML file
   bool SaveToXML(const std::string& filename) const {
     TiXmlDocument doc;
 
@@ -260,13 +260,13 @@ class BlocksExchange {
     return doc.SaveFile(filename.c_str());
   }
 
-  // 添加空间参考系统
+  // Add spatial reference system
   void AddSpatialReferenceSystem(const SpatialReferenceSystem& srs) { spatial_reference_systems.push_back(srs); }
 
-  // 添加照片组
+  // Add photogroup
   void AddPhotogroup(const Photogroup& pg) { block.photogroups.push_back(pg); }
 
-  // 添加连接点
+  // Add tie point
   void AddTiePoint(const TiePoint& tp) { block.tie_points.push_back(tp); }
 
  private:
@@ -291,17 +291,17 @@ namespace {
 Eigen::Vector2d GetLocalENU(const Eigen::Vector2d& coord, const Eigen::Vector2d& offset, const std::string& proj_str, const Eigen::Vector2d& origin) {
   Eigen::Vector2d coord_with_offset = coord + offset;
 
-  // 初始化PROJ上下文
-  PJ_CONTEXT* ctx = proj_context_create();
+  // Initialize PROJ context
+  PJ_CONTEXT* C = proj_context_create();
 
-  // 构建源投影和目标ENU投影字符串
+  // Build source projection and target ENU projection strings
   std::ostringstream oss;
   oss << "+proj=aeqd +lat_0=" << std::fixed << std::setprecision(9) << origin.y() 
       << " +lon_0=" << std::fixed << std::setprecision(9) << origin.x() 
       << " +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs";
   std::string target_enu_proj_str = oss.str();
 
-  // 直接创建从源投影到目标ENU的转换管道
+  // Directly create transformation pipeline from source projection to target ENU
   PJ* transformer = proj_create_crs_to_crs(ctx, proj_str.c_str(), target_enu_proj_str.c_str(), nullptr);
 
   if (!transformer) {
@@ -309,8 +309,8 @@ Eigen::Vector2d GetLocalENU(const Eigen::Vector2d& coord, const Eigen::Vector2d&
     return Eigen::Vector2d::Zero();
   }
 
-  // 执行直接转换
-  PJ_COORD coord_source = proj_coord(coord_with_offset.x(), coord_with_offset.y(), 0, 0);
+  // Perform direct transformation
+  PJ_COORD coord_in = proj_coord(coord_with_offset.x(), coord_with_offset.y(), 0, 0);
   PJ_COORD coord_enu    = proj_trans(transformer, PJ_FWD, coord_source);
 
   Eigen::Vector2d result = Eigen::Vector2d::Zero();
@@ -319,7 +319,7 @@ Eigen::Vector2d GetLocalENU(const Eigen::Vector2d& coord, const Eigen::Vector2d&
     result.y() = coord_enu.xy.y;  // North
   }
 
-  // 清理资源
+  // Clean up resources
   proj_destroy(transformer);
   proj_context_destroy(ctx);
 
@@ -428,7 +428,7 @@ void SaveXml(const std::string& filename, const std::unordered_map<colmap::image
     }
     be.AddTiePoint(tp);
   }
-  LOG(WARNING) << "dupPoint2D_count: " << dupPoint2D_count;
+  spdlog::warn("dupPoint2D_count: {}", dupPoint2D_count);
 
   be.SaveToXML(filename);
 }

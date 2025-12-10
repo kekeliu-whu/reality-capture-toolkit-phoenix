@@ -2,9 +2,9 @@
 
 #include <optional>
 #include <sophus/se3.hpp>
+#include <sdplog/spdlog.h>
 
 #include "common/types.h"
-#include "glog/logging.h"
 
 #define G_m_s2 (9.81)  // Gravaty const in GuangDong/China
 #define MD(a, b) Eigen::Matrix<double, (a), (b)>
@@ -22,8 +22,7 @@ class ImuPreprocess {
     if (imu_msgs.back().timestamp - *first_timestamp_ < kInitDuration) {
       IMU_init(imu_msgs, stat, init_iter_num);
 
-      DLOG(INFO) << "IMU Initials: Gravity: " << stat.gravity.transpose() << "; Bias_g: " << stat.bias_g.transpose()
-                << "; acc covarience: " << cov_acc.transpose() << "; gyr covarience: " << cov_gyr.transpose();
+      spdlog::debug("IMU Init: iter num: {}, mean acc: {}, mean gyr: {}", init_iter_num, mean_acc.transpose(), mean_gyr.transpose());
 
       return false;
     }

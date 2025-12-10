@@ -1,5 +1,3 @@
-#include <glog/logging.h>
-
 #include "core/preprocess.h"
 
 void ProcessRawSensorData(const SensorCalib& calib, MsgPack& msg_pack) {

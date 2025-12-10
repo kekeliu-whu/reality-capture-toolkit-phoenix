@@ -1,4 +1,4 @@
-#include <glog/logging.h>
+#include <spdlog/spdlog.h>
 #include <omp.h>
 #include <pcl/filters/bilateral.h>
 #include <pcl/io/pcd_io.h>
@@ -38,7 +38,7 @@ class LocalENUTransformer {
         << " +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs";
     std::string target_enu_proj_str = oss.str();
     transformer_                    = proj_create_crs_to_crs(ctx_, proj_str_.c_str(), target_enu_proj_str.c_str(), nullptr);
-    DCHECK(transformer_) << "Failed to create transformer with proj string: " << proj_str_ << " to " << target_enu_proj_str;
+    if (!transformer_) { spdlog::error("Failed to create transformer with proj string: {} to {}", proj_str_, target_enu_proj_str); exit(1); }
   }
 
   ~LocalENUTransformer() {
@@ -79,8 +79,8 @@ class LocalENUTransformer {
     auto factors = proj_factors(proj, coord_ll);
     proj_destroy(proj);
 
-    DLOG(INFO) << "Meridian convergence at lon: " << lon << ", lat: " << lat << " is " << factors.meridian_convergence * 180.0 / M_PI;
-    DLOG(INFO) << "Mercator scale at lon: " << lon << ", lat: " << lat << " is " << factors.meridional_scale << ", " << factors.parallel_scale;
+    spdlog::debug("Meridian convergence at lon: {}, lat: {} is {}", lon, lat, factors.meridian_convergence * 180.0 / M_PI);
+    spdlog::debug("Mercator scale at lon: {}, lat: {} is {}, {}", lon, lat, factors.meridional_scale, factors.parallel_scale);
 
     return factors.meridian_convergence * 180.0 / M_PI;
   }
@@ -88,7 +88,7 @@ class LocalENUTransformer {
  private:
   Eigen::Vector2d ComputeOriginLonLat(PJ_CONTEXT *ctx, const Eigen::Vector2d &offset, const std::string &proj_str) const {
     PJ *transformer = proj_create_crs_to_crs(ctx, proj_str.c_str(), "EPSG:4326", nullptr);
-    DCHECK(transformer) << "Failed to create transformer with proj string: " << proj_str << " to EPSG:4326";
+    if (!transformer) { spdlog::error("Failed to create transformer with proj string: {} to EPSG:4326", proj_str); exit(1); }
 
     Eigen::Vector2d result = Eigen::Vector2d::Zero();
     if (transformer) {
@@ -183,7 +183,7 @@ void DownsamplePointCloudInternal(const pcl::PointCloud<PointType> &cloud_in, pc
 void SaveLasOffset(const std::string &filename, double offset_x, double offset_y, double lon, double lat) {
   std::ofstream ofs(filename);
   if (!ofs.is_open()) {
-    LOG(ERROR) << "Failed to open file: " << filename;
+    spdlog::error("Failed to open file: {}", filename);
     return;
   }
   ofs << "offset_x,offset_y,lon,lat" << std::endl;
@@ -200,8 +200,8 @@ void SaveLasOffsetJson(const std::string &filename, Eigen::Vector2d &offset, con
 
   std::ofstream ofs(filename);
   if (!ofs.is_open()) {
-    DLOG(FATAL) << "Failed to open file: " << filename;
-    return;
+    spdlog::critical("Failed to open file: {}", filename);
+    exit(1);
   }
   ofs << j.dump(4) << std::endl;
 }
@@ -225,7 +225,7 @@ void LoadLAS(const std::string &filename, pcl::PointCloud<pcl::PointXYZI>::Ptr &
   offset.y()                  = metadata.findChild("offset_y").value<double>();
   proj_str                    = metadata.findChild("srs").findChild("proj4").value<std::string>();
 
-  DLOG(INFO) << std::fixed << std::setprecision(9) << "LAS offset: X=" << offset.x() << ", Y=" << offset.y();
+  spdlog::debug("LAS offset: X={:.9f}, Y={:.9f}", offset.x(), offset.y());
 
   cloud->width    = view->size();
   cloud->height   = 1;
@@ -256,13 +256,13 @@ void PcaEstimateNormalNoDirect(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &
                                std::vector<Eigen::Vector3f> &normals) {
   normals.resize(cloud->size());
 
-  DLOG(INFO) << "Building kdtree for normal estimation...";
+  spdlog::debug("Building kdtree for normal estimation...");
   pcl::KdTreeFLANN<pcl::PointXYZI>::Ptr tree(new pcl::KdTreeFLANN<pcl::PointXYZI>);
   pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZI>);
   DownsamplePointCloudInternal<pcl::PointXYZI>(*cloud, *cloud_downsampled, downsample_voxel_size);
   tree->setInputCloud(cloud_downsampled);
 
-  DLOG(INFO) << "Estimating normals...";
+  spdlog::debug("Estimating normals...");
 #pragma omp parallel for
   for (int i = 0; i < cloud->size(); ++i) {
     std::vector<int> k_indices(k);
@@ -322,8 +322,7 @@ void SmoothPointCloud(const std::vector<Eigen::Vector3f> &normals, int kNearestN
 }
 
 void SaveToLocalENU(const std::string &filename, const pcl::PointCloud<pcl::PointXYZI>::Ptr &cloud_nooffset, const LocalENUTransformer &transformer) {
-  DLOG(INFO) << "Transforming to local ENU coordinates, origin (lat, lon): " << transformer.getOriginLonLat().x() << ", "
-             << transformer.getOriginLonLat().y();
+  spdlog::debug("Transforming to local ENU coordinates, origin (lat, lon): {}, {}", transformer.getOriginLonLat().x(), transformer.getOriginLonLat().y());
   pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_out(new pcl::PointCloud<pcl::PointXYZI>);
   cloud_out->resize(cloud_nooffset->size());
   cloud_out->width    = cloud_nooffset->width;
@@ -337,17 +336,17 @@ void SaveToLocalENU(const std::string &filename, const pcl::PointCloud<pcl::Poin
     cloud_out->points[i].intensity = cloud_nooffset->points[i].intensity;
   }
 
-  DLOG(INFO) << "Saving to " << filename;
+  spdlog::debug("Saving to {}", filename);
   pcl::io::savePCDFileBinary(filename, *cloud_out);
 }
 
 void SaveToLocalENU(const std::string &filename, const std::string &initial_pose_filename, const Eigen::Vector2d &offset,
                     const LocalENUTransformer &transformer) {
   std::ifstream file(initial_pose_filename);
-  CHECK(file) << initial_pose_filename;
+  if (!file) { spdlog::error("{}", initial_pose_filename); exit(1); }
 
   std::ofstream outfile(filename);
-  CHECK(outfile) << filename;
+  if (!outfile) { spdlog::error("{}", filename); exit(1); }
 
   std::string line;
   std::getline(file, line);
@@ -373,38 +372,38 @@ void SaveToLocalENU(const std::string &filename, const std::string &initial_pose
 
 int main(int argc, char **argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  google::InitGoogleLogging(argv[0]);
-
-  FLAGS_logtostderr = true;
 
   int cores      = std::thread::hardware_concurrency();
   int cores_used = std::max(cores - 4, 1);
-  DLOG(INFO) << "Using " << cores_used << "/" << cores << " cores.";
+  spdlog::debug("Using {}/{} cores.", cores_used, cores);
   omp_set_dynamic(0);
   omp_set_num_threads(cores_used);
 
   pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_nooffset(new pcl::PointCloud<pcl::PointXYZI>);
   std::vector<Eigen::Vector3f> normals;
 
-  DCHECK(boost::filesystem::is_regular_file(FLAGS_las_filename));
+  if (!boost::filesystem::is_regular_file(FLAGS_las_filename)) {
+    spdlog::error("LAS file not found: {}", FLAGS_las_filename);
+    exit(1);
+  }
 
-  DLOG(INFO) << "Loading LAS file...";
+  spdlog::debug("Loading LAS file...");
   Eigen::Vector2d offset;
   std::string proj_str;
   LoadLAS(FLAGS_las_filename, cloud_nooffset, offset, proj_str);
-  DLOG(INFO) << "Loaded " << cloud_nooffset->size() << " points.";
+  spdlog::debug("Loaded {} points.", cloud_nooffset->size());
 
   if (!FLAGS_output_full) {
     pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZI>);
     DownsamplePointCloudInternal<pcl::PointXYZI>(*cloud_nooffset, *cloud_downsampled, kDownsampleVoxelSize);
     cloud_nooffset = cloud_downsampled;
-    DLOG(INFO) << "Downsampled to " << cloud_nooffset->size() << " points.";
+    spdlog::debug("Downsampled to {} points.", cloud_nooffset->size());
   }
 
   LocalENUTransformer enu_transformer(offset, proj_str);
-  DLOG(INFO) << "Meridian convergence at origin: " << enu_transformer.GetMeridianConvergence() << " degrees.";
+  spdlog::debug("Meridian convergence at origin: {} degrees.", enu_transformer.GetMeridianConvergence());
 
-  DLOG(INFO) << "Save to " << FLAGS_las_filename + "_offset.json";
+  spdlog::debug("Save to {}", FLAGS_las_filename + "_offset.json");
   SaveLasOffsetJson(FLAGS_las_filename + "_offset.json", offset, proj_str, enu_transformer.getOriginLonLat());
 
   SaveToLocalENU(FLAGS_las_filename + "_normals_localenu.pcd", cloud_nooffset, enu_transformer);

@@ -1,4 +1,4 @@
-#include <glog/logging.h>
+#include <spdlog/spdlog.h>
 #include <sqlite3.h>
 #include <yaml-cpp/yaml.h>
 #include <Eigen/Eigen>
@@ -23,7 +23,7 @@ std::vector<int> getAllCameraIds(sqlite3* db) {
       camera_ids.push_back(cam_id);
     }
   } else {
-    DLOG(INFO) << "Failed to retrieve camera_id: " << sqlite3_errmsg(db);
+    spdlog::debug("Failed to retrieve camera_id: {}", sqlite3_errmsg(db));
   }
 
   sqlite3_finalize(stmt);
@@ -36,7 +36,7 @@ bool readCamera(sqlite3* db, int camera_id, int& width, int& height, std::vector
   sqlite3_stmt* stmt = nullptr;
 
   if (sqlite3_prepare_v2(db, query, -1, &stmt, nullptr) != SQLITE_OK) {
-    DLOG(INFO) << "Preparation for reading failed: " << sqlite3_errmsg(db);
+    spdlog::debug("Preparation for reading failed: {}", sqlite3_errmsg(db));
     return false;
   }
 
@@ -52,7 +52,7 @@ bool readCamera(sqlite3* db, int camera_id, int& width, int& height, std::vector
     return true;
   }
 
-  DLOG(INFO) << "camera_id " << camera_id << " not found.";
+  spdlog::debug("camera_id {} not found.", camera_id);
   sqlite3_finalize(stmt);
   return false;
 }
@@ -63,7 +63,7 @@ bool updateParams(sqlite3* db, int camera_id, const std::vector<unsigned char>& 
   sqlite3_stmt* stmt = nullptr;
 
   if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-    DLOG(INFO) << "Preparation for update failed: " << sqlite3_errmsg(db);
+    spdlog::debug("Preparation for update failed: {}", sqlite3_errmsg(db));
     return false;
   }
 
@@ -72,7 +72,7 @@ bool updateParams(sqlite3* db, int camera_id, const std::vector<unsigned char>& 
 
   bool success = sqlite3_step(stmt) == SQLITE_DONE;
   if (!success) {
-    DLOG(INFO) << "Update failed: " << sqlite3_errmsg(db);
+    spdlog::debug("Update failed: {}", sqlite3_errmsg(db));
   }
 
   sqlite3_finalize(stmt);
@@ -120,26 +120,30 @@ bool getFirstRow(const std::string& db_path, std::string& name, int& camera_id) 
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  google::InitGoogleLogging(argv[0]);
+  spdlog::set_level(spdlog::level::debug);
 
-  FLAGS_logtostderr = 1;
-
-  CHECK(boost::filesystem::is_regular_file(FLAGS_database_filename));
+  if (!boost::filesystem::is_regular_file(FLAGS_database_filename)) {
+    spdlog::error("Database file not found: {}", FLAGS_database_filename);
+    exit(1);
+  }
 
   sqlite3* db = nullptr;
   if (sqlite3_open(FLAGS_database_filename.c_str(), &db) != SQLITE_OK) {
-    DLOG(INFO) << "Failed to open database: " << sqlite3_errmsg(db);
+    spdlog::debug("Failed to open database: {}", sqlite3_errmsg(db));
     return 1;
   }
 
   // Retrieve all camera IDs
   std::vector<int> camera_ids = getAllCameraIds(db);
-  CHECK_EQ(camera_ids.size(), 2);
+  if (camera_ids.size() != 2) {
+    spdlog::error("Expected 2 camera IDs, got {}", camera_ids.size());
+    exit(1);
+  }
 
   std::string image_path;
   int camera_id;
   if (getFirstRow(FLAGS_database_filename, image_path, camera_id)) {
-    DLOG(INFO) << "First Row - Name: " << image_path << ", Camera ID: " << camera_id;
+    spdlog::debug("First Row - Name: {}, Camera ID: {}", image_path, camera_id);
 
     bool is_left = (image_path.find("left") != std::string::npos);
 
@@ -147,14 +151,18 @@ int main(int argc, char** argv) {
       std::swap(camera_ids[0], camera_ids[1]);
     }
 
-    DLOG(INFO) << "Sorted Camera IDs: [" << camera_ids[0] << ", " << camera_ids[1] << "]";
+    spdlog::debug("Sorted Camera IDs: [{}, {}]", camera_ids[0], camera_ids[1]);
   } else {
-    LOG(FATAL) << "Failed to retrieve the first row.";
+    spdlog::critical("Failed to retrieve the first row.");
+    exit(1);
   }
 
   std::vector<Eigen::Vector2d> camera_params;
   try {
-    CHECK(boost::filesystem::is_regular_file(FLAGS_calibration_filename));
+    if (!boost::filesystem::is_regular_file(FLAGS_calibration_filename)) {
+      spdlog::error("Calibration file not found: {}", FLAGS_calibration_filename);
+      exit(1);
+    }
 
     YAML::Node config = YAML::LoadFile(FLAGS_calibration_filename);
 
@@ -168,10 +176,10 @@ int main(int argc, char** argv) {
     double right_a22     = right_cam["projection_parameters"]["A22"].as<double>();
     camera_params.push_back({right_a11, right_a22});
   } catch (const YAML::Exception& e) {
-    DLOG(ERROR) << "YAML error: " << e.what();
+    spdlog::error("YAML error: {}", e.what());
     return 1;
   } catch (const std::exception& e) {
-    DLOG(ERROR) << "Error: " << e.what();
+    spdlog::error("Error: {}", e.what());
     return 1;
   }
 
@@ -184,10 +192,16 @@ int main(int argc, char** argv) {
     std::vector<unsigned char> params;
 
     if (readCamera(db, cam_id, width, height, params)) {
-      DLOG(INFO) << "Camera " << cam_id << " (" << width << "x" << height << "), original parameter length: " << params.size();
+      spdlog::debug("Camera {} ({}x{}), original parameter length: {}", cam_id, width, height, params.size());
 
-      CHECK(params.size() % sizeof(double) == 0) << params.size();
-      CHECK_GT(params.size(), 4 * sizeof(double));
+      if (params.size() % sizeof(double) != 0) {
+        spdlog::error("Invalid params size: {}", params.size());
+        exit(1);
+      }
+      if (params.size() <= 4 * sizeof(double)) {
+        spdlog::error("Params size too small: {}", params.size());
+        exit(1);
+      }
 
       // Replace with new parameters as needed; here is an example:
       ((double*)params.data())[0] = camera_param[0];
@@ -195,15 +209,14 @@ int main(int argc, char** argv) {
       ((double*)params.data())[2] = height / 2;
 
       if (updateParams(db, cam_id, params)) {
-        DLOG(INFO) << "Camera " << cam_id << "'s params has been updated: fx = " << camera_param[0] << ", fy = " << camera_param[1]
-                   << ", cx = " << width / 2 << ", cy = " << height / 2;
+        spdlog::debug("Camera {}'s params has been updated: fx = {}, fy = {}, cx = {}, cy = {}", cam_id, camera_param[0], camera_param[1], width / 2, height / 2);
       }
     }
   }
 
   sqlite3_close(db);
 
-  DLOG(INFO) << "done.";
+  spdlog::debug("done.");
   std::cout << "done." << std::endl;
 
   return 0;

@@ -202,7 +202,7 @@ bool esti_plane(Matrix<T, 4, 1> &pca_result, const PointVector &point, const T &
     Matrix<T, NUM_MATCH_POINTS, 1> b;
     A.setZero();
     b.setOnes();
-    b *= -1.0f; // BUG: 如果平面经过原点，则下面解出的normvec值极大，可能导致数值计算上的一些问题，更好的方式是先计算center和covariance，再通过covariance计算出平面法向量
+    b *= -1.0f; // BUG: If the plane passes through the origin, the normvec solved below may be extremely large, which may cause some numerical computation problems. A better way is to first calculate center and covariance, then calculate the plane normal vector through covariance
 
     for (int j = 0; j < NUM_MATCH_POINTS; j++)
     {
@@ -211,8 +211,8 @@ bool esti_plane(Matrix<T, 4, 1> &pca_result, const PointVector &point, const T &
         A(j,2) = point[j].z;
     }
 
-    // 原理：
-    // 平面Ax+By+Cz+D=0的法向量可以通过解如下的方程得到
+    // Principle:
+    // The normal vector of the plane Ax+By+Cz+D=0 can be obtained by solving the following equation
     // A x1 + B y1 + C z1 = -D
     // A x2 + B y2 + C z2 = -D
     // ...
@@ -226,7 +226,7 @@ bool esti_plane(Matrix<T, 4, 1> &pca_result, const PointVector &point, const T &
 
     for (int j = 0; j < NUM_MATCH_POINTS; j++)
     {
-        // 点(x,y,z)到平面Ax+By+Cz+D=0距离为abs(Ax+By+Cz+D)/sqrt(A^2+B^2+C^2)
+        // The distance from point (x,y,z) to plane Ax+By+Cz+D=0 is abs(Ax+By+Cz+D)/sqrt(A^2+B^2+C^2)
         if (fabs(pca_result(0) * point[j].x + pca_result(1) * point[j].y + pca_result(2) * point[j].z + pca_result(3)) > threshold)
         {
             return false;

@@ -67,9 +67,6 @@ Dr. Fu Zhang < fuzhang@hku.hk >.
 #include <thread>
 #include <vector>
 
-using std::cout;
-using std::endl;
-
 namespace Common_tools {
 
 class Process {
@@ -197,7 +194,7 @@ inline ThreadPool::ThreadPool(size_t threads, bool if_set_cpu_affinity, bool if_
   if (threads <= 0) {
     threads = number_of_cpus;
   }
-  // cout << "Number of processors: " << number_of_cpus << endl;
+  // spdlog::info("Number of processors: {}", number_of_cpus);
   if (threads <= 0) {
     // threads = number_of_cpus;
     threads = 10;

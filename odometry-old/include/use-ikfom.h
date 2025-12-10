@@ -34,13 +34,13 @@ MTK::get_cov<process_noise_ikfom>::type process_noise_cov();
 
 //double L_offset_to_I[3] = {0.04165, 0.02326, -0.0284}; // Avia 
 //vect3 Lidar_offset_to_IMU(L_offset_to_I, 3);
-// 获取f(x,u,0)函数的描述，eq.18
+// Get the description of f(x,u,0) function, eq.18
 Eigen::Matrix<double, 24, 1> get_f(state_ikfom &s, const input_ikfom &in);
 
-// 获取df/dx矩阵，eq.26
+// Get df/dx matrix, eq.26
 Eigen::Matrix<double, 24, 23> df_dx(state_ikfom &s, const input_ikfom &in);
 
-// 获取df/dw矩阵，eq.27
+// Get df/dw matrix, eq.27
 Eigen::Matrix<double, 24, 12> df_dw(state_ikfom &s, const input_ikfom &in);
 
 vect3 SO3ToEuler(const SO3 &orient);

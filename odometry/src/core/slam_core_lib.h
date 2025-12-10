@@ -151,7 +151,7 @@ class SlamCore {
 
     //   /*** Iterative Kalman Filter Update ***/
     //   if (!flg_EKF_inited) {
-    //     std::cout << "||||||||||Initiallizing LiDar||||||||||" << std::endl;
+    //     spdlog::info("||||||||||Initiallizing LiDar||||||||||");
     //     /*** only run in initialization period ***/
     //     Eigen::MatrixXd H_init(Eigen::Matrix<double, 9, DIM_STATE>::Zero());
     //     Eigen::MatrixXd z_init(Eigen::Matrix<double, 9, 1>::Zero());

@@ -1,6 +1,5 @@
 #include <custom_msgs/LixelAnyData.h>
 #include <gflags/gflags.h>
-#include <glog/logging.h>
 #include <nav_msgs/Odometry.h>
 #include <rosbag/bag.h>
 #include <rosbag/view.h>
@@ -48,7 +47,7 @@ void PointCloudCallback(const sensor_msgs::PointCloud2ConstPtr& msg, std::shared
   int timestamp_offset = GetFieldOffset(msg, "timestamp");
 
   if (x_offset < 0 || y_offset < 0 || z_offset < 0 || intensity_offset < 0 || timestamp_offset < 0) {
-    DLOG(INFO) << "Missing one or more fields: x/y/z/intensity/timestamp";
+    spdlog::debug("Missing one or more fields: x/y/z/intensity/timestamp");
     return;
   }
 
@@ -76,8 +75,6 @@ void PointCloudCallback(const sensor_msgs::PointCloud2ConstPtr& msg, std::shared
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  google::InitGoogleLogging(argv[0]);
-  FLAGS_logtostderr = 1;
 
   rosbag::Bag bag;
   bag.open(FLAGS_hbc_filename, rosbag::bagmode::Read);
@@ -93,7 +90,10 @@ int main(int argc, char** argv) {
   for (const auto& m : rosbag::View(bag)) {
     if (m.getTopic().find("_yaml") != std::string::npos) {
       auto msg = m.instantiate<custom_msg_pkg::LixelAnyData>();
-      DCHECK(msg);
+      if (!msg) {
+        spdlog::error("msg failed");
+        exit(1);
+      }
 
       if (m.getTopic() == "/config/extrinsic_imu_motor_yaml") {
         YAML::Node config = YAML::Load(msg->data);
@@ -171,5 +171,5 @@ int main(int argc, char** argv) {
   WriteImuFile(FLAGS_output_dir + "/imu.dat", imu_msg_list);
   WriteEncoderFile(FLAGS_output_dir + "/encoder.dat", encoder_msg_list);
 
-  DLOG(INFO) << "done.";
+  spdlog::debug("done.");
 }

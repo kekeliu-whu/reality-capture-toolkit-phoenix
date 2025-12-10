@@ -1,5 +1,7 @@
 #pragma once
 
+#include <spdlog/spdlog.h>
+
 #include <glog/logging.h>
 #include <fstream>
 #include <functional>
@@ -47,7 +49,7 @@ class SequentialLidarFileWriter {
 
   bool Write(const ConstPtr<T> &msg) {
     if (!WriteDelimitedTo(*msg, outfile_)) {
-      DLOG(ERROR) << "Failed to serialize proto::UndistoredLidarMsg to file: " << filename_;
+      spdlog::debug("Failed to serialize proto::UndistoredLidarMsg to file: {}", filename_);
       return false;
     }
     return true;

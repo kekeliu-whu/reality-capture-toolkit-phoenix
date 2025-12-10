@@ -37,6 +37,7 @@ find_package(mimalloc CONFIG REQUIRED)
 find_package(crashpad CONFIG REQUIRED)
 find_package(PDAL CONFIG REQUIRED)
 find_package(OpenMP CONFIG REQUIRED)
+find_package(spdlog CONFIG REQUIRED)
 
 include_directories(
   src
@@ -69,6 +70,7 @@ set(PGO_PRIVATE_LIBS
   crashpad::crashpad
   $<TARGET_NAME:pdalcpp>
   OpenMP::OpenMP_CXX
+  spdlog::spdlog_header_only
 )
 
 function(add_private_tool name)

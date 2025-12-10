@@ -202,7 +202,7 @@ void OctoTree::CutOctoTree() {
 
 void OctoTree::UpdateOctoTree(const pointWithCovMeta &pv) {
   if (!init_octo_) {
-    // 如果还没有初始化体素，尝试初始化体素为平面
+    // If voxel not initialized yet, try to initialize voxel as plane
     new_points_num_++;
     all_points_num_++;
     temp_points_.push_back(pv);
@@ -211,7 +211,7 @@ void OctoTree::UpdateOctoTree(const pointWithCovMeta &pv) {
     }
   } else {
     if (plane_ptr_->is_plane) {
-      // 若已初始化且体素为平面，则每隔N帧重新试图初始化平面
+      // If already initialized and voxel is plane, try to re-initialize plane every N frames
       if (update_enable_) {
         new_points_num_++;
         all_points_num_++;
@@ -238,9 +238,9 @@ void OctoTree::UpdateOctoTree(const pointWithCovMeta &pv) {
         return;
       }
     } else {
-      // 若已初始化但体素还不是平面
-      //   如果此时不在最大层，则删除当前节点的所有临时点（因此所有节点第一次初始化失败就不再认为是平面了），同时试图更新下一层的节点
-      //   如果此时已经在最大层，则每隔N帧重新试图初始化平面
+      // If already initialized but voxel is not plane
+      //   If not at max layer, delete all temp points of current node (so all nodes that fail initialization first time are no longer considered plane), and try to update next layer node
+      //   If already at max layer, try to re-initialize plane every N frames
       if (layer_ < max_layer_) {
         if (temp_points_.size() != 0) {
           std::vector<pointWithCovMeta>().swap(temp_points_);
@@ -359,7 +359,7 @@ void BuildVoxelMap(const std::vector<pointWithCov> &input_points,
   for (uint32_t i = 0; i < plsize; i++) {
     const pointWithCovMeta p_v = input_points[i];
     float loc_xyz[3];
-    // 1. 计算点所在网格
+    // 1. Compute voxel location of the point
     for (int j = 0; j < 3; j++) {
       loc_xyz[j] = p_v.pw[j] / voxel_size;
       if (loc_xyz[j] < 0) {
@@ -369,7 +369,7 @@ void BuildVoxelMap(const std::vector<pointWithCov> &input_points,
     VoxelLoc position((int64_t)loc_xyz[0], (int64_t)loc_xyz[1],
                       (int64_t)loc_xyz[2]);
     auto iter = feat_map.find(position);
-    // 2. 把点加入网格八叉树中
+    // 2. Insert point into corresponding voxel
     if (iter != feat_map.end()) {
       feat_map[position]->temp_points_.push_back(p_v);
       feat_map[position]->new_points_num_++;
@@ -387,7 +387,7 @@ void BuildVoxelMap(const std::vector<pointWithCov> &input_points,
       feat_map[position]->layer_point_size_ = layer_point_size;
     }
   }
-  // 3. 初始化八叉树
+  // 3. Initialize all voxels
   for (auto iter = feat_map.begin(); iter != feat_map.end(); ++iter) {
     iter->second->InitOctoTree();
   }

@@ -77,6 +77,7 @@
 #ifndef SON_H_
 #define SON_H_
 
+#include <spdlog/spdlog.h>
 #include <Eigen/Geometry>
 
 #include "vect.hpp"
@@ -166,13 +167,13 @@ struct SO2 : public Eigen::Rotation2D<_scalar> {
 		return is >> ang.angle();
 	}
 	void hat(Eigen::VectorXd& v, Eigen::MatrixXd &res) {
-		std::cout << "wrong idx" << std::endl;
+		spdlog::info("wrong idx");
 	}
 	void Jacob_right_inv(Eigen::VectorXd& v, Eigen::MatrixXd &res) {
-		std::cout << "wrong idx" << std::endl;
+		spdlog::info("wrong idx");
 	}
 	void Jacob_right(Eigen::VectorXd& v, Eigen::MatrixXd &res) {
-		std::cout << "wrong idx" << std::endl;
+		spdlog::info("wrong idx");
 	}
 };
 

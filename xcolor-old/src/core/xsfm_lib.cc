@@ -4,7 +4,7 @@
 #include <colmap/estimators/cost_functions.h>
 #include <colmap/scene/database.h>
 #include <colmap/scene/database_cache.h>
-#include <glog/logging.h>
+#include <spdlog/spdlog.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_types.h>
 
@@ -15,11 +15,11 @@ namespace xcolor {
 
 std::vector<std::vector<int>> ClusterByBFS(const std::vector<MatchTrack> &match_tracks) {
   int N = int(match_tracks.size());
-  // 并查集结构
+  // Union-Find structure
   std::vector<int> parent(N);
   for (int i = 0; i < N; ++i) parent[i] = i;
 
-  // 查找根
+  // Find root
   auto find = [&](int x) {
     while (parent[x] != x) {
       parent[x] = parent[parent[x]];
@@ -28,13 +28,13 @@ std::vector<std::vector<int>> ClusterByBFS(const std::vector<MatchTrack> &match_
     return x;
   };
 
-  // 合并
+  // Union
   auto unite = [&](int x, int y) {
     int fx = find(x), fy = find(y);
     if (fx != fy) parent[fx] = fy;
   };
 
-  // 建立点到track的映射
+  // Build point to track mapping
   std::unordered_map<Point2DInfo::Ptr, int> pt2track;
   for (int i = 0; i < N; ++i) {
     for (auto &pt : match_tracks[i].point2D_on_imageN) {
@@ -47,7 +47,7 @@ std::vector<std::vector<int>> ClusterByBFS(const std::vector<MatchTrack> &match_
     }
   }
 
-  // 收集每个集合的成员
+  // Collect members of each set
   std::unordered_map<int, std::vector<int>> clusters_map;
   for (int i = 0; i < N; ++i) {
     int root = find(i);
@@ -62,8 +62,8 @@ std::vector<std::vector<int>> ClusterByBFS(const std::vector<MatchTrack> &match_
   return clusters;
 }
 
-// 将colmap的所有匹配对读取进入Track，每个Track包含两个Point2DInfo
-// 单一的一个特征点只有一个Point2DInfo实例，例如(image_id, point2D_idx)这个特征点只对应Point2DInfo实例（通过智能指针实现）
+// Read all matching pairs from colmap into Track, each Track contains two Point2DInfo
+// A single feature point has only one Point2DInfo instance, for example, the feature point (image_id, point2D_idx) corresponds to only one Point2DInfo instance (implemented via smart pointers)
 std::vector<MatchTrack> GenerateMatchPairs(const colmap::CorrespondenceGraph &corr_graph,
                                            const std::unordered_map<colmap::image_t, colmap::Image> &images, const SfmConfig &config) {
   std::vector<MatchTrack> match_tracks;
@@ -109,7 +109,7 @@ std::vector<MatchTrack> GenerateMatchPairs(const colmap::CorrespondenceGraph &co
       match_tracks.push_back(mp);
     }
   }
-  DLOG(INFO) << "Load " << match_tracks.size() << " match pairs.";
+  spdlog::debug("Load {} match pairs.", match_tracks.size());
   return match_tracks;
 }
 
@@ -145,7 +145,7 @@ void ParameterizeCameras(const SfmConfig &config, ceres::Problem &problem, std::
 void AddReprojectFactorToProblem(ceres::Problem &problem, Eigen::Vector3d &point3D, const Eigen::Vector2d &point2D, colmap::Image &image,
                                  colmap::Camera &camera, ceres::LossFunction *loss_function,
                                  std::vector<ceres::ResidualBlockId> &residual_block_ids) {
-  CHECK(image.HasPose());
+  if (!image.HasPose()) { spdlog::error("Check failed"); exit(1); }
   image.CamFromWorld().rotation.normalize();
 
   double *cam_from_world_rotation    = image.CamFromWorld().rotation.coeffs().data();
@@ -162,7 +162,7 @@ void AddReprojectFactorToProblem(ceres::Problem &problem, Eigen::Vector3d &point
 
 Eigen::Vector2d ComputePixelError(Eigen::Vector3d &point3D, const Eigen::Vector2d &point2D, const colmap::Image &image,
                                   const colmap::Camera &camera) {
-  CHECK(image.HasPose());
+  if (!image.HasPose()) { spdlog::error("Check failed"); exit(1); }
 
   const double *cam_from_world_rotation    = image.CamFromWorld().rotation.coeffs().data();
   const double *cam_from_world_translation = image.CamFromWorld().translation.data();
@@ -220,14 +220,14 @@ void PrintResidualHistogram(double threshold, ceres::Problem &problem, const std
     residual = std::clamp(residual, -threshold, threshold);
     hist.Add(residual);
   }
-  DLOG(INFO) << name << ": " << hist.ToString(10);
+  spdlog::debug("{}: {}", name, hist.ToString(10));
 }
 
 std::vector<double> ComputeRMSEByClusterCentroid(const std::vector<std::vector<int>> &clusters, const std::vector<MatchTrack> &match_tracks) {
   std::vector<double> rmse_list;
 
   for (const auto &cluster : clusters) {
-    CHECK_GT(cluster.size(), 0);
+    if (cluster.size() <= 0) { spdlog::error("Check failed: cluster.size() > 0"); exit(1); }
 
     std::vector<Eigen::Vector3d> points;
 
@@ -257,7 +257,7 @@ std::vector<double> ComputeRMSEByClusterCentroid(const std::vector<std::vector<i
 
 std::vector<std::vector<int>> DBSCANClusterIndices(const std::vector<MatchTrack> &match_tracks_total, const std::vector<int> &indices, double eps,
                                                    int min_pts, int min_track_size) {
-  DCHECK_GE(min_track_size, 2);
+  if (min_track_size < 2) { spdlog::error("Check failed: min_track_size >= 2"); exit(1); }
   if (match_tracks_total.size() + 1 < min_track_size) {
     return {};
   }
@@ -332,7 +332,7 @@ void PrintClusterMetrics(std::vector<MatchTrack> &match_tracks_valid, std::vecto
       hist.Add(cluster_rmses[i]);
     }
   }
-  DLOG(INFO) << "Cluster RMSE: " << hist.ToString(10);
+  spdlog::debug("Cluster RMSE: {}", hist.ToString(10));
 
   Histogram hist_count;
   for (int i = 0; i < clusters.size(); ++i) {
@@ -341,7 +341,7 @@ void PrintClusterMetrics(std::vector<MatchTrack> &match_tracks_valid, std::vecto
       hist_count.Add(sub_clusters[i].size());
     }
   }
-  DLOG(INFO) << "Cluster count: " << hist_count.ToString(20);
+  spdlog::debug("Cluster count: {}", hist_count.ToString(20));
 }
 
 std::vector<MatchTrack> MergeMatchTracks(const std::vector<MatchTrack> &match_tracks,
@@ -374,9 +374,9 @@ bool MergeTrack(const std::vector<MatchTrack> &match_tracks_coarse, std::vector<
   std::copy_if(match_tracks_coarse.begin(), match_tracks_coarse.end(), std::back_inserter(match_tracks_valid),
                [](const MatchTrack &mt) { return mt.constraint_type != TrackConstraintType::kUnconstrained; });
 
-  DLOG(INFO) << "MergeTrack: " << match_tracks_valid.size() << " valid match tracks.";
+  spdlog::debug("MergeTrack: {} valid match tracks.", match_tracks_valid.size());
   std::vector<std::vector<int>> clusters = ClusterByBFS(match_tracks_valid);
-  DLOG(INFO) << "Cluster: " << match_tracks_valid.size() << " match pairs -> " << clusters.size() << " match tracks.";
+  spdlog::debug("Cluster: {} match pairs -> {} match tracks.", match_tracks_valid.size(), clusters.size());
 
   int count = 0;
   std::vector<std::vector<std::vector<int>>> sub_clusters(clusters.size());
@@ -386,17 +386,17 @@ bool MergeTrack(const std::vector<MatchTrack> &match_tracks_coarse, std::vector<
 #pragma omp critical
     {
       if (++count % 10000 == 0) {
-        DLOG(INFO) << "DBSCANCluster point set " << count;
+        spdlog::debug("DBSCANCluster point set {}", count);
       }
     }
   }
 
-  DLOG(INFO) << "DBSCAN clustering finished.";
+  spdlog::debug("DBSCAN clustering finished.");
 
   PrintClusterMetrics(match_tracks_valid, clusters, sub_clusters);
 
   match_tracks_fine = MergeMatchTracks(match_tracks_valid, sub_clusters);
-  DLOG(INFO) << "Finally, merge " << match_tracks_valid.size() << " match track into " << match_tracks_fine.size() << " tracks ";
+  spdlog::debug("Finally, merge {} match track into {} tracks", match_tracks_valid.size(), match_tracks_fine.size());
 
   return true;
 }
@@ -434,8 +434,7 @@ void PrintMatchTrackStatistics(const std::vector<xcolor::MatchTrack> &match_trac
   int matched_visual_and_lidar_count = std::accumulate(match_tracks.begin(), match_tracks.end(), 0, [](int sum, auto &e) {
     return sum + (e.constraint_type == xcolor::TrackConstraintType::kVisualAndLidar);
   });
-  DLOG(INFO) << "matched_visual_only: " << matched_visual_only_count * 100.0 / match_tracks.size()
-             << "% matched_visual_and_lidar_count: " << matched_visual_and_lidar_count * 100.0 / match_tracks.size() << "%";
+  spdlog::debug("matched_visual_only: {:.2f}% matched_visual_and_lidar_count: {:.2f}%", matched_visual_only_count * 100.0 / match_tracks.size(), matched_visual_and_lidar_count * 100.0 / match_tracks.size());
 }
 
 }  // namespace xcolor

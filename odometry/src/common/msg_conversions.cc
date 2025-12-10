@@ -1,5 +1,4 @@
 
-#include <glog/logging.h>
 #include "migration/proto_io.h"
 
 #include "msg_conversions.h"
@@ -35,7 +34,8 @@ std::shared_ptr<ImuInstrinsic> FromProto(const proto::ImuInstrinsic& proto) {
   if (proto.has_tpm()) {
     return FromProto(proto.tpm());
   } else {
-    DLOG(FATAL);
+    spdlog::critical("");
+    exit(1);
   }
 }
 
@@ -52,7 +52,8 @@ std::shared_ptr<LidarInstrinsic> FromProto(const proto::LidarInstrinsic& proto) 
   if (proto.has_simple()) {
     return FromProto(proto.simple());
   } else {
-    DLOG(FATAL);
+    spdlog::critical("");
+    exit(1);
   }
 }
 

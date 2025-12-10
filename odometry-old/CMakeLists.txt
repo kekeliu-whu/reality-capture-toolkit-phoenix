@@ -39,6 +39,7 @@ find_package(crashpad CONFIG REQUIRED)
 find_package(PDAL CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(OpenCV CONFIG REQUIRED)
+find_package(spdlog CONFIG REQUIRED)
 
 include_directories(
   include
@@ -76,6 +77,7 @@ set(PGO_PRIVATE_LIBS
   $<TARGET_NAME:pdalcpp>
   fmt::fmt
   ${OpenCV_LIBS}
+  spdlog::spdlog_header_only
 )
 
 function(add_private_tool name)

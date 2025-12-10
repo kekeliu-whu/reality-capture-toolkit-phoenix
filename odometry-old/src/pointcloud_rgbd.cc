@@ -46,6 +46,8 @@ Dr. Fu Zhang < fuzhang@hku.hk >.
  POSSIBILITY OF SUCH DAMAGE.
 */
 
+#include <spdlog/spdlog.h>
+
 #include "pointcloud_rgbd.h"
 #include "image_frame.h"
 
@@ -160,7 +162,7 @@ int Global_map::append_points_to_global_map(pcl::PointCloud<T> &pc_in, double ad
       }
       it++;
     }
-    cout << "Restored voxel number = " << voxels_recent_visited.size() << endl;
+    spdlog::info("Restored voxel number = {}", voxels_recent_visited.size());
   }
   int number_of_voxels_before_add = voxels_recent_visited.size();
   int pt_size                     = pc_in.points.size();
@@ -233,8 +235,8 @@ void Global_map::render_pts_in_voxels(std::shared_ptr<Image_frame>          &img
     img_ptr->m_gama_para = gama_bak;
     // m_rgb_pts_vec[i]->update_rgb( vec_3(gray, gray, gray) );
   }
-  // cout << "Render cost time = " << tim.toc() << endl;
-  // cout << "Total hit count = " << hit_count << endl;
+  // spdlog::info("Render cost time = {}", tim.toc());
+  // spdlog::info("Total hit count = {}", hit_count);
 }
 
 void Global_map::render_with_a_image(std::shared_ptr<Image_frame> &img_ptr, int if_select) {
@@ -337,13 +339,13 @@ void Global_map::selection_points_for_projection(std::shared_ptr<Image_frame>   
 }
 
 void Global_map::save_to_pcd(const std::string &file_name, int save_pts_with_views) {
-  cout << "Save Rgb points to " << file_name << endl;
+  spdlog::info("Save Rgb points to {}", file_name);
   fflush(stdout);
   pcl::PointCloud<pcl::PointXYZRGB> pc_rgb;
   long                              pt_size = m_rgb_pts_vec.size();
   pc_rgb.resize(pt_size);
   long pt_count = 0;
-  cout << "Saving offline map... ";
+  spdlog::info("Saving offline map... ");
   for (long i = pt_size - 1; i > 0; i--)
   // for (int i = 0; i  <  pt_size; i++)
   {
@@ -359,9 +361,9 @@ void Global_map::save_to_pcd(const std::string &file_name, int save_pts_with_vie
     pc_rgb.points[pt_count].b = m_rgb_pts_vec[i]->m_rgb[0];
     pt_count++;
   }
-  cout << "Saving offline map 100% ..." << endl;
+  spdlog::info("Saving offline map 100% ...");
   pc_rgb.resize(pt_count);
-  cout << "Total have " << pt_count << " points." << endl;
-  cout << "Now write to: " << file_name << endl;
+  spdlog::info("Total have {} points.", pt_count);
+  spdlog::info("Now write to: {}", file_name);
   pcl::io::savePCDFileBinary(file_name, pc_rgb);
 }

@@ -13,19 +13,19 @@ int main() {
   ////////////////////////////////////////////////////////////////////////
   ////                        Edit by manaul                           ///
   ////////////////////////////////////////////////////////////////////////
-  // 相机内参矩阵K
+  // Camera intrinsic matrix K
   cv::Mat K = (cv::Mat_<double>(3, 3) << 1473.1956665797843, 0.0, 1785.8248915738964, 0.0, 1473.952880308936, 2327.6491626317593, 0.0, 0.0, 1.0);
-  // 畸变系数D
+  // Distortion coefficients D
   cv::Mat D = (cv::Mat_<double>(1, 4) << 0.01600925150571167, 0.007454388315425191, -0.003923151572616989, 0.0009809063388811954);
 
-  // 图像点
+  // Image points
   std::vector<cv::Point2f> imgPoints = {
       cv::Point2f(896, 1876),
       cv::Point2f(886, 2318),
       cv::Point2f(1463, 2305),
       cv::Point2f(1465, 1883)};
 
-  // 三维点
+  // 3D points
   std::vector<cv::Point3f> objPoints = {
       cv::Point3f(-0.409000009298, 2.51699995995, 0.582000017166),
       cv::Point3f(-0.0790000036359, 2.56999993324, -0.0710000023246),
@@ -38,14 +38,14 @@ int main() {
   ////                        Edit by manaul                           ///
   //////////////////////////////////////////////////////////////////////////
 
-  // 将畸变矫正为无畸变点
+  // Undistort the distorted points to undistorted points
   std::vector<cv::Point2f> undistorted;
   cv::fisheye::undistortPoints(imgPoints, undistorted, K, D, {}, K);
 
-  // 相机的初始位姿估计
+  // Initial pose estimation of the camera
   cv::Mat rvec, tvec;
 
-// 使用solvePnP求解相机的位姿
+// Use solvePnP to solve for the camera pose
 #ifdef __linux__
   cv::solvePnPRansac(objPoints, undistorted, K, {}, rvec, tvec, {}, 100, 50);
 #else
@@ -54,37 +54,35 @@ int main() {
   cv::solvePnPRansac(objPoints, undistorted, K, {}, rvec, tvec, {}, usac_params);
 #endif
 
-  // 计算重投影误差
+  // Calculate reprojection error
   std::vector<cv::Point2f> projectedPoints;
   cv::fisheye::projectPoints(objPoints, projectedPoints, rvec, tvec, K, D);
   double pixel_error = 0;
   for (size_t i = 0; i < projectedPoints.size(); i++) {
     cv::Point2f diff = projectedPoints[i] - imgPoints[i];
-    std::cout << "Point " << i << ": " << sqrt(diff.x * diff.x + diff.y * diff.y) << std::endl;
+    spdlog::info("Point {}: {}", i, sqrt(diff.x * diff.x + diff.y * diff.y));
   }
 
-  // 输出结果
-  std::cout << "Rotation Vector:" << std::endl
-            << rvec << std::endl;
-  std::cout << "Translation Vector:" << std::endl
-            << tvec << std::endl;
+  // Output results
+  spdlog::info("Rotation Vector:\n{}", rvec);
+  spdlog::info("Translation Vector:\n{}", tvec);
 
   cv::Mat rotationMatrix;
   cv::Rodrigues(rvec, rotationMatrix);
 
-  // 将 OpenCV 的旋转矩阵转换为 Eigen 的旋转矩阵
+  // Convert OpenCV rotation matrix to Eigen rotation matrix
   Eigen::Matrix3d eigenRotationMatrix;
   Eigen::Vector3d eigenTranslationVector;
   cv::cv2eigen(rotationMatrix, eigenRotationMatrix);
   cv::cv2eigen(tvec, eigenTranslationVector);
 
-  std::cout << eigenRotationMatrix << std::endl;
-  std::cout << eigenTranslationVector.transpose() << std::endl;
+  spdlog::info("Eigen Rotation Matrix:\n{}", eigenRotationMatrix);
+  spdlog::info("Eigen Translation Vector:\n{}", eigenTranslationVector.transpose());
 
   pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
   int ok = pcl::io::loadPLYFile(ply_filename, *cloud);
   if (ok != 0) {
-    std::cout << ok << " " << errno << std::endl;
+    spdlog::error("{} {}", ok, errno);
     exit(1);
   }
 
@@ -126,9 +124,9 @@ int main() {
   eigenTranslationVector = -(eigenRotationMatrix.transpose() * eigenTranslationVector);
   eigenRotationMatrix.transposeInPlace();
 
-  std::cout << eigenRotationMatrix << std::endl;
-  std::cout << Eigen::Quaterniond(eigenRotationMatrix).coeffs().transpose() << std::endl;
-  std::cout << eigenTranslationVector.transpose() << std::endl;
+  spd << eigenRotationMatrix << std::endl;
+  spdlog::info("{}", Eigen::Quaterniond(eigenRotationMatrix).coeffs().transpose());
+  spdlog::info("{}", eigenTranslationVector.transpose());
 
   return 0;
 }

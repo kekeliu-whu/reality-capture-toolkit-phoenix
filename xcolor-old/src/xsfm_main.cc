@@ -2,7 +2,7 @@
 #include <colmap/estimators/cost_functions.h>
 #include <colmap/scene/database.h>
 #include <colmap/scene/database_cache.h>
-#include <glog/logging.h>
+#include <spdlog/spdlog.h>
 #include <omp.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/kdtree/kdtree_flann.h>
@@ -27,8 +27,8 @@ void RunSFM(const xcolor::SfmConfig &config, const std::string &point_cloud_file
             std::vector<xcolor::MatchTrack> &match_tracks_fine) {
   pcl::PointCloud<pcl::PointXYZINormal> point_cloud;
   int load_ply_status = pcl::io::loadPCDFile(point_cloud_filename, point_cloud);
-  CHECK_NE(load_ply_status, -1);
-  DLOG(INFO) << "Load " << point_cloud.size() << " lidar points.";
+  if(load_ply_status == -1) { spdlog::critical("Check failed"); exit(1); }
+  spdlog::debug("Load {} lidar points.", point_cloud.size());
 
   // build kdtree
   pcl::KdTreeFLANN<pcl::PointXYZINormal> kdtree;
@@ -50,7 +50,7 @@ std::unordered_map<std::string, colmap::Rigid3d> ReadImagePoses(const std::strin
   std::unordered_map<std::string, colmap::Rigid3d> image_to_pose;
 
   std::ifstream file(filename);
-  CHECK(file) << filename;
+  if(!file) { spdlog::critical("Check failed: {}", filename); exit(1); }
 
   std::string line;
   std::getline(file, line);
@@ -73,7 +73,7 @@ std::unordered_map<std::string, colmap::Rigid3d> ReadImagePoses(const std::strin
         camera_to_last_pose      = pose_cv_from_world;
         image_to_pose[file_path] = pose_cv_from_world;
       } else {
-        DLOG(INFO) << "Ignore image " << file_path;
+        spdlog::debug("Ignore image {}", file_path);
       }
     } else {
       camera_to_last_pose      = pose_cv_from_world;
@@ -81,7 +81,7 @@ std::unordered_map<std::string, colmap::Rigid3d> ReadImagePoses(const std::strin
     }
   }
 
-  DLOG(INFO) << "Read " << image_to_pose.size() << " image poses from " << filename;
+  spdlog::debug("Read {} image poses from {}", image_to_pose.size(), filename);
   return image_to_pose;
 }
 
@@ -95,23 +95,20 @@ void ReadPointCloudOffset(const std::string &filename, Eigen::Vector2d &offset, 
     offset.y() = j["offset_y"];
     proj_str   = j["proj4_string"];
 
-    DLOG(INFO) << "Read point cloud offset: " << offset.transpose() << ", proj_str: " << proj_str;
+    spdlog::debug("Read point cloud offset: {}, proj_str: {}", offset.transpose(), proj_str);
   } else {
-    DLOG(FATAL) << "Failed to open file: " << filename;
+    spdlog::critical("Failed to open file: {}", filename);
+    exit(1);
   }
 }
 
 int main(int argc, char **argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  google::InitGoogleLogging(argv[0]);
-  // EncryptedLogSink *sink = new EncryptedLogSink();
-  // google::AddLogSink(sink);
-
-  FLAGS_logtostderr = 1;
+  spdlog::set_level(spdlog::level::debug);
 
   int cores      = std::thread::hardware_concurrency();
   int cores_used = std::max(cores - 4, 1);
-  DLOG(INFO) << "Using " << cores_used << "/" << cores << " cores.";
+  spdlog::debug("Using {}/{} cores.", cores_used, cores);
   omp_set_dynamic(0);
   omp_set_num_threads(cores_used);
 
@@ -150,19 +147,18 @@ int main(int argc, char **argv) {
         image_count++;
       }
     }
-    DLOG(INFO) << "Image count with pose: " << image_count << "/" << images.size() << " (" << image_count * 100.0 / images.size() << "%)";
+    spdlog::debug("Image count with pose: {}/{} ({:.2f}%)", image_count, images.size(), image_count * 100.0 / images.size());
 
     match_tracks_coarse = GenerateMatchPairs(corr_graph, images, config);
-    DLOG(INFO) << "Loading " << match_tracks_coarse.size() << " image pairs from " << FLAGS_database_filename;
+    spdlog::debug("Loading {} image pairs from {}", match_tracks_coarse.size(), FLAGS_database_filename);
   }
 
   std::vector<xcolor::MatchTrack> match_tracks_fine;
   RunSFM(config, FLAGS_point_cloud_filename, images, cameras, match_tracks_coarse, match_tracks_fine);
   xcolor::SaveXml(FLAGS_output_path + "/mvs.xml", images, cameras, match_tracks_fine, offset, proj_str, FLAGS_images_path);
 
-  DLOG(INFO) << "done.";
+  spdlog::debug("done.");
   std::cout << "done." << std::endl;
 
-  google::ShutdownGoogleLogging();
   return 0;
 }

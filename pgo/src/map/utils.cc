@@ -1,5 +1,4 @@
 
-#include <glog/logging.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_cloud.h>
@@ -94,13 +93,13 @@ void PcaEstimateNormal(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &cloud,
                        std::vector<Eigen::Vector3f> &normals) {
   normals.resize(cloud->size());
 
-  DLOG(INFO) << "Building kdtree for normal estimation...";
+  spdlog::debug("Building kdtree for normal estimation...");
   pcl::KdTreeFLANN<pcl::PointXYZI>::Ptr tree(new pcl::KdTreeFLANN<pcl::PointXYZI>);
   pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZI>);
   DownsamplePointCloud(cloud, cloud_downsampled, downsample_voxel_size);
   tree->setInputCloud(cloud_downsampled);
 
-  DLOG(INFO) << "Estimating normals...";
+  spdlog::debug("Estimating normals...");
 #pragma omp parallel for
   for (int i = 0; i < cloud->size(); ++i) {
     std::vector<int> k_indices(k);
@@ -172,5 +171,5 @@ void DownsampleSubmaps(std::vector<TimestampedPointCloud> &submaps,
     submap.cloud = cloud_filtered;
   }
 
-  DLOG(INFO) << "Downsample " << submaps.size() << " submaps done.";
+  spdlog::debug("Downsample {} submaps done.", submaps.size());
 }

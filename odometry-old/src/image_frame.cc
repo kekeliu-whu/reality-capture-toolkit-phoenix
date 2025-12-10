@@ -45,6 +45,9 @@ Dr. Fu Zhang < fuzhang@hku.hk >.
  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  POSSIBILITY OF SUCH DAMAGE.
 */
+
+#include <spdlog/spdlog.h>
+
 #include "image_frame.h"
 
 Image_frame::Image_frame() {
@@ -202,7 +205,7 @@ double Image_frame::get_grey_color(double &u, double &v, int layer) {
   } else {
     // TODO
     while (1) {
-      std::cout << "To be process here" << __LINE__ << std::endl;
+      spdlog::info("To be process here {}", __LINE__);
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     };
   }
@@ -218,10 +221,9 @@ bool Image_frame::get_rgb(const double &u, const double &v, int &r, int &g, int 
 }
 
 void Image_frame::display_pose() {
-  std::cout << "Frm [" << m_frame_idx << "], pose: " << m_pose_w2c_q.coeffs().transpose() << " | "
-            << m_pose_w2c_t.transpose() << " | ";
-  std::cout << fx << ", " << cx << ", " << fy << ", " << cy << ", ";
-  std::cout << std::endl;
+  spdlog::info("Frm [{}], pose: {} | {} {} {} {} | {} {} {} , {} , {} , {} , ", m_frame_idx, m_pose_w2c_q.x(),
+               m_pose_w2c_q.y(), m_pose_w2c_q.z(), m_pose_w2c_q.w(), m_pose_w2c_t(0), m_pose_w2c_t(1), m_pose_w2c_t(2),
+               fx, cx, fy, cy);
 }
 
 void Image_frame::image_equalize(cv::Mat &img, int amp) {

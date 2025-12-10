@@ -1054,7 +1054,7 @@ class esekf {
       if (converg) t++;
       if (t > 1 || i == maximum_iter - 1) {
         L_ = P_;
-        LOG(INFO) << "iteration time:" << t << "," << i;
+        spdlog::info("iteration time:{},{}", t, i);
         for (std::vector<std::pair<std::pair<int, int>, int> >::iterator it = x_.SEN_state.begin();
              it != x_.SEN_state.end(); it++) {
           int      idx = (*it).first.first;
@@ -1323,7 +1323,7 @@ class esekf {
       if (dyn_share.converge) t++;
       if (t > 1 || i == maximum_iter - 1) {
         L_ = P_;
-        LOG(INFO) << "iteration time:" << t << "," << i;
+        spdlog::info("iteration time:{},{}", t, i);
         for (std::vector<std::pair<std::pair<int, int>, int> >::iterator it = x_.SEN_state.begin();
              it != x_.SEN_state.end(); it++) {
           int      idx = (*it).first.first;
@@ -1618,10 +1618,10 @@ class esekf {
       if (dyn_share.converge) t++;
       if (t > 1 || i == maximum_iter - 1) {
         L_ = P_;
-        LOG(INFO) << "iteration time:" << t << "," << i;
+        spdlog::info("iteration time:{},{}", t, i);
         for (std::vector<std::pair<std::pair<int, int>, int> >::iterator it = x_.SEN_state.begin();
              it != x_.SEN_state.end(); it++) {
-          LOG(ERROR) << "bug";
+          spdlog::error("bug");
           int      idx = (*it).first.first;
           int      dim = (*it).first.second;
           int      dof = (*it).second;
@@ -1898,7 +1898,7 @@ class esekf {
       if (converg) t++;
       if (t > 1 || i == maximum_iter - 1) {
         L_ = P_;
-        LOG(INFO) << "iteration time:" << t << "," << i;
+        spdlog::info("iteration time:{},{}", t, i);
         for (std::vector<std::pair<std::pair<int, int>, int> >::iterator it = x_.SEN_state.begin();
              it != x_.SEN_state.end(); it++) {
           int      idx = (*it).first.first;
@@ -2171,7 +2171,7 @@ class esekf {
       if (dyn_share.converge) t++;
       if (t > 1 || i == maximum_iter - 1) {
         L_ = P_;
-        LOG(INFO) << "iteration time:" << t << "," << i;
+        spdlog::info("iteration time:{},{}", t, i);
         for (std::vector<std::pair<std::pair<int, int>, int> >::iterator it = x_.SEN_state.begin();
              it != x_.SEN_state.end(); it++) {
           int      idx = (*it).first.first;

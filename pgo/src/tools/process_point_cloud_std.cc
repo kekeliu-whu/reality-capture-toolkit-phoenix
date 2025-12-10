@@ -1,5 +1,4 @@
 
-#include <glog/logging.h>
 #include <omp.h>
 #include <pcl/filters/bilateral.h>
 #include <pcl/filters/fast_bilateral.h>
@@ -72,13 +71,10 @@ void SmoothPointCloud(const std::vector<Eigen::Vector3f> &normals,
 
 int main(int argc, char **argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  google::InitGoogleLogging(argv[0]);
-
-  FLAGS_logtostderr = true;
 
   int cores      = std::thread::hardware_concurrency();
   int cores_used = std::max(cores - 4, 1);
-  DLOG(INFO) << "Using " << cores_used << "/" << cores << " cores.";
+  spdlog::debug("Using {}/{} cores.", cores_used, cores);
   omp_set_dynamic(0);
   omp_set_num_threads(cores_used);
 
@@ -92,7 +88,7 @@ int main(int argc, char **argv) {
   pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZI>);
   DownsamplePointCloud(cloud, cloud_downsampled, kDownsampleVoxelSize);
 
-  DLOG(INFO) << "Smoothing...";
+  spdlog::debug("Smoothing...");
   pcl::io::savePCDFileBinary(FLAGS_project_output_path + "/before-smooth.pcd", *cloud);
   SmoothPointCloud(normals, kSmoothMaxNearestNeighbors, kSmoothMaxSearchRadius, kSmoothSigmaD, kSmoothSigmaN, cloud);
 
@@ -105,9 +101,9 @@ int main(int argc, char **argv) {
     cloud_with_normals->points.push_back(np);
   }
 
-  DLOG(INFO) << "Saving cloud with normals...";
+  spdlog::debug("Saving cloud with normals...");
   pcl::io::savePCDFileBinary(FLAGS_project_output_path + "/normals.pcd", *cloud_with_normals);
-  DLOG(INFO) << "Save to " << FLAGS_project_output_path + "/normals.pcd";
+  spdlog::debug("Save to {}", FLAGS_project_output_path + "/normals.pcd");
 
   return 0;
 }

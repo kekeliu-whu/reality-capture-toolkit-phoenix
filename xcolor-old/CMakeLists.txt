@@ -17,7 +17,6 @@ if(MSVC)
 endif()
 
 add_definitions(-D_USE_MATH_DEFINES)
-add_definitions(-DGLOG_USE_GLOG_EXPORT)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -32,7 +31,7 @@ find_package(colmap REQUIRED)
 find_package(OpenCV CONFIG REQUIRED)
 find_package(absl CONFIG REQUIRED)
 find_package(RapidJSON CONFIG REQUIRED)
-find_package(Glog REQUIRED)
+find_package(spdlog REQUIRED)
 find_package(GTest CONFIG REQUIRED)
 find_package(mimalloc CONFIG REQUIRED)
 find_package(yaml-cpp CONFIG REQUIRED)
@@ -83,7 +82,7 @@ set(PGO_PRIVATE_LIBS
   ${GFLAGS_LIBRARIES}
   ${PCL_LIBRARIES}
   ${CERES_LIBRARIES}
-  glog::glog
+  spdlog::spdlog_header_only
   colmap::colmap
   absl::flat_hash_map
   absl::flat_hash_set

@@ -1,5 +1,4 @@
 
-#include <glog/logging.h>
 #include <iomanip>
 
 #include "msg_pack_synchronizer.h"
@@ -36,11 +35,12 @@ void CollectImuOrEncoderData(std::vector<T>& out_msgs, std::deque<T>& buffer, do
 void MsgPackSynchronizer::AddLidarData(const LidarMsg::ConstPtr& lidar_msg) {
   for (const auto& lidar_point : *lidar_msg->lidar_points) {
     if (!lidar_data_queue_.empty() && lidar_point.timestamp <= lidar_data_queue_.back().timestamp) {
-      DLOG(WARNING) << "sensor timestamp is not increasing";
+      spdlog::warn("sensor timestamp is not increasing");
       return;
     }
     if (!lidar_data_queue_.empty() && lidar_point.timestamp - lidar_data_queue_.back().timestamp > kMaxSensorTimestampGap) {
-      DLOG(FATAL) << "Lidar timestamp gap is too large: " << lidar_point.timestamp - lidar_data_queue_.back().timestamp;
+      spdlog::critical("Lidar timestamp gap is too large: {}", lidar_point.timestamp - lidar_data_queue_.back().timestamp);
+      exit(1);
     }
     lidar_data_queue_.push_back(lidar_point);
   }
@@ -48,23 +48,28 @@ void MsgPackSynchronizer::AddLidarData(const LidarMsg::ConstPtr& lidar_msg) {
 
 void MsgPackSynchronizer::AddImuData(const ImuMsg& imu_msg) {
   if (!imu_data_queue_.empty() && imu_msg.timestamp <= imu_data_queue_.back().timestamp) {
-    DLOG(WARNING) << "sensor timestamp is not increasing";
+    spdlog::warn("sensor timestamp is not increasing");
     return;
   }
   if (!imu_data_queue_.empty() && imu_msg.timestamp - imu_data_queue_.back().timestamp > kMaxSensorTimestampGap) {
-    DLOG(FATAL) << "IMU timestamp gap is too large: " << imu_msg.timestamp - imu_data_queue_.back().timestamp;
+    spdlog::critical("IMU timestamp gap is too large: {}", imu_msg.timestamp - imu_data_queue_.back().timestamp);
+    exit(1);
   }
   imu_data_queue_.push_back(imu_msg);
 }
 
 void MsgPackSynchronizer::AddEncoderData(const EncoderMsg& encoder_msg) {
-  DCHECK(has_encoder_);
+  if (!has_encoder_) {
+    spdlog::error("has_encoder_ failed");
+    exit(1);
+  }
   if (!encoder_data_queue_.empty() && encoder_msg.timestamp <= encoder_data_queue_.back().timestamp) {
-    DLOG(WARNING) << "sensor timestamp is not increasing";
+    spdlog::warn("sensor timestamp is not increasing");
     return;
   }
   if (!encoder_data_queue_.empty() && encoder_msg.timestamp - encoder_data_queue_.back().timestamp > kMaxSensorTimestampGap) {
-    DLOG(FATAL) << "Encoder timestamp gap is too large: " << encoder_msg.timestamp - encoder_data_queue_.back().timestamp;
+    spdlog::critical("Encoder timestamp gap is too large: {}", encoder_msg.timestamp - encoder_data_queue_.back().timestamp);
+    exit(1);
   }
   encoder_data_queue_.push_back(encoder_msg);
 }
@@ -151,16 +156,8 @@ void MsgPackSynchronizer::ValidateMsgPack(const MsgPack& msg_pack) const {
 
 void MsgPackSynchronizer::PrintMsgPack(const MsgPack& msg_pack) const {
   if (has_encoder_) {
-    DLOG(INFO) << std::fixed << std::setprecision(6) << "msg_pack(" << msg_pack.id << ")[" << msg_pack.group_start_time << ","
-              << msg_pack.group_end_time << "] lidar_" << msg_pack.lidar_points->points.size() << "["
-              << msg_pack.lidar_points->points.front().timestamp << "," << msg_pack.lidar_points->points.back().timestamp << "] imu_"
-              << msg_pack.imu_msgs.size() << "[" << msg_pack.imu_msgs.front().timestamp << "," << msg_pack.imu_msgs.back().timestamp << "] encoder_"
-              << msg_pack.encoder_msgs.size() << "[" << msg_pack.encoder_msgs.front().timestamp << "," << msg_pack.encoder_msgs.back().timestamp
-              << "]";
+    spdlog::debug("msg_pack({})[{:.6f},{:.6f}] lidar_{}[{:.6f},{:.6f}] imu_{}[{:.6f},{:.6f}] encoder_{}[{:.6f},{:.6f}]", msg_pack.id, msg_pack.group_start_time, msg_pack.group_end_time, msg_pack.lidar_points->points.size(), msg_pack.lidar_points->points.front().timestamp, msg_pack.lidar_points->points.back().timestamp, msg_pack.imu_msgs.size(), msg_pack.imu_msgs.front().timestamp, msg_pack.imu_msgs.back().timestamp, msg_pack.encoder_msgs.size(), msg_pack.encoder_msgs.front().timestamp, msg_pack.encoder_msgs.back().timestamp);
   } else {
-    DLOG(INFO) << std::fixed << std::setprecision(6) << "msg_pack(" << msg_pack.id << ")[" << msg_pack.group_start_time << ","
-              << msg_pack.group_end_time << "] lidar_" << msg_pack.lidar_points->points.size() << "["
-              << msg_pack.lidar_points->points.front().timestamp << "," << msg_pack.lidar_points->points.back().timestamp << "] imu_"
-              << msg_pack.imu_msgs.size() << "[" << msg_pack.imu_msgs.front().timestamp << "," << msg_pack.imu_msgs.back().timestamp << "]";
+    spdlog::debug("msg_pack({})[{:.6f},{:.6f}] lidar_{}[{:.6f},{:.6f}] imu_{}[{:.6f},{:.6f}]", msg_pack.id, msg_pack.group_start_time, msg_pack.group_end_time, msg_pack.lidar_points->points.size(), msg_pack.lidar_points->points.front().timestamp, msg_pack.lidar_points->points.back().timestamp, msg_pack.imu_msgs.size(), msg_pack.imu_msgs.front().timestamp, msg_pack.imu_msgs.back().timestamp);
   }
 }

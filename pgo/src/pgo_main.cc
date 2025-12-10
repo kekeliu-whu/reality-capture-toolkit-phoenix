@@ -1,6 +1,4 @@
 
-#include <glog/logging.h>
-
 #include "map/pgo_runner.h"
 #include "migration/proto_io.h"
 
@@ -9,17 +7,13 @@ DEFINE_string(project_output_path, "D:/Users/rick/Desktop/slam_evaluation/l2pro/
 
 int main(int argc, char **argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  google::InitGoogleLogging(argv[0]);
-
-  FLAGS_logtostderr = 1;
 
   proto::PgoConfig pgo_config;
   auto ok = ReadPgoConfigFile(
       std::string(PROJECT_DIR) + "/../migration/config/pgo/pgo.json",
       pgo_config);
-  DCHECK(ok);
-  DLOG(INFO) << "Read configuration success:" << std::endl
-             << pgo_config.DebugString();
+  if (!ok) { spdlog::error("Check failed"); exit(1); }
+  spdlog::debug("Read configuration success:\n{}", pgo_config.DebugString());
 
   PgoRunner runner(pgo_config);
   runner.Run(FLAGS_project_input_path, FLAGS_project_output_path);

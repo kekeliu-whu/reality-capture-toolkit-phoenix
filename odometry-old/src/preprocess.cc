@@ -1,5 +1,4 @@
 #include "preprocess.h"
-#include <glog/logging.h>
 
 #define RETURN0 0x00
 #define RETURN0AND1 0x10

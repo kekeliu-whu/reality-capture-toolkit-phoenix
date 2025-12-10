@@ -1,4 +1,3 @@
-#include <glog/logging.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/io/ply_io.h>
 #include <Eigen/Eigen>
@@ -19,7 +18,10 @@ struct TimeStampedState {
 std::vector<TimeStampedState> ReadLidarStates(const std::string &filename) {
   std::vector<TimeStampedState> states;
   std::ifstream infile(filename);
-  CHECK(infile.is_open());
+  if (!infile.is_open()) {
+    spdlog::error("infile.is_open() failed");
+    exit(1);
+  }
 
   std::string line;
   std::getline(infile, line);
@@ -29,21 +31,24 @@ std::vector<TimeStampedState> ReadLidarStates(const std::string &filename) {
     state.rot.normalize();
     states.push_back(state);
   }
-  LOG(INFO) << "Number of poses loaded: " << states.size();
+  spdlog::info("Number of poses loaded: {}", states.size());
   return states;
 }
 
 std::vector<double> ReadTriggerTimestamps(const std::string &filename) {
   std::vector<double> timestamps;
   std::ifstream infile(filename);
-  CHECK(infile.is_open());
+  if (!infile.is_open()) {
+    spdlog::error("infile.is_open() failed");
+    exit(1);
+  }
 
   TimeStampedState state;
   uint64_t timestamp_ns;
   while (infile >> timestamp_ns) {
     timestamps.push_back(timestamp_ns * 1e-9);
   }
-  LOG(INFO) << "Number of trigger timestamps loaded: " << timestamps.size();
+  spdlog::info("Number of trigger timestamps loaded: {}", timestamps.size());
   return timestamps;
 }
 
@@ -115,7 +120,7 @@ int main() {
   pcl::PointCloud<pcl::PointXYZRGB> cloud_rgb;
   std::deque<pcl::PointCloud<pcl::PointXYZI>> scans;
   for (int i = 500; i < lidar_states.size(); ++i) {
-    LOG(INFO) << i;
+    spdlog::info("{}", i);
 
     pcl::PointCloud<pcl::PointXYZI> scan;
     pcl::io::loadPCDFile(std::string(ROOT_DIR) + "/PCD/scans/" + to_string(i) + ".pcd", scan);
@@ -187,8 +192,8 @@ int main() {
     double camera_time = camera_states.front().state.time;
 
     if (camera_time < lidar_time) {
-      LOG(INFO) << camera_states.size();
-      LOG(INFO) << std::fixed << std::setprecision(10) << camera_time << " " << lidar_time;
+      spdlog::info("{}", camera_states.size());
+      spdlog::info("{:.10f} {:.10f}", camera_time, lidar_time);
       auto cam_state = camera_states.front().state;
 
       // img_ptr->m_gama_para.setZero();

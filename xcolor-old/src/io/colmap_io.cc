@@ -3,6 +3,7 @@
 #include <colmap/scene/image.h>
 #include <colmap/scene/reconstruction.h>
 #include <fstream>
+#include <spdlog/spdlog.h>
 
 #include "io/colmap_io.h"
 
@@ -69,7 +70,7 @@ void ReadCamerasBinary(const std::string& filename, std::vector<colmap::Camera>&
 //
 inline void ReadImagesBinary(const std::string& filename, std::vector<colmap::Image>& images) {
   std::ifstream stream(filename, std::ios::binary);
-  CHECK(stream.good()) << "Failed to open " << filename;
+  if (!stream.good()) { spdlog::error("Failed to open {}", filename); exit(1); }
   std::vector<Eigen::Vector2d> points2D;
   std::vector<colmap::point3D_t> point3D_ids;
 
@@ -125,17 +126,17 @@ inline void ReadImagesBinary(const std::string& filename, std::vector<colmap::Im
 }
 
 void ReadImages(const std::string& sfm_path, const std::string& images_path, std::vector<Image>& images) {
-  DLOG(INFO) << "Loading image poses from " << sfm_path + "/images.bin ...";
+  spdlog::debug("Loading image poses from {} ...", sfm_path + "/images.bin");
   std::vector<colmap::Image> raw_images;
   ReadImagesBinary(sfm_path + "/images.bin", raw_images);
-  DLOG(INFO) << "Load " << raw_images.size() << " image poses.";
+  spdlog::debug("Load {} image poses.", raw_images.size());
 
-  DLOG(INFO) << "Loading cameras from " << sfm_path + "/cameras.bin ...";
+  spdlog::debug("Loading cameras from {} ...", sfm_path + "/cameras.bin");
   std::vector<colmap::Camera> raw_cameras;
   ReadCamerasBinary(sfm_path + "/cameras.bin", raw_cameras);
-  DLOG(INFO) << "Load " << raw_cameras.size() << " cameras.";
+  spdlog::debug("Load {} cameras.", raw_cameras.size());
 
-  DLOG(INFO) << "Loading images from " << images_path << " ...";
+  spdlog::debug("Loading images from {} ...", images_path);
   std::unordered_map<colmap::camera_t, colmap::Camera> camera_id2camera;
   for (auto& e : raw_cameras) {
     camera_id2camera[e.camera_id] = e;
@@ -144,8 +145,8 @@ void ReadImages(const std::string& sfm_path, const std::string& images_path, std
   for (int i = 0; i < raw_images.size(); i++) {
     auto raw_image     = raw_images[i];
     cv::Mat img_opencv = cv::imread(images_path + "/" + raw_image.Name());
-    CHECK(!img_opencv.empty());
-    CHECK(img_opencv.channels() == 3);
+    if (img_opencv.empty()) { spdlog::error("Check failed"); exit(1); }
+    if (img_opencv.channels() != 3) { spdlog::error("Check failed"); exit(1); }
 
     Image image;
     image.image  = img_opencv;
@@ -154,12 +155,15 @@ void ReadImages(const std::string& sfm_path, const std::string& images_path, std
     image.name   = raw_image.Name();
     images.push_back(image);
   }
-  DLOG(INFO) << "Load " << images.size() << " images.";
+  spdlog::debug("Load {} images.", images.size());
 }
 
 void WriteCamerasBinary(const std::string& filename, const std::vector<colmap::Camera>& cameras) {
   std::ofstream stream(filename, std::ios::binary);
-  CHECK(stream.good());
+  if (!stream.good()) {
+    spdlog::error("Failed to open file: {}", filename);
+    exit(1);
+  }
 
   WriteBinaryLittleEndian<uint64_t>(&stream, cameras.size());
 
@@ -176,7 +180,7 @@ void WriteCamerasBinary(const std::string& filename, const std::vector<colmap::C
 
 void WriteImagesBinary(const std::string& filename, const std::vector<colmap::Image>& images) {
   std::ofstream stream(filename, std::ios::binary);
-  CHECK(stream.good());
+  if (!stream.good()) { spdlog::error("Check failed"); exit(1); }
 
   WriteBinaryLittleEndian<uint64_t>(&stream, images.size());
 
@@ -208,7 +212,7 @@ void WriteImagesBinary(const std::string& filename, const std::vector<colmap::Im
 
 void WritePoints3DBinary(const std::string& filename, const std::vector<colmap::Point3D>& points3D) {
   std::ofstream stream(filename, std::ios::binary);
-  CHECK(stream.good());
+  if (!stream.good()) { spdlog::error("Check failed"); exit(1); }
 
   WriteBinaryLittleEndian<uint64_t>(&stream, points3D.size());
   stream.flush();

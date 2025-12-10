@@ -7,6 +7,7 @@
 #include <absl/container/flat_hash_set.h>
 #include <pcl/io/pcd_io.h>
 #include <opencv2/opencv.hpp>
+#include <spdlog/spdlog.h>
 
 #include "common/types.h"
 #include "core/xcolor_lib.h"
@@ -66,7 +67,7 @@ class PointCloudRayCaster {
       voxel_map_[key].point_indices->push_back(i);
     }
     tree_.reset(new Tree(voxel_boxes_cache_.begin(), voxel_boxes_cache_.end()));
-    DLOG(INFO) << "Build Voxelmap and AABBTree done: voxel count: " << voxel_map_.size() << " point count: " << cloud.size();
+    spdlog::debug("Build Voxelmap and AABBTree done: voxel count: {} point count: {}", voxel_map_.size(), cloud.size());
 
     // compute centroid as the voxel center
     for (auto &[_, voxel] : voxel_map_) {
@@ -76,11 +77,11 @@ class PointCloudRayCaster {
       }
       voxel.center = coord_sum / voxel.point_indices->size();
     }
-    DLOG(INFO) << "Compute voxel center done.";
+    spdlog::debug("Compute voxel center done.");
   }
 
   void PerformRayCasting(const std::vector<Image> &images) {
-    DLOG(INFO) << "Perform Ray Casting...";
+    spdlog::debug("Perform Ray Casting...");
     std::atomic<int> process_num(0);
 #pragma omp parallel for
     for (int image_idx = 0; image_idx < images.size(); ++image_idx) {
@@ -111,7 +112,7 @@ class PointCloudRayCaster {
 
 #pragma omp critical
       {
-        DLOG(INFO) << "Progress: " << ++process_num << " / " << images.size();
+        spdlog::debug("Progress: {} / {}", ++process_num, images.size());
         for (auto &voxel : visible_voxel_set) {
           voxel_map_[voxel].visible_image_indices->push_back(image_idx);
         }
@@ -194,7 +195,7 @@ void PerformXColor(const pcl::PointCloud<pcl::PointXYZRGB> &cloud, const std::ve
   PrintMemoryUsage();
   ray_caster.PerformRayCasting(images);
 
-  DLOG(INFO) << "Start xcolor...";
+  spdlog::debug("Start xcolor...");
   auto voxel_map = ray_caster.GetRayCastingResult();
   std::vector<Eigen::Vector3i> keys;
   for (const auto &pair : voxel_map) {
@@ -259,7 +260,10 @@ void PerformXColor(const pcl::PointCloud<pcl::PointXYZRGB> &cloud, const std::ve
           cloud_rgb[point_idx].label                  = voxel_ray_casting.visible_image_indices->size();
         }
       } else {
-        CHECK_GT(color_candidates.size(), 0) << point_idx;
+        if (color_candidates.size() <= 0) {
+          spdlog::error("CHECK_GT failed: color_candidates.size() > 0, point_idx: {}", point_idx);
+          exit(1);
+        }
         // evaluate by mean value
         cv::Vec3i color = {0, 0, 0};
         for (int j = 0; j < color_candidates.size(); ++j) {
@@ -274,10 +278,10 @@ void PerformXColor(const pcl::PointCloud<pcl::PointXYZRGB> &cloud, const std::ve
     }
   }
 
-  DLOG(INFO) << "Saving point cloud to " << output_path + "/xcolor.pcd";
+  spdlog::debug("Saving point cloud to {}", output_path + "/xcolor.pcd");
   pcl::io::savePCDFileBinary(output_path + "/xcolor.pcd", cloud_rgb);
 
-  DLOG(INFO) << "Finish xcolor.";
+  spdlog::debug("Finish xcolor.");
 }
 
 }  // namespace xcolor

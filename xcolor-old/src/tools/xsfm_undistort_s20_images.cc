@@ -1,4 +1,4 @@
-#include <glog/logging.h>
+#include <spdlog/spdlog.h>
 #include <sqlite3.h>
 #include <yaml-cpp/yaml.h>
 #include <Eigen/Eigen>
@@ -27,7 +27,7 @@ double CalculateAngle(const Eigen::Vector3d& v1, const Eigen::Vector3d& v2) {
 
 // Generate angle difference map for all pixels
 cv::Mat GenerateAngleDifferenceMap(const camera_model::PolyFisheyeCamera& camera, int width, int height, const std::string& camera_type) {
-  LOG(INFO) << "Generating angle difference map for " << camera_type << " camera...";
+  spdlog::info("Generating angle difference map for {} camera...", camera_type);
 
   // Create output map: 32-bit float for accurate angle values
   cv::Mat angle_map(height, width, CV_32FC1, cv::Scalar(0));
@@ -39,7 +39,7 @@ cv::Mat GenerateAngleDifferenceMap(const camera_model::PolyFisheyeCamera& camera
   for (int y = 0; y < height; y += 1) {
 #pragma omp critical
     {
-      LOG(INFO) << ++count;
+      spdlog::info("{}", ++count);
     }
     for (int x = 0; x < width; x += 1) {
       // Get 3D vectors for current pixel and diagonal neighbor
@@ -66,7 +66,7 @@ cv::Mat GenerateAngleDifferenceMap(const camera_model::PolyFisheyeCamera& camera
 void SaveAngleDifferenceMap(const cv::Mat& angle_map, const fs::path& output_dir, const std::string& camera_type) {
   fs::path output_file = output_dir / (camera_type + "_angle_diff_map.tiff");
   cv::imwrite(output_file.string(), angle_map);
-  LOG(INFO) << "Angle difference map saved to: " << output_file.string();
+  spdlog::info("Angle difference map saved to: {}", output_file.string());
 }
 
 // Process all images for a single camera
@@ -81,7 +81,7 @@ void UndistortAndSaveImages(const std::string& camera_type, const fs::path& inpu
   cv::Mat map1, map2;
   camera.initUndistortRectifyMap(map1, map2, camera.getParameters().A11(), camera.getParameters().A22(),
                                  cv::Size(kOutputImageWidth, kOutputImageHeight), kOutputImageWidth / 2, kOutputImageHeight / 2);
-  DLOG(INFO) << "Undistort map initialized for " << camera_type << " camera.";
+  spdlog::debug("Undistort map initialized for {} camera.", camera_type);
 
   // Traverse all images in the camera directory
   for (const auto& entry : fs::directory_iterator(input_dir)) {
@@ -92,7 +92,7 @@ void UndistortAndSaveImages(const std::string& camera_type, const fs::path& inpu
       cv::Mat img            = cv::imread(image_path);
 
       if (img.empty()) {
-        LOG(WARNING) << "Failed to read image: " << image_path;
+        spdlog::warn("Failed to read image: {}", image_path);
         continue;
       }
 
@@ -104,16 +104,14 @@ void UndistortAndSaveImages(const std::string& camera_type, const fs::path& inpu
       fs::path output_file = camera_output_dir / entry.path().filename();
       cv::imwrite(output_file.string(), undistorted);
 
-      DLOG(INFO) << "Processed " << entry.path().filename() << " (" << camera_type << ")";
+      spdlog::debug("Processed {} ({})", entry.path().filename().string(), camera_type);
     }
   }
 }
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  google::InitGoogleLogging(argv[0]);
-
-  FLAGS_logtostderr = 1;
+  spdlog::set_level(spdlog::level::debug);
 
   fs::path project_dir(FLAGS_project_dir);
   fs::path images_dir    = project_dir / "images";
@@ -121,7 +119,7 @@ int main(int argc, char** argv) {
 
   // Check if images directory exists
   if (!fs::exists(images_dir)) {
-    LOG(ERROR) << "Images directory not found: " << images_dir;
+    spdlog::error("Images directory not found: {}", images_dir.string());
     return -1;
   }
 
@@ -143,9 +141,9 @@ int main(int argc, char** argv) {
     // exit(1);
 
     UndistortAndSaveImages("left", left_dir, undistort_dir, left_camera);
-    LOG(INFO) << "Processed all left camera images.";
+    spdlog::info("Processed all left camera images.");
   } else {
-    LOG(WARNING) << "Left camera directory not found: " << left_dir;
+    spdlog::warn("Left camera directory not found: {}", left_dir.string());
   }
 
   // Process right camera images
@@ -156,12 +154,12 @@ int main(int argc, char** argv) {
     camera_model::PolyFisheyeCamera right_camera{right_params};
 
     UndistortAndSaveImages("right", right_dir, undistort_dir, right_camera);
-    LOG(INFO) << "Processed all right camera images.";
+    spdlog::info("Processed all right camera images.");
   } else {
-    LOG(WARNING) << "Right camera directory not found: " << right_dir;
+    spdlog::warn("Right camera directory not found: {}", right_dir.string());
   }
 
-  LOG(INFO) << "All images processed successfully.";
+  spdlog::info("All images processed successfully.");
   std::cout << "All images processed, results saved in: " << undistort_dir << std::endl;
 
   return 0;

@@ -1,5 +1,4 @@
 
-#include <glog/logging.h>
 #include <Eigen/Dense>
 #include <fstream>
 #include <pdal/Options.hpp>
@@ -8,6 +7,7 @@
 #include <pdal/io/BufferReader.hpp>
 #include <pdal/io/LasReader.hpp>
 #include <pdal/io/LasWriter.hpp>
+#include <spdlog/spdlog.h>
 #include <vector>
 
 #include "common/msg_conversions.h"
@@ -26,19 +26,19 @@ void LoadRawScans(
   // read undistorted lidar scans
   std::vector<PointCloud::Ptr> raw_scans;
   std::vector<TimestampedPose> raw_timestamped_poses;
-  DLOG(INFO) << "Loading undistorted lidar scans from " << lidar_filename;
+  spdlog::debug("Loading undistorted lidar scans from {}", lidar_filename);
   auto ok = ReadUndistortedLidarFile(
       lidar_filename, [&raw_scans](const ConstPtr<proto::UndistoredLidarMsg> &msg) {
         raw_scans.push_back(FromProto(*msg));
       });
-  DCHECK(ok) << "Failed to load undistorted lidar scans from " << lidar_filename;
-  DLOG(INFO) << "scans number loaded: " << raw_scans.size();
+  if (!ok) { spdlog::error("Failed to load undistorted lidar scans from {}", lidar_filename); exit(1); }
+  spdlog::debug("scans number loaded: {}", raw_scans.size());
 
   proto::PoseMsgList pose_msg_list;
-  DLOG(INFO) << "Loading poses from " << poses_filename;
+  spdlog::debug("Loading poses from {}", poses_filename);
   ok = ReadPoseFile(project_path + "/poses.dat", pose_msg_list);
-  DCHECK(ok) << "Failed to load poses from " << poses_filename;
-  DLOG(INFO) << "poses number loaded: " << pose_msg_list.pose_msgs_size();
+  if (!ok) { spdlog::error("Failed to load poses from {}", poses_filename); exit(1); }
+  spdlog::debug("poses number loaded: {}", pose_msg_list.pose_msgs_size());
 
   CHECK_EQ(pose_msg_list.pose_msgs_size(), raw_scans.size());
 
@@ -49,7 +49,7 @@ void LoadRawScans(
     scans.back().cloud     = raw_scans[i];
   }
 
-  DLOG(INFO) << "All project data loaded done.";
+  spdlog::debug("All project data loaded done.");
 }
 
 void BuildSubMapFromRawScans(const std::vector<TimestampedPointCloud> &scans,
@@ -82,8 +82,7 @@ void BuildSubMapFromRawScans(const std::vector<TimestampedPointCloud> &scans,
     }
   }
 
-  DLOG(INFO) << "Build " << submaps.size() << " submaps from " << scans.size()
-             << " scans done.";
+  spdlog::debug("Build {} submaps from {} scans done.", submaps.size(), scans.size());
 }
 
 }  // namespace
