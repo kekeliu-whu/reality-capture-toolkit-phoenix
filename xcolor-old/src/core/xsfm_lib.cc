@@ -109,7 +109,7 @@ std::vector<MatchTrack> GenerateMatchPairs(const colmap::CorrespondenceGraph &co
       match_tracks.push_back(mp);
     }
   }
-  spdlog::debug("Load {} match pairs.", match_tracks.size());
+  spdlog::info("Load {} match pairs.", match_tracks.size());
   return match_tracks;
 }
 
@@ -220,7 +220,7 @@ void PrintResidualHistogram(double threshold, ceres::Problem &problem, const std
     residual = std::clamp(residual, -threshold, threshold);
     hist.Add(residual);
   }
-  spdlog::debug("{}: {}", name, hist.ToString(10));
+  spdlog::info("{}: {}", name, hist.ToString(10));
 }
 
 std::vector<double> ComputeRMSEByClusterCentroid(const std::vector<std::vector<int>> &clusters, const std::vector<MatchTrack> &match_tracks) {
@@ -332,7 +332,7 @@ void PrintClusterMetrics(std::vector<MatchTrack> &match_tracks_valid, std::vecto
       hist.Add(cluster_rmses[i]);
     }
   }
-  spdlog::debug("Cluster RMSE: {}", hist.ToString(10));
+  spdlog::info("Cluster RMSE: {}", hist.ToString(10));
 
   Histogram hist_count;
   for (int i = 0; i < clusters.size(); ++i) {
@@ -341,7 +341,7 @@ void PrintClusterMetrics(std::vector<MatchTrack> &match_tracks_valid, std::vecto
       hist_count.Add(sub_clusters[i].size());
     }
   }
-  spdlog::debug("Cluster count: {}", hist_count.ToString(20));
+  spdlog::info("Cluster count: {}", hist_count.ToString(20));
 }
 
 std::vector<MatchTrack> MergeMatchTracks(const std::vector<MatchTrack> &match_tracks,
@@ -374,9 +374,9 @@ bool MergeTrack(const std::vector<MatchTrack> &match_tracks_coarse, std::vector<
   std::copy_if(match_tracks_coarse.begin(), match_tracks_coarse.end(), std::back_inserter(match_tracks_valid),
                [](const MatchTrack &mt) { return mt.constraint_type != TrackConstraintType::kUnconstrained; });
 
-  spdlog::debug("MergeTrack: {} valid match tracks.", match_tracks_valid.size());
+  spdlog::info("MergeTrack: {} valid match tracks.", match_tracks_valid.size());
   std::vector<std::vector<int>> clusters = ClusterByBFS(match_tracks_valid);
-  spdlog::debug("Cluster: {} match pairs -> {} match tracks.", match_tracks_valid.size(), clusters.size());
+  spdlog::info("Cluster: {} match pairs -> {} match tracks.", match_tracks_valid.size(), clusters.size());
 
   int count = 0;
   std::vector<std::vector<std::vector<int>>> sub_clusters(clusters.size());
@@ -386,17 +386,17 @@ bool MergeTrack(const std::vector<MatchTrack> &match_tracks_coarse, std::vector<
 #pragma omp critical
     {
       if (++count % 10000 == 0) {
-        spdlog::debug("DBSCANCluster point set {}", count);
+        spdlog::info("DBSCANCluster point set {}", count);
       }
     }
   }
 
-  spdlog::debug("DBSCAN clustering finished.");
+  spdlog::info("DBSCAN clustering finished.");
 
   PrintClusterMetrics(match_tracks_valid, clusters, sub_clusters);
 
   match_tracks_fine = MergeMatchTracks(match_tracks_valid, sub_clusters);
-  spdlog::debug("Finally, merge {} match track into {} tracks", match_tracks_valid.size(), match_tracks_fine.size());
+  spdlog::info("Finally, merge {} match track into {} tracks", match_tracks_valid.size(), match_tracks_fine.size());
 
   return true;
 }
@@ -434,7 +434,7 @@ void PrintMatchTrackStatistics(const std::vector<xcolor::MatchTrack> &match_trac
   int matched_visual_and_lidar_count = std::accumulate(match_tracks.begin(), match_tracks.end(), 0, [](int sum, auto &e) {
     return sum + (e.constraint_type == xcolor::TrackConstraintType::kVisualAndLidar);
   });
-  spdlog::debug("matched_visual_only: {:.2f}% matched_visual_and_lidar_count: {:.2f}%", matched_visual_only_count * 100.0 / match_tracks.size(), matched_visual_and_lidar_count * 100.0 / match_tracks.size());
+  spdlog::info("matched_visual_only: {:.2f}% matched_visual_and_lidar_count: {:.2f}%", matched_visual_only_count * 100.0 / match_tracks.size(), matched_visual_and_lidar_count * 100.0 / match_tracks.size());
 }
 
 }  // namespace xcolor

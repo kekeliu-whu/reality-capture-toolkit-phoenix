@@ -67,7 +67,7 @@ class PointCloudRayCaster {
       voxel_map_[key].point_indices->push_back(i);
     }
     tree_.reset(new Tree(voxel_boxes_cache_.begin(), voxel_boxes_cache_.end()));
-    spdlog::debug("Build Voxelmap and AABBTree done: voxel count: {} point count: {}", voxel_map_.size(), cloud.size());
+    spdlog::info("Build Voxelmap and AABBTree done: voxel count: {} point count: {}", voxel_map_.size(), cloud.size());
 
     // compute centroid as the voxel center
     for (auto &[_, voxel] : voxel_map_) {
@@ -77,11 +77,11 @@ class PointCloudRayCaster {
       }
       voxel.center = coord_sum / voxel.point_indices->size();
     }
-    spdlog::debug("Compute voxel center done.");
+    spdlog::info("Compute voxel center done.");
   }
 
   void PerformRayCasting(const std::vector<Image> &images) {
-    spdlog::debug("Perform Ray Casting...");
+    spdlog::info("Perform Ray Casting...");
     std::atomic<int> process_num(0);
 #pragma omp parallel for
     for (int image_idx = 0; image_idx < images.size(); ++image_idx) {
@@ -112,7 +112,7 @@ class PointCloudRayCaster {
 
 #pragma omp critical
       {
-        spdlog::debug("Progress: {} / {}", ++process_num, images.size());
+        spdlog::info("Progress: {} / {}", ++process_num, images.size());
         for (auto &voxel : visible_voxel_set) {
           voxel_map_[voxel].visible_image_indices->push_back(image_idx);
         }
@@ -195,7 +195,7 @@ void PerformXColor(const pcl::PointCloud<pcl::PointXYZRGB> &cloud, const std::ve
   PrintMemoryUsage();
   ray_caster.PerformRayCasting(images);
 
-  spdlog::debug("Start xcolor...");
+  spdlog::info("Start xcolor...");
   auto voxel_map = ray_caster.GetRayCastingResult();
   std::vector<Eigen::Vector3i> keys;
   for (const auto &pair : voxel_map) {
@@ -278,10 +278,10 @@ void PerformXColor(const pcl::PointCloud<pcl::PointXYZRGB> &cloud, const std::ve
     }
   }
 
-  spdlog::debug("Saving point cloud to {}", output_path + "/xcolor.pcd");
+  spdlog::info("Saving point cloud to {}", output_path + "/xcolor.pcd");
   pcl::io::savePCDFileBinary(output_path + "/xcolor.pcd", cloud_rgb);
 
-  spdlog::debug("Finish xcolor.");
+  spdlog::info("Finish xcolor.");
 }
 
 }  // namespace xcolor

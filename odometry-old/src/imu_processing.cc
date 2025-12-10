@@ -4,7 +4,7 @@
 
 /// *************Preconfiguration
 
-#define MAX_INI_COUNT (10)
+#define MAX_INI_COUNT (20)
 
 ImuProcess::ImuProcess() : b_first_frame_(true), imu_need_init_(true), start_timestamp_(-1) {
   init_iter_num   = 1;
@@ -61,9 +61,6 @@ void ImuProcess::set_gyr_bias_cov(const V3D &b_g) { cov_bias_gyr = b_g; }
 void ImuProcess::set_acc_bias_cov(const V3D &b_a) { cov_bias_acc = b_a; }
 
 void ImuProcess::IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, int &N) {
-  /** 1. initializing the gravity, gyro bias, acc and gyro covariance
-   ** 2. normalize the acceleration measurenments to unit gravity **/
-
   V3D cur_acc, cur_gyr;
 
   if (b_first_frame_) {
@@ -89,17 +86,25 @@ void ImuProcess::IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 
     cov_acc = cov_acc * (N - 1.0) / N + (cur_acc - mean_acc).cwiseProduct(cur_acc - mean_acc) * (N - 1.0) / (N * N);
     cov_gyr = cov_gyr * (N - 1.0) / N + (cur_gyr - mean_gyr).cwiseProduct(cur_gyr - mean_gyr) * (N - 1.0) / (N * N);
 
-    // spdlog::info("acc norm: {} {}", cur_acc.norm(), mean_acc.norm());
-
     N++;
   }
   state_ikfom init_state = kf_state.get_x();
   init_state.grav        = S2(V3D(0, 0, -G_m_s2));
-  spdlog::info("init {} {} {}", mean_acc(0), mean_acc(1), mean_acc(2));
-  init_state.rot          = Eigen::Quaterniond::FromTwoVectors(mean_acc, V3D(0, 0, 1.0));
+  init_state.rot         = Eigen::Quaterniond::FromTwoVectors(-mean_acc, V3D(0, 0, -1.0));
+  init_state.ba          = mean_acc - mean_acc / mean_acc.norm() * G_m_s2;
+  // init_state.grav        = S2(-mean_acc / mean_acc.norm() * G_m_s2);
+  // init_state.bg           = mean_gyr;
   init_state.offset_T_L_I = Lidar_T_wrt_IMU;
   init_state.offset_R_L_I = Lidar_R_wrt_IMU;
   kf_state.change_x(init_state);
+
+  spdlog::info("mean_acc {} {} {}", mean_acc(0), mean_acc(1), mean_acc(2));
+  spdlog::info("mean_gyr {} {} {}", mean_gyr(0), mean_gyr(1), mean_gyr(2));
+  spdlog::info("grav {} {} {}", init_state.grav[0], init_state.grav[1], init_state.grav[2]);
+  spdlog::info("ba {} {} {}", init_state.ba(0), init_state.ba(1), init_state.ba(2));
+  spdlog::info("bg {} {} {}", init_state.bg(0), init_state.bg(1), init_state.bg(2));
+  spdlog::info("gyr cov {} {} {}", sqrt(cov_gyr(0)), sqrt(cov_gyr(1)), sqrt(cov_gyr(2)));
+  spdlog::info("acc cov {} {} {}", sqrt(cov_acc(0)), sqrt(cov_acc(1)), sqrt(cov_acc(2)));
 
   esekfom::esekf<state_ikfom, 12, input_ikfom>::cov init_P = kf_state.get_P();
   init_P.setIdentity();
@@ -125,7 +130,8 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
   /*** sort point clouds by offset time ***/
   pcl_out = *(meas.lidar);
   sort(pcl_out.points.begin(), pcl_out.points.end(), time_list);
-  // spdlog::info("[ IMU Process ]: Process lidar from {} to {}, {} imu msgs from {} to {}", pcl_beg_time, pcl_end_time, meas.imu.size(), imu_beg_time, imu_end_time);
+  // spdlog::info("[ IMU Process ]: Process lidar from {} to {}, {} imu msgs from {} to {}", pcl_beg_time, pcl_end_time,
+  // meas.imu.size(), imu_beg_time, imu_end_time);
 
   /*** Initialize IMU pose ***/
   state_ikfom imu_state = kf_state.get_x();
@@ -153,14 +159,8 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
         0.5 * (head->linear_acceleration.y + tail->linear_acceleration.y),
         0.5 * (head->linear_acceleration.z + tail->linear_acceleration.z);
 
-    // fout_imu << setw(10) << head->header.stamp.toSec() - first_lidar_time << " " << angvel_avr.transpose() << " " <<
-    // acc_avr.transpose() << endl;
-
-    acc_avr = acc_avr * G_m_s2 / mean_acc.norm();  // - state_inout.ba;
-
     if (head->header.stamp.toSec() < last_lidar_end_time_) {
       dt = tail->header.stamp.toSec() - last_lidar_end_time_;
-      // dt = tail->header.stamp.toSec() - pcl_beg_time;
     } else {
       dt = tail->header.stamp.toSec() - head->header.stamp.toSec();
     }

@@ -14,13 +14,13 @@ void SaveTriangulatedPoints(const std::vector<xcolor::MatchTrack> &match_tracks,
       point_cloud_out.push_back(np);
     }
   }
-  spdlog::debug("savePCDFileBinary: {}", pcl::io::savePCDFileBinary(filename, point_cloud_out));
+  spdlog::info("savePCDFileBinary: {}", pcl::io::savePCDFileBinary(filename, point_cloud_out));
 }
 
 void SaveImagePoses(const std::string &filename_txt, const std::string &filename_bin, const std::unordered_set<colmap::image_t> &optimized_image_ids,
                     const std::unordered_map<colmap::image_t, colmap::Image> &images,
                     const std::unordered_map<colmap::camera_t, colmap::Rigid3d> &pose_priors) {
-  spdlog::debug("Saving image poses into {}", filename_bin);
+  spdlog::info("Saving image poses into {}", filename_bin);
   std::vector<colmap::Image> images_out;
   for (auto &image_id : optimized_image_ids) {
     auto &image          = images.at(image_id);
@@ -37,7 +37,7 @@ void SaveImagePoses(const std::string &filename_txt, const std::string &filename
   }
   xcolor::WriteImagesBinary(filename_bin, images_out);
 
-  spdlog::debug("Saving image poses into {}", filename_txt);
+  spdlog::info("Saving image poses into {}", filename_txt);
   std::ofstream infile(filename_txt);
   infile << "camera_id image_name x y z rw rx ry rz" << std::endl;
   for (auto &image_id : optimized_image_ids) {
@@ -56,14 +56,14 @@ void SaveImagePoses(const std::string &filename_txt, const std::string &filename
 
 void SaveCameraParams(const std::string &filename_txt, const std::string &filename_bin,
                       const std::unordered_map<colmap::camera_t, colmap::Camera> &cameras) {
-  spdlog::debug("Saving camera params into {}", filename_bin);
+  spdlog::info("Saving camera params into {}", filename_bin);
   std::vector<colmap::Camera> cameras_out;
   for (auto &[image_id, _] : cameras) {
     cameras_out.push_back(cameras.at(image_id));
   }
   xcolor::WriteCamerasBinary(filename_bin, cameras_out);
 
-  spdlog::debug("Saving camera params into {}", filename_txt);
+  spdlog::info("Saving camera params into {}", filename_txt);
   std::ofstream infile(filename_txt);
   infile << "camera_id model_id fx fy cx cy params..." << std::endl;
   for (auto &e : cameras) {

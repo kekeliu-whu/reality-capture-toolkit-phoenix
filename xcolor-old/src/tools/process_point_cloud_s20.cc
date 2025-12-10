@@ -79,8 +79,8 @@ class LocalENUTransformer {
     auto factors = proj_factors(proj, coord_ll);
     proj_destroy(proj);
 
-    spdlog::debug("Meridian convergence at lon: {}, lat: {} is {}", lon, lat, factors.meridian_convergence * 180.0 / M_PI);
-    spdlog::debug("Mercator scale at lon: {}, lat: {} is {}, {}", lon, lat, factors.meridional_scale, factors.parallel_scale);
+    spdlog::info("Meridian convergence at lon: {}, lat: {} is {}", lon, lat, factors.meridian_convergence * 180.0 / M_PI);
+    spdlog::info("Mercator scale at lon: {}, lat: {} is {}, {}", lon, lat, factors.meridional_scale, factors.parallel_scale);
 
     return factors.meridian_convergence * 180.0 / M_PI;
   }
@@ -225,7 +225,7 @@ void LoadLAS(const std::string &filename, pcl::PointCloud<pcl::PointXYZI>::Ptr &
   offset.y()                  = metadata.findChild("offset_y").value<double>();
   proj_str                    = metadata.findChild("srs").findChild("proj4").value<std::string>();
 
-  spdlog::debug("LAS offset: X={:.9f}, Y={:.9f}", offset.x(), offset.y());
+  spdlog::info("LAS offset: X={:.9f}, Y={:.9f}", offset.x(), offset.y());
 
   cloud->width    = view->size();
   cloud->height   = 1;
@@ -256,13 +256,13 @@ void PcaEstimateNormalNoDirect(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &
                                std::vector<Eigen::Vector3f> &normals) {
   normals.resize(cloud->size());
 
-  spdlog::debug("Building kdtree for normal estimation...");
+  spdlog::info("Building kdtree for normal estimation...");
   pcl::KdTreeFLANN<pcl::PointXYZI>::Ptr tree(new pcl::KdTreeFLANN<pcl::PointXYZI>);
   pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZI>);
   DownsamplePointCloudInternal<pcl::PointXYZI>(*cloud, *cloud_downsampled, downsample_voxel_size);
   tree->setInputCloud(cloud_downsampled);
 
-  spdlog::debug("Estimating normals...");
+  spdlog::info("Estimating normals...");
 #pragma omp parallel for
   for (int i = 0; i < cloud->size(); ++i) {
     std::vector<int> k_indices(k);
@@ -322,7 +322,7 @@ void SmoothPointCloud(const std::vector<Eigen::Vector3f> &normals, int kNearestN
 }
 
 void SaveToLocalENU(const std::string &filename, const pcl::PointCloud<pcl::PointXYZI>::Ptr &cloud_nooffset, const LocalENUTransformer &transformer) {
-  spdlog::debug("Transforming to local ENU coordinates, origin (lat, lon): {}, {}", transformer.getOriginLonLat().x(), transformer.getOriginLonLat().y());
+  spdlog::info("Transforming to local ENU coordinates, origin (lat, lon): {}, {}", transformer.getOriginLonLat().x(), transformer.getOriginLonLat().y());
   pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_out(new pcl::PointCloud<pcl::PointXYZI>);
   cloud_out->resize(cloud_nooffset->size());
   cloud_out->width    = cloud_nooffset->width;
@@ -336,7 +336,7 @@ void SaveToLocalENU(const std::string &filename, const pcl::PointCloud<pcl::Poin
     cloud_out->points[i].intensity = cloud_nooffset->points[i].intensity;
   }
 
-  spdlog::debug("Saving to {}", filename);
+  spdlog::info("Saving to {}", filename);
   pcl::io::savePCDFileBinary(filename, *cloud_out);
 }
 
@@ -375,7 +375,7 @@ int main(int argc, char **argv) {
 
   int cores      = std::thread::hardware_concurrency();
   int cores_used = std::max(cores - 4, 1);
-  spdlog::debug("Using {}/{} cores.", cores_used, cores);
+  spdlog::info("Using {}/{} cores.", cores_used, cores);
   omp_set_dynamic(0);
   omp_set_num_threads(cores_used);
 
@@ -387,23 +387,23 @@ int main(int argc, char **argv) {
     exit(1);
   }
 
-  spdlog::debug("Loading LAS file...");
+  spdlog::info("Loading LAS file...");
   Eigen::Vector2d offset;
   std::string proj_str;
   LoadLAS(FLAGS_las_filename, cloud_nooffset, offset, proj_str);
-  spdlog::debug("Loaded {} points.", cloud_nooffset->size());
+  spdlog::info("Loaded {} points.", cloud_nooffset->size());
 
   if (!FLAGS_output_full) {
     pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZI>);
     DownsamplePointCloudInternal<pcl::PointXYZI>(*cloud_nooffset, *cloud_downsampled, kDownsampleVoxelSize);
     cloud_nooffset = cloud_downsampled;
-    spdlog::debug("Downsampled to {} points.", cloud_nooffset->size());
+    spdlog::info("Downsampled to {} points.", cloud_nooffset->size());
   }
 
   LocalENUTransformer enu_transformer(offset, proj_str);
-  spdlog::debug("Meridian convergence at origin: {} degrees.", enu_transformer.GetMeridianConvergence());
+  spdlog::info("Meridian convergence at origin: {} degrees.", enu_transformer.GetMeridianConvergence());
 
-  spdlog::debug("Save to {}", FLAGS_las_filename + "_offset.json");
+  spdlog::info("Save to {}", FLAGS_las_filename + "_offset.json");
   SaveLasOffsetJson(FLAGS_las_filename + "_offset.json", offset, proj_str, enu_transformer.getOriginLonLat());
 
   SaveToLocalENU(FLAGS_las_filename + "_normals_localenu.pcd", cloud_nooffset, enu_transformer);

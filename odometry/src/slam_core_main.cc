@@ -47,7 +47,7 @@ int main(int argc, char** argv) {
   /////////////////////////////////// setup omp ///////////////////////////////////
   int cores      = std::thread::hardware_concurrency();
   int cores_used = std::max(cores - 4, 1);
-  spdlog::debug("Using {}/{} cores.", cores_used, cores);
+  spdlog::info("Using {}/{} cores.", cores_used, cores);
   omp_set_dynamic(0);
   omp_set_num_threads(cores_used);
 
@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
   ReadImuFile(FLAGS_project_dir + "/imu.dat", imu_msg_list);
   ReadEncoderFile(FLAGS_project_dir + "/encoder.dat", encoder_msg_list);
 
-  spdlog::debug("Calibration: {}", calib.DebugString());
+  spdlog::info("Calibration: {}", calib.DebugString());
   SlamCore core(FromProto(calib));
   for (auto& msg : imu_msg_list.imu_msgs()) {
     core.AddSensorData(FromProto(msg));

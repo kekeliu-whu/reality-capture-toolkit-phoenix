@@ -49,7 +49,7 @@ class SequentialLidarFileWriter {
 
   bool Write(const ConstPtr<T> &msg) {
     if (!WriteDelimitedTo(*msg, outfile_)) {
-      spdlog::debug("Failed to serialize proto::UndistoredLidarMsg to file: {}", filename_);
+      spdlog::info("Failed to serialize proto::UndistoredLidarMsg to file: {}", filename_);
       return false;
     }
     return true;

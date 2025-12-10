@@ -126,17 +126,17 @@ inline void ReadImagesBinary(const std::string& filename, std::vector<colmap::Im
 }
 
 void ReadImages(const std::string& sfm_path, const std::string& images_path, std::vector<Image>& images) {
-  spdlog::debug("Loading image poses from {} ...", sfm_path + "/images.bin");
+  spdlog::info("Loading image poses from {} ...", sfm_path + "/images.bin");
   std::vector<colmap::Image> raw_images;
   ReadImagesBinary(sfm_path + "/images.bin", raw_images);
-  spdlog::debug("Load {} image poses.", raw_images.size());
+  spdlog::info("Load {} image poses.", raw_images.size());
 
-  spdlog::debug("Loading cameras from {} ...", sfm_path + "/cameras.bin");
+  spdlog::info("Loading cameras from {} ...", sfm_path + "/cameras.bin");
   std::vector<colmap::Camera> raw_cameras;
   ReadCamerasBinary(sfm_path + "/cameras.bin", raw_cameras);
-  spdlog::debug("Load {} cameras.", raw_cameras.size());
+  spdlog::info("Load {} cameras.", raw_cameras.size());
 
-  spdlog::debug("Loading images from {} ...", images_path);
+  spdlog::info("Loading images from {} ...", images_path);
   std::unordered_map<colmap::camera_t, colmap::Camera> camera_id2camera;
   for (auto& e : raw_cameras) {
     camera_id2camera[e.camera_id] = e;
@@ -155,7 +155,7 @@ void ReadImages(const std::string& sfm_path, const std::string& images_path, std
     image.name   = raw_image.Name();
     images.push_back(image);
   }
-  spdlog::debug("Load {} images.", images.size());
+  spdlog::info("Load {} images.", images.size());
 }
 
 void WriteCamerasBinary(const std::string& filename, const std::vector<colmap::Camera>& cameras) {

@@ -98,7 +98,7 @@ pcl::PointCloud<pcl::PointXYZI>::Ptr ExtractAndSaveValidClusters(const pcl::Poin
       j++;
     }
   }
-  spdlog::debug("Valid clusters size: {}", j);
+  spdlog::info("Valid clusters size: {}", j);
   all_clusters->width    = all_clusters->size();
   all_clusters->height   = 1;
   all_clusters->is_dense = true;
@@ -145,8 +145,8 @@ void PerformEvaluation(const pcl::PointCloud<pcl::PointXYZI>::Ptr& cluster_cente
   pcl::io::savePCDFileBinary("cluster_centers_dgb.pcd", *cluster_centers);
   pcl::io::savePCDFileBinary("gt_points_dbg.pcd", *gt_points);
 
-  spdlog::debug("cluster size: {}", cluster_centers->size());
-  spdlog::debug("ground truth size: {}", gt_points->size());
+  spdlog::info("cluster size: {}", cluster_centers->size());
+  spdlog::info("ground truth size: {}", gt_points->size());
 
   // Step 1: Use KD-tree to establish nearest neighbor correspondences
   pcl::KdTreeFLANN<pcl::PointXYZI> kdtree;
@@ -176,7 +176,7 @@ void PerformEvaluation(const pcl::PointCloud<pcl::PointXYZI>::Ptr& cluster_cente
   // Perform multiple iterations of point matching and optimization
   for (int iter = 0; iter < num_iterations; ++iter) {
     float max_distance = distance_thresholds[iter];
-    spdlog::debug("Iteration {} with max distance: {} m", iter + 1, max_distance);
+    spdlog::info("Iteration {} with max distance: {} m", iter + 1, max_distance);
 
     // Save corresponding point pairs for this iteration
     std::vector<std::pair<int, int>> correspondences;
@@ -195,10 +195,10 @@ void PerformEvaluation(const pcl::PointCloud<pcl::PointXYZI>::Ptr& cluster_cente
       }
     }
 
-    spdlog::debug("Iteration {} found {} correspondences", iter + 1, correspondences.size());
+    spdlog::info("Iteration {} found {} correspondences", iter + 1, correspondences.size());
 
     if (correspondences.size() < 3) {
-      spdlog::debug("Not enough correspondences in iteration {}", iter + 1);
+      spdlog::info("Not enough correspondences in iteration {}", iter + 1);
 
       // If it's the first iteration and not enough correspondences, exit
       if (iter == 0) {
@@ -238,7 +238,7 @@ void PerformEvaluation(const pcl::PointCloud<pcl::PointXYZI>::Ptr& cluster_cente
     ceres::Solver::Summary summary;
     ceres::Solve(options, &problem, &summary);
 
-    spdlog::debug("Iteration {} Ceres optimization completed: {}", iter + 1, summary.BriefReport());
+    spdlog::info("Iteration {} Ceres optimization completed: {}", iter + 1, summary.BriefReport());
 
     // Build transformation matrix from optimization results
     Eigen::Quaterniond q(quaternion[0], quaternion[1], quaternion[2], quaternion[3]);
@@ -266,7 +266,7 @@ void PerformEvaluation(const pcl::PointCloud<pcl::PointXYZI>::Ptr& cluster_cente
     // Save intermediate transformed cloud for debugging
     std::string filename = "transformed_iter_" + std::to_string(iter + 1) + ".pcd";
     pcl::io::savePCDFileBinary(filename, *transformed_cloud);
-    spdlog::debug("Saved {}", filename);
+    spdlog::info("Saved {}", filename);
   }
 
   // Apply the final best transformation
@@ -334,33 +334,33 @@ void PerformEvaluation(const pcl::PointCloud<pcl::PointXYZI>::Ptr& cluster_cente
   float std_dev = std::sqrt(variance / static_cast<float>(errors.size()));
 
   // Output evaluation results
-  spdlog::debug("============ Results ============");
-  spdlog::debug("Point correspondence count: {}", final_correspondences.size());
-  spdlog::debug("3D RMSE: {} m", rmse);
-  spdlog::debug("3D average error: {} m", mean_error);
-  spdlog::debug("3D max error: {} m", max_error);
-  spdlog::debug("3D std error: {} m", std_dev);
+  spdlog::info("============ Results ============");
+  spdlog::info("Point correspondence count: {}", final_correspondences.size());
+  spdlog::info("3D RMSE: {} m", rmse);
+  spdlog::info("3D average error: {} m", mean_error);
+  spdlog::info("3D max error: {} m", max_error);
+  spdlog::info("3D std error: {} m", std_dev);
 
   // Output horizontal and vertical error metrics
-  spdlog::debug("Horizontal average error: {} m", mean_horizontal_error);
-  spdlog::debug("Horizontal max error: {} m", max_horizontal_error);
-  spdlog::debug("Vertical average error: {} m", mean_vertical_error);
-  spdlog::debug("Vertical max error: {} m", max_vertical_error);
+  spdlog::info("Horizontal average error: {} m", mean_horizontal_error);
+  spdlog::info("Horizontal max error: {} m", max_horizontal_error);
+  spdlog::info("Vertical average error: {} m", mean_vertical_error);
+  spdlog::info("Vertical max error: {} m", max_vertical_error);
 
   // Output transformation matrix
-  spdlog::debug("Best rotation matrix R:");
+  spdlog::info("Best rotation matrix R:");
   Eigen::Matrix3f final_rotation = best_transform.block<3, 3>(0, 0);
   for (int i = 0; i < 3; ++i) {
-    spdlog::debug("{} {} {}", final_rotation(i, 0), final_rotation(i, 1), final_rotation(i, 2));
+    spdlog::info("{} {} {}", final_rotation(i, 0), final_rotation(i, 1), final_rotation(i, 2));
   }
 
-  spdlog::debug("Best translation vector t:");
+  spdlog::info("Best translation vector t:");
   Eigen::Vector3f final_translation = best_transform.block<3, 1>(0, 3);
-  spdlog::debug("{} {} {}", final_translation.x(), final_translation.y(), final_translation.z());
+  spdlog::info("{} {} {}", final_translation.x(), final_translation.y(), final_translation.z());
 
   // Save the final transformed point cloud
   pcl::io::savePCDFileBinary("transformed_clusters.pcd", *final_transformed_cloud);
-  spdlog::debug("Saved transformed_clusters.pcd");
+  spdlog::info("Saved transformed_clusters.pcd");
 }
 
 int main(int argc, char** argv) {
@@ -369,7 +369,7 @@ int main(int argc, char** argv) {
   /////////////////////////////////// setup omp ///////////////////////////////////
   int cores      = std::thread::hardware_concurrency();
   int cores_used = std::max(cores - 4, 1);
-  spdlog::debug("Using {}/{} cores.", cores_used, cores);
+  spdlog::info("Using {}/{} cores.", cores_used, cores);
   omp_set_dynamic(0);
   omp_set_num_threads(cores_used);
 
@@ -380,7 +380,7 @@ int main(int argc, char** argv) {
     exit(1);
   }
   LoadLAS(FLAGS_las_filename, cloud_filtered);
-  spdlog::debug("Cloud size filtered: {}", cloud_filtered->size());
+  spdlog::info("Cloud size filtered: {}", cloud_filtered->size());
   pcl::io::savePCDFileBinary(FLAGS_las_filename + ".pcd", *cloud_filtered);
 
   // ============================================
@@ -388,7 +388,7 @@ int main(int argc, char** argv) {
   std::vector<pcl::PointIndices> cluster_indices;
   ExtractClusters(cloud_filtered, cluster_indices);
 
-  spdlog::debug("Detected {} clusters.", cluster_indices.size());
+  spdlog::info("Detected {} clusters.", cluster_indices.size());
 
   // Extract valid clusters and save, and get cluster centers
   pcl::PointCloud<pcl::PointXYZI>::Ptr cluster_centers = ExtractAndSaveValidClusters(cloud_filtered, cluster_indices, FLAGS_las_filename);

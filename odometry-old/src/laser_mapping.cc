@@ -47,26 +47,35 @@
 #include <csignal>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <memory>
 #include <thread>
 
 #include "imu_processing.h"
+#include "migration/inc_las_writer.h"
+#include "migration/logging.h"
+#include "migration/string.h"
 #include "preprocess.h"
 #include "voxel_map_util.h"
 
-DEFINE_string(imu_filename, "C:\\4.indoor-big-slow\\20251023112804_imu.csv", "Path to the IMU data file");
-DEFINE_string(lidar_filename, "C:\\4.indoor-big-slow\\20251023112804.bin", "Path to the LiDAR data file");
-DEFINE_string(output_dir, "C:/4.indoor-big-slow/out", "Directory to save output trajectory");
+DEFINE_string(imu_filename, UTF8ToPlatform("C:/4.indoor-big-slow/会议室分层/20251023113331_imu.csv"),
+              "Path to the IMU data file");
+DEFINE_string(lidar_filename, UTF8ToPlatform("C:/4.indoor-big-slow/会议室分层/20251023113331.bin"),
+              "Path to the LiDAR data file");
+DEFINE_string(output_dir, UTF8ToPlatform("C:/4.indoor-big-slow/会议室分层/out"), "Directory to save output trajectory");
 
 /*** Time Log Variables ***/
 double match_time = 0, solve_time = 0, solve_const_H_time = 0;
-bool   runtime_pos_log = false, pcd_save_en = false, time_sync_en = false, extrinsic_est_en = true;
+bool   runtime_pos_log = false, time_sync_en = false, extrinsic_est_en = true;
 /**************************/
+
+int point_id = 0;
 
 double last_timestamp_lidar = 0, last_timestamp_imu = -1.0;
 double gyr_cov = 0.1, acc_cov = 0.1, b_gyr_cov = 0.0001, b_acc_cov = 0.0001;
-double filter_size_corner_min = 0, filter_size_surf_min = 0, filter_size_map_min = 0, fov_deg = 0;
+double filter_size_corner_min = 0, filter_size_surf_min = 0, filter_size_map_min = 0;
 double lidar_end_time = 0, first_lidar_time = 0.0;
-int    feats_down_size = 0, NUM_MAX_ITERATIONS = 0, laserCloudValidNum = 0, pcd_save_interval = -1, pcd_index = 0;
+int    feats_down_size = 0, NUM_MAX_ITERATIONS = 0;
 bool   lidar_pushed, flg_first_scan = true, flg_exit = false;
 bool   scan_pub_en = false, dense_pub_en = false, scan_body_pub_en = false;
 
@@ -112,14 +121,13 @@ std::vector<ptpl> ptpl_list;
 
 void SigHandle(int sig) { flg_exit = true; }
 
-void save_traj(FILE *fp) {
+void save_traj(std::ofstream &fp) {
   Eigen::Quaterniond rot = state_point.rot * state_point.offset_R_L_I;
   Eigen::Vector3d    pos = state_point.rot.toRotationMatrix() * state_point.offset_T_L_I + state_point.pos;
-  fprintf(fp, "%.12lf ", Measures.lidar_end_time);
-  fprintf(fp, "%.12lf %.12lf %.12lf ", pos(0), pos(1), pos(2));                     // Pos
-  fprintf(fp, "%.12lf %.12lf %.12lf %.12lf ", rot.x(), rot.y(), rot.z(), rot.w());  // Rot
-  fprintf(fp, "\n");
-  fflush(fp);
+  fp << fmt::format("{:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f}\n",
+                    Measures.lidar_end_time, pos(0), pos(1), pos(2), rot.x(), rot.y(), rot.z(), rot.w(),
+                    state_point.grav[0], state_point.grav[1], state_point.grav[2]);
+  fp.flush();
 }
 
 void pointBodyToWorld_ikfom(PointType const *const pi, PointType *const po, state_ikfom &s) {
@@ -236,38 +244,6 @@ struct LidarScan {
 };
 #pragma pack(pop)
 
-bool readPointCloud(const std::string &filename, std::vector<Point> &points) {
-  std::ifstream file(filename, std::ios::binary);
-  if (!file) {
-    spdlog::error("Open file failed: {}", filename);
-    return false;
-  }
-
-  LidarScan scan;
-  file.read(reinterpret_cast<char *>(&scan.scan_data_len), sizeof(uint64_t));
-  file.read(reinterpret_cast<char *>(&scan.scan_data.point_num), sizeof(uint64_t));
-
-  spdlog::info("scan_data_len: {}", scan.scan_data_len);
-  spdlog::info("point_num: {}", scan.scan_data.point_num);
-
-  points.resize(scan.scan_data.point_num);
-  file.read(reinterpret_cast<char *>(points.data()), scan.scan_data.point_num * sizeof(Point));
-
-  file.close();
-
-  if (!points.empty()) {
-    double min_time = points[0].timestamp;
-    double max_time = points[0].timestamp;
-    for (size_t i = 1; i < points.size(); ++i) {
-      if (points[i].timestamp < min_time) min_time = points[i].timestamp;
-      if (points[i].timestamp > max_time) max_time = points[i].timestamp;
-    }
-    spdlog::info("Point cloud data time range: {} - {}", min_time, max_time);
-  }
-
-  return true;
-}
-
 // LiDAR file reader class
 class LidarFileReader {
  private:
@@ -277,6 +253,8 @@ class LidarFileReader {
   double        frame_interval_;
   bool          is_initialized_;
   bool          file_ended_;
+  uint64_t      total_points;
+  uint64_t      read_points;
 
  public:
   LidarFileReader(const std::string &filename, double frame_interval = 0.1)
@@ -284,7 +262,9 @@ class LidarFileReader {
         last_frame_time_(0.0),
         frame_interval_(frame_interval),
         is_initialized_(false),
-        file_ended_(false) {
+        file_ended_(false),
+        total_points(0),
+        read_points(0) {
     if (!boost::filesystem::exists(filename)) {
       spdlog::critical("LiDAR file does not exist: {}", filename);
       exit(1);
@@ -301,6 +281,7 @@ class LidarFileReader {
     file_.read(reinterpret_cast<char *>(&scan_data_len), sizeof(uint64_t));
     int64_t point_num;
     file_.read(reinterpret_cast<char *>(&point_num), sizeof(uint64_t));
+    total_points = point_num;
 
     spdlog::info("Opened LiDAR file: {}", filename);
   }
@@ -322,6 +303,7 @@ class LidarFileReader {
         file_ended_ = true;
         return false;
       }
+      read_points++;
 
       if (flg_exit) {
         file_ended_ = true;
@@ -376,6 +358,8 @@ class LidarFileReader {
   bool isFileEnded() const { return file_ended_; }
 
   void setFrameInterval(double interval) { frame_interval_ = interval; }
+
+  double getProgress() const { return total_points > 0 ? (read_points / (double)total_points) * 100.0 : 0.0; }
 };
 
 // Read data from IMU file and fill into buffer
@@ -385,21 +369,22 @@ void load_imu_data_from_file(const std::string &filename) {
     throw std::runtime_error("IMU file not found");
   }
 
-  FILE *imu_file = fopen(filename.c_str(), "r");
+  std::ifstream imu_file(filename);
   if (!imu_file) {
     spdlog::error("Failed to open IMU file: {}", filename);
     throw std::runtime_error("Failed to open IMU file");
   }
 
   // Skip header line
-  char header[1024];
-  fgets(header, sizeof(header), imu_file);
+  std::string header;
+  std::getline(imu_file, header);
 
   double last_ax = 0, last_ay = 0, last_az = 0;
   bool   is_first_imu = true;
 
   double t, ax, ay, az, gx, gy, gz;
-  while (fscanf(imu_file, "%lf,%lf,%lf,%lf,%lf,%lf,%lf", &t, &ax, &ay, &az, &gx, &gy, &gz) == 7) {
+  char   comma;
+  while (imu_file >> t >> comma >> ax >> comma >> ay >> comma >> az >> comma >> gx >> comma >> gy >> comma >> gz) {
     // Skip duplicate IMU data
     if (!is_first_imu && ax == last_ax && ay == last_ay && az == last_az) {
       continue;
@@ -423,7 +408,6 @@ void load_imu_data_from_file(const std::string &filename) {
     imu_cbk(imu_msg);
   }
 
-  fclose(imu_file);
   spdlog::info("Loaded IMU data from: {}", filename);
 }
 
@@ -512,8 +496,6 @@ void map_incremental() {
                  voxel_map);
 }
 
-pcl::PointCloud<pcl::PointXYZI>::Ptr pcl_wait_save(new pcl::PointCloud<pcl::PointXYZI>);
-
 Matrix<double, Eigen::Dynamic, 1> h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_data) {
   double match_start = omp_get_wtime();
 
@@ -581,19 +563,18 @@ Matrix<double, Eigen::Dynamic, 1> h_share_model(state_ikfom &s, esekfom::dyn_sha
 int main(int argc, char **argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-  std::vector<Point> points;
-  readPointCloud(FLAGS_lidar_filename, points);
-
-  if (!std::filesystem::exists(FLAGS_output_dir)) {
-    spdlog::info("Creating {}...", FLAGS_output_dir);
-    std::filesystem::create_directories(FLAGS_output_dir);
-  }
+  InitSpdLog();
 
   int cores      = std::thread::hardware_concurrency();
   int cores_used = std::max(cores - 4, 1);
   spdlog::info("Using {}/{} cores.", cores_used, cores);
   omp_set_dynamic(0);
   omp_set_num_threads(cores_used);
+
+  if (!std::filesystem::exists(FLAGS_output_dir)) {
+    spdlog::info("Creating {}...", FLAGS_output_dir);
+    std::filesystem::create_directories(FLAGS_output_dir);
+  }
 
   bool init_map = false;
 
@@ -605,28 +586,26 @@ int main(int argc, char **argv) {
   filter_size_corner_min = 0.5;
   filter_size_surf_min   = 0.5;
   filter_size_map_min    = 0.5;
-  fov_deg                = 180;
   gyr_cov                = 0.1;
   acc_cov                = 0.1;
   b_gyr_cov              = 0.0001;
   b_acc_cov              = 0.0001;
-  p_pre->blind           = 0.5;
+  p_pre->blind           = 0.2;
   p_pre->SCAN_RATE       = 10;
   runtime_pos_log        = true;
   extrinsic_est_en       = false;
-  pcd_save_en            = true;
-  pcd_save_interval      = -1;
   extrinT                = vector<double>({-0.027100, 0.021396, -0.009847});
   extrinR =
       vector<double>({0.999938, 0.007471, 0.008288, -0.007465, 0.999972, -0.000677, -0.008293, 0.000615, 0.999965});
-  ranging_cov        = 0.05;
-  angle_cov          = 0.2;
-  max_points_size    = 400;
-  max_voxel_size     = 0.5;
-  max_layer          = 2;
-  layer_size         = vector<int>({5, 5, 5, 5, 5});
-  min_eigen_value    = 0.01;
-  min_plane_likeness = 0.2;
+  ranging_cov            = 0.05;
+  angle_cov              = 0.2;
+  max_points_size        = 400;
+  max_voxel_size         = 0.5;
+  max_layer              = 2;
+  layer_size             = vector<int>({5, 5, 5, 5, 5});
+  min_eigen_value        = 0.01;
+  min_plane_likeness     = 0.2;
+  int skip_first_n_scans = 50;
 
   InitVoxelMapParams(min_plane_likeness);
 
@@ -649,11 +628,14 @@ int main(int argc, char **argv) {
   kf.init_dyn_share(get_f, df_dx, df_dw, h_share_model, NUM_MAX_ITERATIONS, epsi);
 
   /*** traj record ***/
-  FILE  *fp_traj;
-  string traj_dir = FLAGS_output_dir + "/traj.txt";
-  fp_traj         = fopen(traj_dir.c_str(), "w");
-  fprintf(fp_traj, "#timestamp_s tx ty tz qx qy qz qw\n");
-  fflush(fp_traj);
+  string        traj_dir = FLAGS_output_dir + "/traj.txt";
+  std::ofstream fp_traj(traj_dir);
+  if (!fp_traj) {
+    spdlog::error("Failed to open trajectory file: {}", traj_dir);
+    return -1;
+  }
+  fp_traj << "#timestamp_s tx ty tz qx qy qz qw\n";
+  fp_traj.flush();
 
   /*** Load IMU data ***/
   try {
@@ -664,13 +646,23 @@ int main(int argc, char **argv) {
   }
 
   /*** Create LiDAR file reader ***/
-  LidarFileReader *lidar_reader = nullptr;
+  std::unique_ptr<LidarFileReader> lidar_reader;
   try {
-    lidar_reader = new LidarFileReader(FLAGS_lidar_filename, 0.1);  // 0.1 seconds per frame
+    lidar_reader = std::make_unique<LidarFileReader>(FLAGS_lidar_filename, 0.1);  // 0.1 seconds per frame
   } catch (const std::exception &e) {
     spdlog::error("Failed to create LiDAR reader: {}", e.what());
     return -1;
   }
+
+  pdal::PointTable table;
+  table.layout()->registerDim(pdal::Dimension::Id::X);
+  table.layout()->registerDim(pdal::Dimension::Id::Y);
+  table.layout()->registerDim(pdal::Dimension::Id::Z);
+  table.layout()->registerDim(pdal::Dimension::Id::GpsTime);
+  table.layout()->registerDim(pdal::Dimension::Id::Intensity);
+
+  std::unique_ptr<migration::IncrementalLasWriter> las_writer = std::make_unique<migration::IncrementalLasWriter>();
+  las_writer->initialize(FLAGS_output_dir + "/map.las", table);
 
   //------------------------------------------------------------------------------------------------------
   signal(SIGINT, SigHandle);
@@ -764,19 +756,29 @@ int main(int argc, char **argv) {
       t5 = omp_get_wtime();
 
       /******* Publish points *******/
-      {
-        int                 size = feats_undistort->points.size();
-        PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
+      if (skip_first_n_scans-- < 0) {
+        {
+          int                 size = feats_undistort->points.size();
+          PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
 
-        spdlog::info("Adding {} points to the map.", size);
-        for (int i = 0; i < size; i++) {
-          RGBpointBodyToWorld(&feats_undistort->points[i], &laserCloudWorld->points[i]);
-          pcl_wait_save->push_back({laserCloudWorld->points[i].x, laserCloudWorld->points[i].y,
-                                    laserCloudWorld->points[i].z, laserCloudWorld->points[i].intensity});
+          spdlog::info("Adding {} points to the map.", size);
+
+          pdal::PointViewPtr view(new pdal::PointView(table));  // 指定点数
+          for (int i = 0; i < size; i++) {
+            RGBpointBodyToWorld(&feats_undistort->points[i], &laserCloudWorld->points[i]);
+
+            view->setField(pdal::Dimension::Id::X, i, laserCloudWorld->points[i].x);
+            view->setField(pdal::Dimension::Id::Y, i, laserCloudWorld->points[i].y);
+            view->setField(pdal::Dimension::Id::Z, i, laserCloudWorld->points[i].z);
+            view->setField(pdal::Dimension::Id::GpsTime, i, Measures.lidar_end_time);
+            view->setField(pdal::Dimension::Id::Intensity, i, (uint16_t)laserCloudWorld->points[i].intensity);
+          }
+          las_writer->writeView(view);
         }
-      }
 
-      save_traj(fp_traj);
+        save_traj(fp_traj);
+        std::cout << "Progress " << lidar_reader->getProgress() << std::endl;
+      }
 
       /*** Debug variables ***/
       if (runtime_pos_log) {
@@ -797,22 +799,13 @@ int main(int argc, char **argv) {
     }
   }
 
-  // Clean up resources
-  if (lidar_reader) {
-    delete lidar_reader;
-    lidar_reader = nullptr;
-  }
+  las_writer->finalize(table);
+  spdlog::info("Finished writing map to LAS file: {}", FLAGS_output_dir + "/map.las");
+
+  // Clean up resources (unique_ptr auto cleanup)
+  lidar_reader.reset();
 
   /**************** save map ****************/
-  // 1. make sure you have enough memories
-  // 2. pcd save will largely influence the real-time performences
-  if (pcl_wait_save->size() > 0 && pcd_save_en) {
-    pcl::PCDWriter pcd_writer;
-    spdlog::info("current scan saved to {}", FLAGS_output_dir + "/scans.pcd");
-    pcd_writer.writeBinary(FLAGS_output_dir + "/scans.pcd", *pcl_wait_save);
-  }
-
-  fclose(fp_traj);
-
-  return 0;
+  // Clean up LAS writer (unique_ptr auto cleanup)
+  las_writer.reset();
 }

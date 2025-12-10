@@ -74,7 +74,7 @@ int main(int argc, char **argv) {
 
   int cores      = std::thread::hardware_concurrency();
   int cores_used = std::max(cores - 4, 1);
-  spdlog::debug("Using {}/{} cores.", cores_used, cores);
+  spdlog::info("Using {}/{} cores.", cores_used, cores);
   omp_set_dynamic(0);
   omp_set_num_threads(cores_used);
 
@@ -88,7 +88,7 @@ int main(int argc, char **argv) {
   pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZI>);
   DownsamplePointCloud(cloud, cloud_downsampled, kDownsampleVoxelSize);
 
-  spdlog::debug("Smoothing...");
+  spdlog::info("Smoothing...");
   pcl::io::savePCDFileBinary(FLAGS_project_output_path + "/before-smooth.pcd", *cloud);
   SmoothPointCloud(normals, kSmoothMaxNearestNeighbors, kSmoothMaxSearchRadius, kSmoothSigmaD, kSmoothSigmaN, cloud);
 
@@ -101,9 +101,9 @@ int main(int argc, char **argv) {
     cloud_with_normals->points.push_back(np);
   }
 
-  spdlog::debug("Saving cloud with normals...");
+  spdlog::info("Saving cloud with normals...");
   pcl::io::savePCDFileBinary(FLAGS_project_output_path + "/normals.pcd", *cloud_with_normals);
-  spdlog::debug("Save to {}", FLAGS_project_output_path + "/normals.pcd");
+  spdlog::info("Save to {}", FLAGS_project_output_path + "/normals.pcd");
 
   return 0;
 }

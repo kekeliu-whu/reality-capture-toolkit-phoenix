@@ -55,12 +55,10 @@ add_subdirectory(../migration migration_build)
 
 set(
   PGO_PRIVATE_SRCS
-  src/preprocess.cc
-  src/imu_processing.cc
   include/voxel_map_util.cc
   include/use-ikfom.cc
-  src/image_frame.cc
-  src/pointcloud_rgbd.cc
+  src/preprocess.cc
+  src/imu_processing.cc
 )
 
 set(PGO_PRIVATE_LIBS
@@ -87,4 +85,5 @@ endfunction()
 
 add_private_tool(slam_core_main src/laser_mapping.cc)
 add_private_tool(smooth_cloud src/smooth_cloud.cc)
-add_private_tool(colorize_cloud_general.cc src/colorize_cloud_general.cc)
+add_private_tool(colorize_cloud_general src/colorize_cloud_general.cc)
+add_private_tool(gravity_align src/gravity_align.cc)

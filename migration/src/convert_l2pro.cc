@@ -47,7 +47,7 @@ void PointCloudCallback(const sensor_msgs::PointCloud2ConstPtr& msg, std::shared
   int timestamp_offset = GetFieldOffset(msg, "timestamp");
 
   if (x_offset < 0 || y_offset < 0 || z_offset < 0 || intensity_offset < 0 || timestamp_offset < 0) {
-    spdlog::debug("Missing one or more fields: x/y/z/intensity/timestamp");
+    spdlog::info("Missing one or more fields: x/y/z/intensity/timestamp");
     return;
   }
 
@@ -171,5 +171,5 @@ int main(int argc, char** argv) {
   WriteImuFile(FLAGS_output_dir + "/imu.dat", imu_msg_list);
   WriteEncoderFile(FLAGS_output_dir + "/encoder.dat", encoder_msg_list);
 
-  spdlog::debug("done.");
+  spdlog::info("done.");
 }

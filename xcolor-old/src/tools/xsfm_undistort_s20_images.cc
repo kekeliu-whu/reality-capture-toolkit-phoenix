@@ -81,7 +81,7 @@ void UndistortAndSaveImages(const std::string& camera_type, const fs::path& inpu
   cv::Mat map1, map2;
   camera.initUndistortRectifyMap(map1, map2, camera.getParameters().A11(), camera.getParameters().A22(),
                                  cv::Size(kOutputImageWidth, kOutputImageHeight), kOutputImageWidth / 2, kOutputImageHeight / 2);
-  spdlog::debug("Undistort map initialized for {} camera.", camera_type);
+  spdlog::info("Undistort map initialized for {} camera.", camera_type);
 
   // Traverse all images in the camera directory
   for (const auto& entry : fs::directory_iterator(input_dir)) {
@@ -104,7 +104,7 @@ void UndistortAndSaveImages(const std::string& camera_type, const fs::path& inpu
       fs::path output_file = camera_output_dir / entry.path().filename();
       cv::imwrite(output_file.string(), undistorted);
 
-      spdlog::debug("Processed {} ({})", entry.path().filename().string(), camera_type);
+      spdlog::info("Processed {} ({})", entry.path().filename().string(), camera_type);
     }
   }
 }

@@ -13,7 +13,7 @@ int main(int argc, char **argv) {
       std::string(PROJECT_DIR) + "/../migration/config/pgo/pgo.json",
       pgo_config);
   if (!ok) { spdlog::error("Check failed"); exit(1); }
-  spdlog::debug("Read configuration success:\n{}", pgo_config.DebugString());
+  spdlog::info("Read configuration success:\n{}", pgo_config.DebugString());
 
   PgoRunner runner(pgo_config);
   runner.Run(FLAGS_project_input_path, FLAGS_project_output_path);

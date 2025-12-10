@@ -156,8 +156,8 @@ void MsgPackSynchronizer::ValidateMsgPack(const MsgPack& msg_pack) const {
 
 void MsgPackSynchronizer::PrintMsgPack(const MsgPack& msg_pack) const {
   if (has_encoder_) {
-    spdlog::debug("msg_pack({})[{:.6f},{:.6f}] lidar_{}[{:.6f},{:.6f}] imu_{}[{:.6f},{:.6f}] encoder_{}[{:.6f},{:.6f}]", msg_pack.id, msg_pack.group_start_time, msg_pack.group_end_time, msg_pack.lidar_points->points.size(), msg_pack.lidar_points->points.front().timestamp, msg_pack.lidar_points->points.back().timestamp, msg_pack.imu_msgs.size(), msg_pack.imu_msgs.front().timestamp, msg_pack.imu_msgs.back().timestamp, msg_pack.encoder_msgs.size(), msg_pack.encoder_msgs.front().timestamp, msg_pack.encoder_msgs.back().timestamp);
+    spdlog::info("msg_pack({})[{:.6f},{:.6f}] lidar_{}[{:.6f},{:.6f}] imu_{}[{:.6f},{:.6f}] encoder_{}[{:.6f},{:.6f}]", msg_pack.id, msg_pack.group_start_time, msg_pack.group_end_time, msg_pack.lidar_points->points.size(), msg_pack.lidar_points->points.front().timestamp, msg_pack.lidar_points->points.back().timestamp, msg_pack.imu_msgs.size(), msg_pack.imu_msgs.front().timestamp, msg_pack.imu_msgs.back().timestamp, msg_pack.encoder_msgs.size(), msg_pack.encoder_msgs.front().timestamp, msg_pack.encoder_msgs.back().timestamp);
   } else {
-    spdlog::debug("msg_pack({})[{:.6f},{:.6f}] lidar_{}[{:.6f},{:.6f}] imu_{}[{:.6f},{:.6f}]", msg_pack.id, msg_pack.group_start_time, msg_pack.group_end_time, msg_pack.lidar_points->points.size(), msg_pack.lidar_points->points.front().timestamp, msg_pack.lidar_points->points.back().timestamp, msg_pack.imu_msgs.size(), msg_pack.imu_msgs.front().timestamp, msg_pack.imu_msgs.back().timestamp);
+    spdlog::info("msg_pack({})[{:.6f},{:.6f}] lidar_{}[{:.6f},{:.6f}] imu_{}[{:.6f},{:.6f}]", msg_pack.id, msg_pack.group_start_time, msg_pack.group_end_time, msg_pack.lidar_points->points.size(), msg_pack.lidar_points->points.front().timestamp, msg_pack.lidar_points->points.back().timestamp, msg_pack.imu_msgs.size(), msg_pack.imu_msgs.front().timestamp, msg_pack.imu_msgs.back().timestamp);
   }
 }

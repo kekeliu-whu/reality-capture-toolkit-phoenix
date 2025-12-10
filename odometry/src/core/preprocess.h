@@ -22,7 +22,7 @@ class ImuPreprocess {
     if (imu_msgs.back().timestamp - *first_timestamp_ < kInitDuration) {
       IMU_init(imu_msgs, stat, init_iter_num);
 
-      spdlog::debug("IMU Init: iter num: {}, mean acc: {}, mean gyr: {}", init_iter_num, mean_acc.transpose(), mean_gyr.transpose());
+      spdlog::info("IMU Init: iter num: {}, mean acc: {}, mean gyr: {}", init_iter_num, mean_acc.transpose(), mean_gyr.transpose());
 
       return false;
     }

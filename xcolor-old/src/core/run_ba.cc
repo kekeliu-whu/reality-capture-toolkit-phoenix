@@ -111,7 +111,7 @@ void RunTwoViewBA(const xcolor::SfmConfig &config, const std::string &output_pat
 #pragma omp critical
       {
         if (++count % 40000 == 0) {
-          spdlog::debug("Triangulate point {}", count);
+          spdlog::info("Triangulate point {}", count);
         }
 
         optimized_image_ids.insert(point_on_image1.image_id);
@@ -121,8 +121,8 @@ void RunTwoViewBA(const xcolor::SfmConfig &config, const std::string &output_pat
         xcolor::AddLidarFactorToProblem(problem, point3D, lidar_point, lidar_normal, loss_function_lidar, lidar_residual_block_ids);
       }
     }
-    spdlog::debug("{} images are used.", optimized_image_ids.size());
-    spdlog::debug("{} images in total.", images.size());
+    spdlog::info("{} images are used.", optimized_image_ids.size());
+    spdlog::info("{} images in total.", images.size());
     ParameterizeCameras(config, problem, cameras);
 
     AddPosePriorsToProblem(config, problem, pose_priors, optimized_image_ids, images);
@@ -142,7 +142,7 @@ void RunTwoViewBA(const xcolor::SfmConfig &config, const std::string &output_pat
     options.dense_linear_algebra_library_type  = ceres::CUDA;
     options.sparse_linear_algebra_library_type = ceres::CUDA_SPARSE;
     ceres::Solve(options, &problem, &summary);
-    spdlog::debug("{}", summary.FullReport());
+    spdlog::info("{}", summary.FullReport());
 
     xcolor::PrintResidualHistogram(config.reproject_error_outlier_thresholds_twoview[iter], problem, residual_block_ids, "image_refined");
     xcolor::PrintResidualHistogram(config.lidar_error_outlier_thresholds_twoview[iter], problem, lidar_residual_block_ids, "lidar_refined");
@@ -201,7 +201,7 @@ void RunMultipleViewBA(const xcolor::SfmConfig &config, const std::string &outpu
 #pragma omp critical
       {
         if (++count % 10000 == 0) {
-          spdlog::debug("Triangulate point {}", count);
+          spdlog::info("Triangulate point {}", count);
         }
 
         std::vector<int> valid_indices;
@@ -268,14 +268,14 @@ void RunMultipleViewBA(const xcolor::SfmConfig &config, const std::string &outpu
         }
       }
     }
-    spdlog::debug("{} images are used.", optimized_image_ids.size());
-    spdlog::debug("{} images in total.", images.size());
+    spdlog::info("{} images are used.", optimized_image_ids.size());
+    spdlog::info("{} images in total.", images.size());
     ParameterizeCameras(config, problem, cameras);
 
     AddPosePriorsToProblem(config, problem, pose_priors, optimized_image_ids, images);
 
     PrintMatchTrackStatistics(match_tracks);
-    spdlog::debug("Average depth: {}", average_depths.ToString(20));
+    spdlog::info("Average depth: {}", average_depths.ToString(20));
     xcolor::PrintResidualHistogram(config.reproject_error_outlier_thresholds_multiview[iter], problem, residual_block_ids, "image");
     xcolor::PrintResidualHistogram(config.reproject_error_outlier_thresholds_multiview[iter], problem, lidar_residual_block_ids, "lidar");
     SaveTriangulatedPoints(match_tracks, output_path + "/triangulated-multi" + std::to_string(iter) + ".pcd");
@@ -290,7 +290,7 @@ void RunMultipleViewBA(const xcolor::SfmConfig &config, const std::string &outpu
     options.dense_linear_algebra_library_type  = ceres::CUDA;
     options.sparse_linear_algebra_library_type = ceres::CUDA_SPARSE;
     ceres::Solve(options, &problem, &summary);
-    spdlog::debug("{}", summary.FullReport());
+    spdlog::info("{}", summary.FullReport());
 
     xcolor::PrintResidualHistogram(config.reproject_error_outlier_thresholds_multiview[iter], problem, residual_block_ids, "image_refined");
     xcolor::PrintResidualHistogram(config.lidar_error_outlier_thresholds_multiview[iter], problem, lidar_residual_block_ids, "lidar_refined");

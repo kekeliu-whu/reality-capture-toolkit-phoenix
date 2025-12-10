@@ -20,7 +20,7 @@ int main(int argc, char **argv) {
 
   int cores      = std::thread::hardware_concurrency();
   int cores_used = std::max(cores - 4, 1);
-  spdlog::debug("Using {}/{} cores.", cores_used, cores);
+  spdlog::info("Using {}/{} cores.", cores_used, cores);
   omp_set_dynamic(0);
   omp_set_num_threads(cores_used);
 
@@ -32,7 +32,7 @@ int main(int argc, char **argv) {
   xcolor::PrintMemoryUsage();
 
   // loading point cloud
-  spdlog::debug("Loading point cloud from {} ...", FLAGS_point_cloud_filename);
+  spdlog::info("Loading point cloud from {} ...", FLAGS_point_cloud_filename);
   pcl::PointCloud<pcl::PointXYZRGB> cloud;
   int ret = pcl::io::loadPLYFile(FLAGS_point_cloud_filename, cloud);
   xcolor::PrintMemoryUsage();
@@ -40,11 +40,11 @@ int main(int argc, char **argv) {
     spdlog::error("Load point cloud failed: {}", FLAGS_point_cloud_filename);
     exit(1);
   }
-  spdlog::debug("Load {} points.", cloud.size());
+  spdlog::info("Load {} points.", cloud.size());
 
-  spdlog::debug("Start xcolor...");
+  spdlog::info("Start xcolor...");
   xcolor::PerformXColor(cloud, images, FLAGS_output_path);
-  spdlog::debug("Finish xcolor.");
+  spdlog::info("Finish xcolor.");
 
   return 0;
 }

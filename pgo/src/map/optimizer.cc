@@ -73,7 +73,7 @@ bool MatchGICP(pcl::PointCloud<pcl::PointXYZI>::Ptr &target,
 
   double score = CalcFitnessScore(target, source, T_source_to_target, 2.0);
   if (score < gicp_fitness_score_threshold) {
-    spdlog::debug("good match: {}", score);
+    spdlog::info("good match: {}", score);
     return true;
   }
   return false;
@@ -159,7 +159,7 @@ void AddLoopClosureConstraints(ceres::Problem &problem,
     }
 
     if (candidate_scan_ids.empty()) {
-      spdlog::debug("candidate scan ids empty");
+      spdlog::info("candidate scan ids empty");
       continue;
     }
 
@@ -243,7 +243,7 @@ void Optimize(std::vector<TimestampedPointCloud> &submaps,
     options.max_num_iterations           = config.inner_iteration_num();
     ceres::Solver::Summary summary;
     ceres::Solve(options, &problem, &summary);
-    spdlog::debug("{}", summary.FullReport());
+    spdlog::info("{}", summary.FullReport());
 
     // clean up non-prior constraints for the next iteration
     RemoveNonPriorConstraints(problem, prior_residual_blocks);

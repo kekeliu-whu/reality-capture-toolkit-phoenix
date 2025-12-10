@@ -23,7 +23,7 @@ std::vector<int> getAllCameraIds(sqlite3* db) {
       camera_ids.push_back(cam_id);
     }
   } else {
-    spdlog::debug("Failed to retrieve camera_id: {}", sqlite3_errmsg(db));
+    spdlog::info("Failed to retrieve camera_id: {}", sqlite3_errmsg(db));
   }
 
   sqlite3_finalize(stmt);
@@ -36,7 +36,7 @@ bool readCamera(sqlite3* db, int camera_id, int& width, int& height, std::vector
   sqlite3_stmt* stmt = nullptr;
 
   if (sqlite3_prepare_v2(db, query, -1, &stmt, nullptr) != SQLITE_OK) {
-    spdlog::debug("Preparation for reading failed: {}", sqlite3_errmsg(db));
+    spdlog::info("Preparation for reading failed: {}", sqlite3_errmsg(db));
     return false;
   }
 
@@ -52,7 +52,7 @@ bool readCamera(sqlite3* db, int camera_id, int& width, int& height, std::vector
     return true;
   }
 
-  spdlog::debug("camera_id {} not found.", camera_id);
+  spdlog::info("camera_id {} not found.", camera_id);
   sqlite3_finalize(stmt);
   return false;
 }
@@ -63,7 +63,7 @@ bool updateParams(sqlite3* db, int camera_id, const std::vector<unsigned char>& 
   sqlite3_stmt* stmt = nullptr;
 
   if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-    spdlog::debug("Preparation for update failed: {}", sqlite3_errmsg(db));
+    spdlog::info("Preparation for update failed: {}", sqlite3_errmsg(db));
     return false;
   }
 
@@ -72,7 +72,7 @@ bool updateParams(sqlite3* db, int camera_id, const std::vector<unsigned char>& 
 
   bool success = sqlite3_step(stmt) == SQLITE_DONE;
   if (!success) {
-    spdlog::debug("Update failed: {}", sqlite3_errmsg(db));
+    spdlog::info("Update failed: {}", sqlite3_errmsg(db));
   }
 
   sqlite3_finalize(stmt);
@@ -129,7 +129,7 @@ int main(int argc, char** argv) {
 
   sqlite3* db = nullptr;
   if (sqlite3_open(FLAGS_database_filename.c_str(), &db) != SQLITE_OK) {
-    spdlog::debug("Failed to open database: {}", sqlite3_errmsg(db));
+    spdlog::info("Failed to open database: {}", sqlite3_errmsg(db));
     return 1;
   }
 
@@ -143,7 +143,7 @@ int main(int argc, char** argv) {
   std::string image_path;
   int camera_id;
   if (getFirstRow(FLAGS_database_filename, image_path, camera_id)) {
-    spdlog::debug("First Row - Name: {}, Camera ID: {}", image_path, camera_id);
+    spdlog::info("First Row - Name: {}, Camera ID: {}", image_path, camera_id);
 
     bool is_left = (image_path.find("left") != std::string::npos);
 
@@ -151,7 +151,7 @@ int main(int argc, char** argv) {
       std::swap(camera_ids[0], camera_ids[1]);
     }
 
-    spdlog::debug("Sorted Camera IDs: [{}, {}]", camera_ids[0], camera_ids[1]);
+    spdlog::info("Sorted Camera IDs: [{}, {}]", camera_ids[0], camera_ids[1]);
   } else {
     spdlog::critical("Failed to retrieve the first row.");
     exit(1);
@@ -192,7 +192,7 @@ int main(int argc, char** argv) {
     std::vector<unsigned char> params;
 
     if (readCamera(db, cam_id, width, height, params)) {
-      spdlog::debug("Camera {} ({}x{}), original parameter length: {}", cam_id, width, height, params.size());
+      spdlog::info("Camera {} ({}x{}), original parameter length: {}", cam_id, width, height, params.size());
 
       if (params.size() % sizeof(double) != 0) {
         spdlog::error("Invalid params size: {}", params.size());
@@ -209,14 +209,14 @@ int main(int argc, char** argv) {
       ((double*)params.data())[2] = height / 2;
 
       if (updateParams(db, cam_id, params)) {
-        spdlog::debug("Camera {}'s params has been updated: fx = {}, fy = {}, cx = {}, cy = {}", cam_id, camera_param[0], camera_param[1], width / 2, height / 2);
+        spdlog::info("Camera {}'s params has been updated: fx = {}, fy = {}, cx = {}, cy = {}", cam_id, camera_param[0], camera_param[1], width / 2, height / 2);
       }
     }
   }
 
   sqlite3_close(db);
 
-  spdlog::debug("done.");
+  spdlog::info("done.");
   std::cout << "done." << std::endl;
 
   return 0;

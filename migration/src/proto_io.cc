@@ -55,12 +55,12 @@ bool ReadSingleMsgFile(const std::string &filename, google::protobuf::Message &m
   std::ifstream file(filename, std::ios::in | std::ios::binary);
 
   if (!file.is_open()) {
-    spdlog::debug("Failed to open file: {}", filename);
+    spdlog::info("Failed to open file: {}", filename);
     return false;
   }
 
   if (!message.ParseFromIstream(&file)) {
-    spdlog::debug("Failed to parse EncoderFile from file: {}", filename);
+    spdlog::info("Failed to parse EncoderFile from file: {}", filename);
     return false;
   }
 
@@ -71,12 +71,12 @@ bool WriteSingleMsgFile(const std::string &filename, const google::protobuf::Mes
   std::ofstream outfile(filename, std::ios::out | std::ios::binary);
 
   if (!outfile.is_open()) {
-    spdlog::debug("Failed to open file: {}", filename);
+    spdlog::info("Failed to open file: {}", filename);
     return false;
   }
 
   if (!message.SerializeToOstream(&outfile)) {
-    spdlog::debug("Failed to serialize EncoderFile to file: {}", filename);
+    spdlog::info("Failed to serialize EncoderFile to file: {}", filename);
     return false;
   }
 
@@ -104,7 +104,7 @@ bool WriteDelimitedTo(const google::protobuf::MessageLite &message, std::ofstrea
 bool ReadLidarFile(const std::string &filename, std::function<void(const std::shared_ptr<const proto::LidarMsg> &)> callback) {
   std::ifstream infile(filename, std::ios::in | std::ios::binary);
   if (!infile.is_open()) {
-    spdlog::debug("Failed to open file: {}", filename);
+    spdlog::info("Failed to open file: {}", filename);
     return false;
   }
 
@@ -118,13 +118,13 @@ bool ReadLidarFile(const std::string &filename, std::function<void(const std::sh
 bool WriteLidarFile(const std::string &filename, const std::vector<ConstPtr<proto::LidarMsg>> &scans) {
   std::ofstream outfile(filename, std::ios::out | std::ios::binary);
   if (!outfile.is_open()) {
-    spdlog::debug("Failed to open file: {}", filename);
+    spdlog::info("Failed to open file: {}", filename);
     return false;
   }
 
   for (const auto &scan : scans) {
     if (!WriteDelimitedTo(*scan, outfile)) {
-      spdlog::debug("Failed to serialize LidarScanMsg to file: {}", filename);
+      spdlog::info("Failed to serialize LidarScanMsg to file: {}", filename);
       return false;
     }
   }
@@ -134,7 +134,7 @@ bool WriteLidarFile(const std::string &filename, const std::vector<ConstPtr<prot
 bool ReadUndistortedLidarFile(const std::string &filename, std::function<void(const ConstPtr<proto::UndistoredLidarMsg> &)> callback) {
   std::ifstream infile(filename, std::ios::in | std::ios::binary);
   if (!infile.is_open()) {
-    spdlog::debug("Failed to open file: {}", filename);
+    spdlog::info("Failed to open file: {}", filename);
     return false;
   }
 
@@ -148,13 +148,13 @@ bool ReadUndistortedLidarFile(const std::string &filename, std::function<void(co
 bool WriteUndistortedLidarFile(const std::string &filename, const std::vector<ConstPtr<proto::UndistoredLidarMsg>> &scans) {
   std::ofstream outfile(filename, std::ios::out | std::ios::binary);
   if (!outfile.is_open()) {
-    spdlog::debug("Failed to open file: {}", filename);
+    spdlog::info("Failed to open file: {}", filename);
     return false;
   }
 
   for (const auto &scan : scans) {
     if (!WriteDelimitedTo(*scan, outfile)) {
-      spdlog::debug("Failed to serialize proto::UndistoredLidarMsg to file: {}", filename);
+      spdlog::info("Failed to serialize proto::UndistoredLidarMsg to file: {}", filename);
       return false;
     }
   }
@@ -206,13 +206,13 @@ bool ReadPgoConfigFile(const std::string &filename, proto::PgoConfig &config) {
     auto status                   = google::protobuf::util::JsonStringToMessage(fileContent, &config);
 
     if (!status.ok()) {
-      spdlog::debug("Failed to parse JSON: {}", status.ToString());
+      spdlog::info("Failed to parse JSON: {}", status.ToString());
       return false;
     }
 
     return true;
   }
 
-  spdlog::debug("Unsupported file extension: {}", extension);
+  spdlog::info("Unsupported file extension: {}", extension);
   return false;
 }

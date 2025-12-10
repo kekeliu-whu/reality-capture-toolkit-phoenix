@@ -17,6 +17,7 @@ find_package(OpenSSL REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(fmt REQUIRED)
 find_package(spdlog REQUIRED)
+find_package(PDAL REQUIRED)
 
 if (Protobuf_VERBOSE)
     message(STATUS "Using Protocol Buffers ${protobuf_VERSION}")
@@ -62,15 +63,19 @@ include_directories(
     ${GTEST_INCLUDE_DIRS}
 )
 
-list(APPEND PROJECT_SRCS ${ALL_PROTO_SRCS})
-list(APPEND
-    PROJECT_SRCS
-    src/proto_io.cc
-    src/utils.cc
-    src/crypto.cc
-    include/migration/crypto.h
+set(PROJECT_SRCS
+    include/migration/logging.h
     include/migration/proto_io.h
     include/migration/utils.h
+    include/migration/inc_las_writer.h
+    include/migration/string.h
+    src/proto_io.cc
+    src/utils.cc
+    src/logging.cc
+    src/inc_las_writer.cc
+    src/string.cc
+    ${ALL_PROTO_HDRS}
+    ${ALL_PROTO_SRCS}
 )
 
 set(
@@ -80,10 +85,12 @@ set(
     glog::glog
     sophus
     rosbag
+    OpenSSL::SSL
     OpenSSL::Crypto
     yaml-cpp::yaml-cpp
     ulog_cpp
     spdlog::spdlog_header_only
+    $<TARGET_NAME:pdalcpp>
 )
 
 # add_executable(test_proto src/test_proto.cc ${PROJECT_SRCS})

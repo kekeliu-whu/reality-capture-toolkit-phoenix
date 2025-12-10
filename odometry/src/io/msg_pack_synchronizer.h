@@ -19,20 +19,20 @@ class MsgPackSynchronizer {
  private:
   double GetCommonBeginTime() const {
     if (has_encoder_) {
-      spdlog::debug("Checking non-empty queues for lidar, imu, and encoder data");
+      spdlog::info("Checking non-empty queues for lidar, imu, and encoder data");
       return std::max({lidar_data_queue_.front().timestamp, imu_data_queue_.front().timestamp, encoder_data_queue_.front().timestamp});
     } else {
-      spdlog::debug("Checking non-empty queues for lidar and imu data");
+      spdlog::info("Checking non-empty queues for lidar and imu data");
       return std::max(lidar_data_queue_.front().timestamp, imu_data_queue_.front().timestamp);
     }
   }
 
   double GetCommonEndTime() const {
     if (has_encoder_) {
-      spdlog::debug("Checking non-empty queues for lidar, imu, and encoder data");
+      spdlog::info("Checking non-empty queues for lidar, imu, and encoder data");
       return std::min({lidar_data_queue_.back().timestamp, imu_data_queue_.back().timestamp, encoder_data_queue_.back().timestamp});
     } else {
-      spdlog::debug("Checking non-empty queues for lidar and imu data");
+      spdlog::info("Checking non-empty queues for lidar and imu data");
       return std::min(lidar_data_queue_.back().timestamp, imu_data_queue_.back().timestamp);
     }
   }
