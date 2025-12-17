@@ -1,8 +1,8 @@
 #pragma once
 
+#include <spdlog/spdlog.h>
 #include <optional>
 #include <sophus/se3.hpp>
-#include <sdplog/spdlog.h>
 
 #include "common/types.h"
 
@@ -69,18 +69,25 @@ class ImuPreprocess {
     Matrix3 R_imu(state_inout.rot_end);
     MD(DIM_STATE, DIM_STATE) F_x, cov_w;
 
-    for (auto it_imu = imu_vec.begin(); it_imu < (imu_vec.end() - 1); it_imu++) {
-      auto head = it_imu;
-      auto tail = it_imu + 1;
+    for (auto it_imu = v_imu.begin(); it_imu < (v_imu.end() - 1); it_imu++) {
+      auto &&head = *(it_imu);
+      auto &&tail = *(it_imu + 1);
 
-      angvel_avr << 0.5 * (head->gyr.x() + tail->gyr.x()), 0.5 * (head->gyr.y() + tail->gyr.y()), 0.5 * (head->gyr.z() + tail->gyr.z());
-      acc_avr << 0.5 * (head->acc.x() + tail->acc.x()), 0.5 * (head->acc.y() + tail->acc.y()), 0.5 * (head->acc.z() + tail->acc.z());
+      if (tail->header.stamp.toSec() < pcl_beg_time) continue;
+
+      angvel_avr << 0.5 * (head->angular_velocity.x + tail->angular_velocity.x), 0.5 * (head->angular_velocity.y + tail->angular_velocity.y),
+          0.5 * (head->angular_velocity.z + tail->angular_velocity.z);
+      acc_avr << 0.5 * (head->linear_acceleration.x + tail->linear_acceleration.x), 0.5 * (head->linear_acceleration.y + tail->linear_acceleration.y),
+          0.5 * (head->linear_acceleration.z + tail->linear_acceleration.z);
 
       angvel_avr -= state_inout.bias_g;
-      // todo kk check if acc_avr is unit vector or not
       acc_avr = acc_avr * G_m_s2 / mean_acc.norm() - state_inout.bias_a;
 
-      double dt = tail->timestamp - head->timestamp;
+      if (head->header.stamp.toSec() < pcl_beg_time) {
+        dt = tail->header.stamp.toSec() - pcl_beg_time;
+      } else {
+        dt = tail->header.stamp.toSec() - head->header.stamp.toSec();
+      }
 
       /* covariance propagation */
       Matrix3 acc_avr_skew;
@@ -118,27 +125,54 @@ class ImuPreprocess {
       vel_imu = vel_imu + acc_imu * dt;
 
       /* save the poses at each IMU measurements */
-      IMUpose.push_back(Pose6D(tail->timestamp, Quaternion(R_imu), pos_imu));
+      angvel_last     = angvel_avr;
+      acc_s_last      = acc_imu;
+      double &&offs_t = tail->header.stamp.toSec() - pcl_beg_time;
+      IMUpose.push_back(set_pose6d(offs_t, acc_imu, angvel_avr, vel_imu, pos_imu, R_imu));
     }
 
-    state_inout.vel_end = vel_imu;
-    state_inout.rot_end = R_imu;
-    state_inout.pos_end = pos_imu;
+    /*** calculated the pos and attitude prediction at the frame-end ***/
+    double note         = pcl_end_time > imu_end_time ? 1.0 : -1.0;
+    dt                  = note * (pcl_end_time - imu_end_time);
+    state_inout.vel_end = vel_imu + note * acc_imu * dt;
+    state_inout.rot_end = R_imu * Exp(V3D(note * angvel_avr), dt);
+    state_inout.pos_end = pos_imu + note * vel_imu * dt + note * 0.5 * acc_imu * dt * dt;
 
-    CHECK_EQ(IMUpose.size(), imu_vec.size());
-    int idx = 0;
-    for (auto &p : *pcl_out) {
-      double timestamp = p.timestamp;
-      while (!(timestamp >= IMUpose[idx].timestamp && timestamp <= IMUpose[idx + 1].timestamp)) {
-        ++idx;
+    auto pos_liD_e = state_inout.pos_end + state_inout.rot_end * Lid_offset_to_IMU;
+
+    /*** undistort each lidar point (backward propagation) ***/
+    auto it_pcl = pcl_out.points.end() - 1;
+    for (auto it_kp = IMUpose.end() - 1; it_kp != IMUpose.begin(); it_kp--) {
+      auto head = it_kp - 1;
+      auto tail = it_kp;
+      R_imu = head->rot;
+      acc_imu << VEC_FROM_ARRAY(head->acc);
+      // cout<<"head imu acc: "<<acc_imu.transpose()<<endl;
+      vel_imu << VEC_FROM_ARRAY(head->vel);
+      pos_imu << VEC_FROM_ARRAY(head->pos);
+      angvel_avr << VEC_FROM_ARRAY(head->gyr);
+
+      for (; it_pcl->curvature / double(1000) > head->offset_time; it_pcl--) {
+        dt = it_pcl->curvature / double(1000) - head->offset_time;
+
+        /* Transform to the 'end' frame, using only the rotation
+         * Note: Compensation direction is INVERSE of Frame's moving direction
+         * So if we want to compensate a point at timestamp-i to the frame-e
+         * P_compensate = R_imu_e ^ T * (R_i * P_i + T_ei) where T_ei is
+         * represented in global frame */
+        M3D R_i(R_imu * Exp(angvel_avr, dt));
+        V3D T_ei(pos_imu + vel_imu * dt + 0.5 * acc_imu * dt * dt + R_i * Lid_offset_to_IMU - pos_liD_e);
+
+        V3D P_i(it_pcl->x, it_pcl->y, it_pcl->z);
+        V3D P_compensate = state_inout.rot_end.transpose() * (R_i * P_i + T_ei);
+
+        /// save Undistorted points and their rotation
+        it_pcl->x = P_compensate(0);
+        it_pcl->y = P_compensate(1);
+        it_pcl->z = P_compensate(2);
+
+        if (it_pcl == pcl_out.points.begin()) break;
       }
-
-      double factor = (timestamp - IMUpose[idx].timestamp) / (IMUpose[idx + 1].timestamp - IMUpose[idx].timestamp);
-      auto p_world  = IMUpose[idx].pose * Sophus::SE3d::exp((IMUpose[idx].pose.inverse() * IMUpose[idx + 1].pose).log() * factor) *
-                     p.getVector3fMap().cast<double>();
-      auto p_body = IMUpose.end()->pose.inverse() * p_world;
-
-      p.getVector3fMap() = p_body.cast<float>();
     }
   }
 

@@ -34,7 +34,6 @@ void ImuProcess::Reset() {
   v_imu_.clear();
   IMUpose.clear();
   last_imu_.reset(new sensor_msgs::Imu());
-  cur_pcl_un_.reset(new PointCloudXYZI());
 }
 
 void ImuProcess::set_extrinsic(const MD(4, 4) & T) {
@@ -200,7 +199,7 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
   for (auto it_kp = IMUpose.end() - 1; it_kp != IMUpose.begin(); it_kp--) {
     auto head = it_kp - 1;
     auto tail = it_kp;
-    R_imu << MAT_FROM_ARRAY(head->rot);
+    R_imu = head->rot;
     // spdlog::info("head imu acc: {}", acc_imu.transpose());
     vel_imu << VEC_FROM_ARRAY(head->vel);
     pos_imu << VEC_FROM_ARRAY(head->pos);
@@ -234,7 +233,7 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
 }
 
 void ImuProcess::Process(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
-                         PointCloudXYZI::Ptr cur_pcl_un_) {
+                         PointCloudXYZI::Ptr cur_pcl_un) {
   double t1, t2, t3;
   t1 = omp_get_wtime();
 
@@ -267,7 +266,7 @@ void ImuProcess::Process(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 1
     return;
   }
 
-  UndistortPcl(meas, kf_state, *cur_pcl_un_);
+  UndistortPcl(meas, kf_state, *cur_pcl_un);
 
   t2 = omp_get_wtime();
   t3 = omp_get_wtime();

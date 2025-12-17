@@ -32,6 +32,7 @@
 // CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
+
 #include <fmt/format.h>
 #include <geometry_msgs/Vector3.h>
 #include <gflags/gflags.h>
@@ -45,42 +46,44 @@
 #include <Eigen/Core>
 #include <boost/filesystem.hpp>
 #include <csignal>
-#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <thread>
 
 #include "imu_processing.h"
 #include "migration/inc_las_writer.h"
 #include "migration/logging.h"
-#include "migration/string.h"
 #include "preprocess.h"
+#include "sophus/se3.hpp"
 #include "voxel_map_util.h"
 
-DEFINE_string(imu_filename, UTF8ToPlatform("C:/4.indoor-big-slow/会议室分层/20251023113331_imu.csv"),
-              "Path to the IMU data file");
-DEFINE_string(lidar_filename, UTF8ToPlatform("C:/4.indoor-big-slow/会议室分层/20251023113331.bin"),
-              "Path to the LiDAR data file");
-DEFINE_string(output_dir, UTF8ToPlatform("C:/4.indoor-big-slow/会议室分层/out"), "Directory to save output trajectory");
+DEFINE_string(imu_filename, "C:/4.indoor-big-slow/hall/20251023112804_Imr.csv", "Path to the IMU data file");
+DEFINE_string(lidar_filename, "C:/4.indoor-big-slow/hall/20251023112804.bin", "Path to the LiDAR data file");
+DEFINE_string(calibration_filename, "C:/4.indoor-big-slow/hall/LidarCalibration.json", "Path to the calibration file");
+DEFINE_string(output_dir, "C:/4.indoor-big-slow/hall/out", "Directory to save output trajectory");
+// DEFINE_string(imu_filename, "C:/4.indoor-big-slow/meeting-room-fenceng/20251023113331_Imr.csv", "Path to the IMU data
+// file"); DEFINE_string(lidar_filename, "C:/4.indoor-big-slow/meeting-room-fenceng/20251023113331.bin", "Path to the
+// LiDAR data file"); DEFINE_string(calibration_filename, "C:/4.indoor-big-slow/hall/LidarCalibration.json", "Path to
+// the calibration file"); DEFINE_string(output_dir, "C:/4.indoor-big-slow/meeting-room-fenceng/out", "Directory to save
+// output trajectory");
 
 /*** Time Log Variables ***/
-double match_time = 0, solve_time = 0, solve_const_H_time = 0;
-bool   runtime_pos_log = false, time_sync_en = false, extrinsic_est_en = true;
+double match_time = 0, solve_time = 0;
+bool   runtime_pos_log = false, extrinsic_est_en = true;
 /**************************/
-
-int point_id = 0;
 
 double last_timestamp_lidar = 0, last_timestamp_imu = -1.0;
 double gyr_cov = 0.1, acc_cov = 0.1, b_gyr_cov = 0.0001, b_acc_cov = 0.0001;
-double filter_size_corner_min = 0, filter_size_surf_min = 0, filter_size_map_min = 0;
-double lidar_end_time = 0, first_lidar_time = 0.0;
+double filter_size_surf_min = 0;
+double lidar_end_time       = 0;
 int    feats_down_size = 0, NUM_MAX_ITERATIONS = 0;
 bool   lidar_pushed, flg_first_scan = true, flg_exit = false;
-bool   scan_pub_en = false, dense_pub_en = false, scan_body_pub_en = false;
+double time_offset = 0.0;
 
-vector<double>                    extrinT(3, 0.0);
-vector<double>                    extrinR(9, 0.0);
+Eigen::Vector3d                   extrinT;
+Eigen::Matrix3d                   extrinR;
 deque<double>                     time_buffer;
 deque<PointCloudXYZI::Ptr>        lidar_buffer;
 deque<sensor_msgs::Imu::ConstPtr> imu_buffer;
@@ -98,8 +101,7 @@ M3D Lidar_R_wrt_IMU(M3D::Identity());
 /*** EKF inputs and output ***/
 MeasureGroup                                 Measures;
 esekfom::esekf<state_ikfom, 12, input_ikfom> kf;
-state_ikfom                                  state_point;
-vect3                                        pos_lid;
+state_ikfom                                  g_state_point;
 
 shared_ptr<Preprocess> p_pre(new Preprocess());
 shared_ptr<ImuProcess> p_imu(new ImuProcess());
@@ -121,63 +123,52 @@ std::vector<ptpl> ptpl_list;
 
 void SigHandle(int sig) { flg_exit = true; }
 
-void save_traj(std::ofstream &fp) {
-  Eigen::Quaterniond rot = state_point.rot * state_point.offset_R_L_I;
-  Eigen::Vector3d    pos = state_point.rot.toRotationMatrix() * state_point.offset_T_L_I + state_point.pos;
-  fp << fmt::format("{:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f}\n",
-                    Measures.lidar_end_time, pos(0), pos(1), pos(2), rot.x(), rot.y(), rot.z(), rot.w(),
-                    state_point.grav[0], state_point.grav[1], state_point.grav[2]);
-  fp.flush();
+double last_pose_timestamp = -1.0;
+void   SaveTraj(std::ofstream &fp, double timestamp, const Eigen::Quaterniond &offset_R_L_I,
+                const Eigen::Vector3d &offset_T_L_I, const Eigen::Vector3d &grav, const std::vector<Pose6D> &imu_poses) {
+  for (const auto &pose : imu_poses) {
+    if (pose.offset_time + timestamp <= last_pose_timestamp) {
+      spdlog::warn("skip pose at time because of loop back: {:.6f}", pose.offset_time + timestamp);
+      continue;
+    }
+
+    last_pose_timestamp = timestamp + pose.offset_time;
+
+    Eigen::Quaterniond rot = Eigen::Quaterniond(pose.rot) * offset_R_L_I;
+    Eigen::Vector3d    pos = pose.rot * offset_T_L_I + pose.pos;
+    fp << fmt::format("{:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f}",
+                        last_pose_timestamp, pos(0), pos(1), pos(2), rot.x(), rot.y(), rot.z(), rot.w(), grav[0], grav[1],
+                        grav[2])
+       << std::endl;
+  }
 }
 
-void pointBodyToWorld_ikfom(PointType const *const pi, PointType *const po, state_ikfom &s) {
-  V3D p_body(pi->x, pi->y, pi->z);
-  V3D p_global(s.rot * (s.offset_R_L_I * p_body + s.offset_T_L_I) + s.pos);
+void CorrectImuPoses(double last_dt, const state_ikfom &state_predict, const state_ikfom &state_update,
+                     std::vector<Pose6D> &last_imu_poses) {
+  Sophus::SE3d T_imu_prev_to_curr = Sophus::SE3d(state_update.rot.toRotationMatrix(), state_update.pos) *
+                                    Sophus::SE3d(state_predict.rot.toRotationMatrix(), state_predict.pos).inverse();
+  auto T_imu_prev_to_curr_se3 = T_imu_prev_to_curr.log();
+  for (auto &pose : last_imu_poses) {
+    double factor = pose.offset_time / last_dt;
 
-  po->x         = p_global(0);
-  po->y         = p_global(1);
-  po->z         = p_global(2);
-  po->intensity = pi->intensity;
-}
+    Sophus::SE3d T_correction = Sophus::SE3d::exp(T_imu_prev_to_curr_se3 * factor);
 
-void pointBodyToWorld(PointType const *const pi, PointType *const po) {
-  V3D p_body(pi->x, pi->y, pi->z);
-  V3D p_global(state_point.rot * (state_point.offset_R_L_I * p_body + state_point.offset_T_L_I) + state_point.pos);
+    pose.pos = (T_correction.rotationMatrix() * pose.pos + T_correction.translation()).eval();
+    pose.rot = (T_correction.rotationMatrix() * pose.rot).eval();
 
-  po->x         = p_global(0);
-  po->y         = p_global(1);
-  po->z         = p_global(2);
-  po->intensity = pi->intensity;
+    spdlog::info("Correct IMU pose at time: {:.6f} {:.6f} {:.6f}", pose.pos(0), pose.pos(1), pose.pos(2));
+  }
 }
 
 template <typename T>
-void pointBodyToWorld(const Matrix<T, 3, 1> &pi, Matrix<T, 3, 1> &po) {
+void PointBodyToWorld(const Eigen::Map<Eigen::Matrix<T, 3, 1>> &pi, Eigen::Map<Eigen::Matrix<T, 3, 1>> &po,
+                      state_ikfom &s) {
   V3D p_body(pi[0], pi[1], pi[2]);
-  V3D p_global(state_point.rot * (state_point.offset_R_L_I * p_body + state_point.offset_T_L_I) + state_point.pos);
+  V3D p_global(s.rot * (s.offset_R_L_I * p_body + s.offset_T_L_I) + s.pos);
 
   po[0] = p_global(0);
   po[1] = p_global(1);
   po[2] = p_global(2);
-}
-
-void RGBpointBodyToWorld(PointType const *const pi, PointType *const po) {
-  V3D p_body(pi->x, pi->y, pi->z);
-  V3D p_global(state_point.rot * (state_point.offset_R_L_I * p_body + state_point.offset_T_L_I) + state_point.pos);
-
-  po->x         = p_global(0);
-  po->y         = p_global(1);
-  po->z         = p_global(2);
-  po->intensity = pi->intensity;
-}
-
-void RGBpointBodyLidarToIMU(PointType const *const pi, PointType *const po) {
-  V3D p_body_lidar(pi->x, pi->y, pi->z);
-  V3D p_body_imu(state_point.offset_R_L_I * p_body_lidar + state_point.offset_T_L_I);
-
-  po->x         = p_body_imu(0);
-  po->y         = p_body_imu(1);
-  po->z         = p_body_imu(2);
-  po->intensity = pi->intensity;
 }
 
 void livox_pcl_cbk(const livox_ros_driver::CustomMsg::ConstPtr &msg) {
@@ -187,12 +178,6 @@ void livox_pcl_cbk(const livox_ros_driver::CustomMsg::ConstPtr &msg) {
     lidar_buffer.clear();
   }
   last_timestamp_lidar = msg->header.stamp.toSec();
-
-  if (!time_sync_en && abs(last_timestamp_imu - last_timestamp_lidar) > 10.0 && !imu_buffer.empty() &&
-      !lidar_buffer.empty()) {
-    printf("IMU and LiDAR not Synced, IMU time: %lf, lidar header time: %lf \n", last_timestamp_imu,
-           last_timestamp_lidar);
-  }
 
   PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
   p_pre->process(msg, ptr);
@@ -362,6 +347,63 @@ class LidarFileReader {
   double getProgress() const { return total_points > 0 ? (read_points / (double)total_points) * 100.0 : 0.0; }
 };
 
+// Load calibration parameters from JSON file
+void load_calibration_from_file(const std::string &filename) {
+  if (!boost::filesystem::exists(filename)) {
+    spdlog::warn("Calibration file does not exist: {}", filename);
+    return;
+  }
+
+  std::ifstream cal_file(filename);
+  if (!cal_file) {
+    spdlog::warn("Failed to open calibration file: {}", filename);
+    return;
+  }
+
+  try {
+    nlohmann::json root;
+    cal_file >> root;
+
+    // Extract Lidar_offset values (extrinT)
+    if (root.contains("Info") && root["Info"].contains("Lidar_Parameter") &&
+        root["Info"]["Lidar_Parameter"].contains("Lidar_to_IMU") &&
+        root["Info"]["Lidar_Parameter"]["Lidar_to_IMU"].contains("Lidar_offset")) {
+      const auto &offset = root["Info"]["Lidar_Parameter"]["Lidar_to_IMU"]["Lidar_offset"];
+      double      x      = offset["x"].get<double>();
+      double      y      = offset["y"].get<double>();
+      double      z      = offset["z"].get<double>();
+      extrinT            = Eigen::Vector3d(x, y, z);
+      spdlog::info("Loaded extrinT from calibration: [{:.6f}, {:.6f}, {:.6f}]", x, y, z);
+    }
+
+    // Extract Lidar_Rotations (quaternion) and convert to rotation matrix (extrinR)
+    if (root.contains("Info") && root["Info"].contains("Lidar_Parameter") &&
+        root["Info"]["Lidar_Parameter"].contains("Lidar_to_IMU") &&
+        root["Info"]["Lidar_Parameter"]["Lidar_to_IMU"].contains("Lidar_Rotations")) {
+      const auto &quat_json = root["Info"]["Lidar_Parameter"]["Lidar_to_IMU"]["Lidar_Rotations"];
+      double      qw        = quat_json["qw"].get<double>();
+      double      qx        = quat_json["qx"].get<double>();
+      double      qy        = quat_json["qy"].get<double>();
+      double      qz        = quat_json["qz"].get<double>();
+
+      time_offset = root["Info"]["Lidar_Parameter"]["Lidar_to_IMU"]["ImutimeCorrectMs"].get<double>();
+
+      Eigen::Quaterniond quat(qw, qx, qy, qz);
+      extrinR = quat.toRotationMatrix();
+
+      extrinT = -(extrinR.transpose() * extrinT);
+      extrinR.transposeInPlace();
+
+      spdlog::info(
+          "Loaded extrinR (from quaternion) from calibration: qw={:.6f}, qx={:.6f}, qy={:.6f}, qz={:.6f}, "
+          "time_offset={:.6f}",
+          qw, qx, qy, qz, time_offset);
+    }
+  } catch (const std::exception &e) {
+    spdlog::warn("Error parsing calibration file: {}", e.what());
+  }
+}
+
 // Read data from IMU file and fill into buffer
 void load_imu_data_from_file(const std::string &filename) {
   if (!boost::filesystem::exists(filename)) {
@@ -396,7 +438,7 @@ void load_imu_data_from_file(const std::string &filename) {
     is_first_imu = false;
 
     sensor_msgs::Imu::Ptr imu_msg(new sensor_msgs::Imu());
-    imu_msg->header.stamp          = ros::Time(t);
+    imu_msg->header.stamp          = ros::Time(t) + ros::Duration(time_offset * 0.001);
     imu_msg->header.frame_id       = "imu_link";
     imu_msg->linear_acceleration.x = ax;
     imu_msg->linear_acceleration.y = ay;
@@ -483,15 +525,16 @@ std::vector<pointWithCov> ComputePvList(const state_ikfom &state) {
   return pv_list;
 }
 
-int  process_increments = 0;
 void map_incremental() {
   for (int i = 0; i < feats_down_size; i++) {
     /* transform to world frame */
-    pointBodyToWorld(&(feats_down_body->points[i]), &(feats_down_world->points[i]));
+    PointBodyToWorld(feats_down_body->points[i].getVector3fMap(), feats_down_world->points[i].getVector3fMap(),
+                     g_state_point);
+    feats_down_world->points[i].intensity = feats_down_body->points[i].intensity;
   }
 
   // update voxelmap
-  std::vector<pointWithCov> pv_list = ComputePvList(state_point);
+  std::vector<pointWithCov> pv_list = ComputePvList(g_state_point);
   UpdateVoxelMap(pv_list, max_voxel_size, max_layer, layer_size, max_points_size, max_points_size, min_eigen_value,
                  voxel_map);
 }
@@ -578,25 +621,20 @@ int main(int argc, char **argv) {
 
   bool init_map = false;
 
-  scan_pub_en            = true;
-  dense_pub_en           = true;
-  scan_body_pub_en       = true;
-  NUM_MAX_ITERATIONS     = 4;
-  time_sync_en           = false;
-  filter_size_corner_min = 0.5;
-  filter_size_surf_min   = 0.5;
-  filter_size_map_min    = 0.5;
-  gyr_cov                = 0.1;
-  acc_cov                = 0.1;
-  b_gyr_cov              = 0.0001;
-  b_acc_cov              = 0.0001;
-  p_pre->blind           = 0.2;
-  p_pre->SCAN_RATE       = 10;
-  runtime_pos_log        = true;
-  extrinsic_est_en       = false;
-  extrinT                = vector<double>({-0.027100, 0.021396, -0.009847});
-  extrinR =
-      vector<double>({0.999938, 0.007471, 0.008288, -0.007465, 0.999972, -0.000677, -0.008293, 0.000615, 0.999965});
+  NUM_MAX_ITERATIONS   = 4;
+  filter_size_surf_min = 0.5;
+  gyr_cov              = 0.1;
+  acc_cov              = 0.1;
+  b_gyr_cov            = 0.0001;
+  b_acc_cov            = 0.0001;
+  p_pre->blind         = 0.2;
+  p_pre->SCAN_RATE     = 10;
+  runtime_pos_log      = true;
+  extrinsic_est_en     = false;
+
+  // Load calibration parameters from JSON file
+  load_calibration_from_file(FLAGS_calibration_filename);
+
   ranging_cov            = 0.05;
   angle_cov              = 0.2;
   max_points_size        = 400;
@@ -615,8 +653,8 @@ int main(int argc, char **argv) {
 
   _featsArray.reset(new PointCloudXYZI());
 
-  Lidar_T_wrt_IMU << VEC_FROM_ARRAY(extrinT);
-  Lidar_R_wrt_IMU << MAT_FROM_ARRAY(extrinR);
+  Lidar_T_wrt_IMU = extrinT;
+  Lidar_R_wrt_IMU = extrinR;
   p_imu->set_extrinsic(Lidar_T_wrt_IMU, Lidar_R_wrt_IMU);
   p_imu->set_gyr_cov(V3D(gyr_cov, gyr_cov, gyr_cov));
   p_imu->set_acc_cov(V3D(acc_cov, acc_cov, acc_cov));
@@ -667,6 +705,8 @@ int main(int argc, char **argv) {
   //------------------------------------------------------------------------------------------------------
   signal(SIGINT, SigHandle);
 
+  double last_timestamp;
+
   int count = 0;
   // Main processing loop: read and process LiDAR data frame by frame
   while (!lidar_reader->isFileEnded() && !flg_exit) {
@@ -683,22 +723,19 @@ int main(int argc, char **argv) {
     if (sync_packages(Measures)) {
       if (flg_first_scan)  // skip the first lidar scan
       {
-        first_lidar_time = Measures.lidar_beg_time;
-        flg_first_scan   = false;
+        flg_first_scan = false;
         continue;
       }
 
       double t0, t1, t2, t3, t5, svd_time;
 
-      match_time         = 0;
-      solve_time         = 0;
-      solve_const_H_time = 0;
-      svd_time           = 0;
-      t0                 = omp_get_wtime();
+      match_time = 0;
+      solve_time = 0;
+      svd_time   = 0;
+      t0         = omp_get_wtime();
 
       p_imu->Process(Measures, kf, feats_undistort);
-      state_point = kf.get_x();
-      pos_lid     = state_point.pos + state_point.rot.toRotationMatrix() * state_point.offset_T_L_I;
+      g_state_point = kf.get_x();
 
       if (feats_undistort == nullptr || feats_undistort->empty()) {
         spdlog::warn("No point, skip this scan!");
@@ -715,11 +752,13 @@ int main(int argc, char **argv) {
         if (feats_down_size > 5) {
           feats_down_world->resize(feats_down_size);
           for (int i = 0; i < feats_down_size; i++) {
-            pointBodyToWorld(&(feats_down_body->points[i]), &(feats_down_world->points[i]));
+            PointBodyToWorld(feats_down_body->points[i].getVector3fMap(), feats_down_world->points[i].getVector3fMap(),
+                             g_state_point);
+            feats_down_world->points[i].intensity = feats_down_body->points[i].intensity;
           }
 
           // init voxel map
-          std::vector<pointWithCov> pv_list = ComputePvList(state_point);
+          std::vector<pointWithCov> pv_list = ComputePvList(g_state_point);
           BuildVoxelMap(pv_list, max_voxel_size, max_layer, layer_size, max_points_size, max_points_size,
                         min_eigen_value, voxel_map);
           spdlog::info("Initialize voxel map done.");
@@ -742,9 +781,9 @@ int main(int argc, char **argv) {
       /*** iterated state estimation ***/
       double t_update_start = omp_get_wtime();
       double solve_H_time   = 0;
+      auto   state_predict  = kf.get_x();
       kf.update_iterated_dyn_share_fastlio();
-      state_point = kf.get_x();
-      pos_lid     = state_point.pos + state_point.rot.toRotationMatrix() * state_point.offset_T_L_I;
+      g_state_point = kf.get_x();
 
       double t_update_end = omp_get_wtime();
 
@@ -765,7 +804,9 @@ int main(int argc, char **argv) {
 
           pdal::PointViewPtr view(new pdal::PointView(table));  // 指定点数
           for (int i = 0; i < size; i++) {
-            RGBpointBodyToWorld(&feats_undistort->points[i], &laserCloudWorld->points[i]);
+            PointBodyToWorld(feats_undistort->points[i].getVector3fMap(), laserCloudWorld->points[i].getVector3fMap(),
+                             g_state_point);
+            laserCloudWorld->points[i].intensity = feats_undistort->points[i].intensity;
 
             view->setField(pdal::Dimension::Id::X, i, laserCloudWorld->points[i].x);
             view->setField(pdal::Dimension::Id::Y, i, laserCloudWorld->points[i].y);
@@ -776,7 +817,13 @@ int main(int argc, char **argv) {
           las_writer->writeView(view);
         }
 
-        save_traj(fp_traj);
+        auto imu_poses = p_imu->IMUpose;
+        if (!imu_poses.empty()) {
+          CorrectImuPoses(Measures.lidar_end_time - last_timestamp, state_predict, g_state_point, imu_poses);
+
+          SaveTraj(fp_traj, last_timestamp, g_state_point.offset_R_L_I, g_state_point.offset_T_L_I, g_state_point.grav,
+                   imu_poses);
+        }
         std::cout << "Progress " << lidar_reader->getProgress() << std::endl;
       }
 
@@ -796,6 +843,8 @@ int main(int argc, char **argv) {
             frame_num, t1 - t0, aver_time_match, aver_time_solve, t3 - t1, t5 - t3, aver_time_consu, aver_time_icp,
             aver_time_const_H_time);
       }
+
+      last_timestamp = Measures.lidar_end_time;
     }
   }
 

@@ -213,8 +213,9 @@ void InitSpdLog() {
   std::vector<spdlog::sink_ptr> sinks;
 #ifndef NDEBUG
   sinks.push_back(console_sink);
-#endif
+#else
   sinks.push_back(file_sink);
+#endif
 
   auto logger = std::make_shared<spdlog::logger>("", sinks.begin(), sinks.end());
   spdlog::set_default_logger(logger);

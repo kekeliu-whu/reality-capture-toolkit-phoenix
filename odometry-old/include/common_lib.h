@@ -19,7 +19,6 @@ using namespace Eigen;
 #define MAX_MEAS_DIM        (10000)
 
 #define VEC_FROM_ARRAY(v)        v[0],v[1],v[2]
-#define MAT_FROM_ARRAY(v)        v[0],v[1],v[2],v[3],v[4],v[5],v[6],v[7],v[8]
 #define CONSTRAIN(v,min,max)     ((v>min)?((v<max)?v:max):min)
 #define ARRAY_FROM_EIGEN(mat)    mat.data(), mat.data() + mat.rows() * mat.cols()
 #define STD_VEC_FROM_EIGEN(mat)  vector<decltype(mat)::Scalar> (mat.data(), mat.data() + mat.rows() * mat.cols())
@@ -150,8 +149,8 @@ auto set_pose6d(const double t, const Matrix<T, 3, 1> &a, const Matrix<T, 3, 1> 
         rot_kp.gyr[i] = g(i);
         rot_kp.vel[i] = v(i);
         rot_kp.pos[i] = p(i);
-        for (int j = 0; j < 3; j++)  rot_kp.rot[i*3+j] = R(i,j);
     }
+    rot_kp.rot = R;
     return move(rot_kp);
 }
 

@@ -33,14 +33,11 @@ bool StartCrashpad(const base::FilePath::StringType& db_path, const base::FilePa
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-/////////////////////////////////// setup minidump ///////////////////////////////////
-#ifdef __linux__
-  base::FilePath::StringType db_path      = "dump";
-  base::FilePath::StringType handler_path = "/buildspace/vcpkg/installed/x64-linux/tools/crashpad_handler";
-#else
-  base::FilePath::StringType db_path      = L"dump";
-  base::FilePath::StringType handler_path = L"crashpad_handler.exe";
-#endif
+  /////////////////////////////////// setup minidump ///////////////////////////////////
+  base::FilePath::StringType db_path      = (std::filesystem::temp_directory_path() / "slam_core_main_dump").wstring();
+  std::string exe_dir                     = GetExeDirectory();
+  base::FilePath::StringType handler_path = base::FilePath(std::wstring(exe_dir.begin(), exe_dir.end())).Append(L"crashpad_handler.exe").value();
+
   std::string report_url = ".";
   StartCrashpad(db_path, handler_path, report_url);
 

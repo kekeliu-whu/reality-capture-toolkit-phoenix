@@ -9,11 +9,9 @@ add_definitions(-D_USE_MATH_DEFINES -DPROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
 if(MSVC)
   add_compile_options(/MP)
-  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/MD /Zi /O2 /Ob1")
-endif()
-
-if(LINUX)
-  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g")
+  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/O2 /Ob3")
+  add_compile_options($<$<CONFIG:Release>:/Zi>)
+  add_link_options($<$<CONFIG:Release>:/DEBUG>)
 endif()
 
 set(CMAKE_CXX_STANDARD 17)

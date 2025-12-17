@@ -22,12 +22,11 @@
 
 struct Pose6D {
   double             offset_time;
-  Eigen::Quaterniond rotation;
   Eigen::Vector3d    acc;
   Eigen::Vector3d    gyr;
   Eigen::Vector3d    vel;
   Eigen::Vector3d    pos;
-  double             rot[9];
+  Eigen::Matrix3d    rot;
 };
 
 inline bool time_list(PointType &x, PointType &y) { return (x.curvature < y.curvature); }
@@ -51,26 +50,24 @@ class ImuProcess {
   void                          set_acc_bias_cov(const V3D &b_a);
   Eigen::Matrix<double, 12, 12> Q;
   void Process(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
-               PointCloudXYZI::Ptr pcl_un_);
+               PointCloudXYZI::Ptr pcl_un);
 
-  ofstream fout_imu;
-  V3D      cov_acc;
-  V3D      cov_gyr;
-  V3D      cov_acc_scale;
-  V3D      cov_gyr_scale;
-  V3D      cov_bias_gyr;
-  V3D      cov_bias_acc;
-  double   first_lidar_time;
+  V3D            cov_acc;
+  V3D            cov_gyr;
+  V3D            cov_acc_scale;
+  V3D            cov_gyr_scale;
+  V3D            cov_bias_gyr;
+  V3D            cov_bias_acc;
+  double         first_lidar_time;
+  vector<Pose6D> IMUpose;
 
  private:
   void IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, int &N);
   void UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
                     PointCloudXYZI &pcl_in_out);
 
-  PointCloudXYZI::Ptr             cur_pcl_un_;
   sensor_msgs::ImuConstPtr        last_imu_;
   deque<sensor_msgs::ImuConstPtr> v_imu_;
-  vector<Pose6D>                  IMUpose;
   vector<M3D>                     v_rot_pcl_;
   M3D                             Lidar_R_wrt_IMU;
   V3D                             Lidar_T_wrt_IMU;
