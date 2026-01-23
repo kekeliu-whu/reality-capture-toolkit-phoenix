@@ -59,10 +59,12 @@
 #include "sophus/se3.hpp"
 #include "voxel_map_util.h"
 
-DEFINE_string(imu_filename, "C:/4.indoor-big-slow/hall/20251023112804_Imr.csv", "Path to the IMU data file");
-DEFINE_string(lidar_filename, "C:/4.indoor-big-slow/hall/20251023112804.bin", "Path to the LiDAR data file");
-DEFINE_string(calibration_filename, "C:/4.indoor-big-slow/hall/LidarCalibration.json", "Path to the calibration file");
-DEFINE_string(output_dir, "C:/4.indoor-big-slow/hall/out", "Directory to save output trajectory");
+DEFINE_string(imu_filename, "C:/4.indoor-big-slow/outdoor/20251027113027_Imr.csv", "Path to the IMU data file");
+DEFINE_string(lidar_filename, "C:/4.indoor-big-slow/outdoor/20251027113027.bin", "Path to the LiDAR data file");
+DEFINE_string(calibration_filename, "C:/4.indoor-big-slow/outdoor/LidarCalibration.json",
+              "Path to the calibration file");
+DEFINE_string(output_dir, "C:/4.indoor-big-slow/outdoor/out", "Directory to save output trajectory");
+DEFINE_bool(indoor, true, "Set to true for indoor environments");
 // DEFINE_string(imu_filename, "C:/4.indoor-big-slow/meeting-room-fenceng/20251023113331_Imr.csv", "Path to the IMU data
 // file"); DEFINE_string(lidar_filename, "C:/4.indoor-big-slow/meeting-room-fenceng/20251023113331.bin", "Path to the
 // LiDAR data file"); DEFINE_string(calibration_filename, "C:/4.indoor-big-slow/hall/LidarCalibration.json", "Path to
@@ -70,8 +72,7 @@ DEFINE_string(output_dir, "C:/4.indoor-big-slow/hall/out", "Directory to save ou
 // output trajectory");
 
 /*** Time Log Variables ***/
-double match_time = 0, solve_time = 0;
-bool   runtime_pos_log = false, extrinsic_est_en = true;
+bool runtime_pos_log = false, extrinsic_est_en = true;
 /**************************/
 
 double last_timestamp_lidar = 0, last_timestamp_imu = -1.0;
@@ -156,7 +157,7 @@ void CorrectImuPoses(double last_dt, const state_ikfom &state_predict, const sta
     pose.pos = (T_correction.rotationMatrix() * pose.pos + T_correction.translation()).eval();
     pose.rot = (T_correction.rotationMatrix() * pose.rot).eval();
 
-    spdlog::info("Correct IMU pose at time: {:.6f} {:.6f} {:.6f}", pose.pos(0), pose.pos(1), pose.pos(2));
+    spdlog::debug("Correct IMU pose at time: {:.6f} {:.6f} {:.6f}", pose.pos(0), pose.pos(1), pose.pos(2));
   }
 }
 
@@ -351,13 +352,13 @@ class LidarFileReader {
 void load_calibration_from_file(const std::string &filename) {
   if (!boost::filesystem::exists(filename)) {
     spdlog::warn("Calibration file does not exist: {}", filename);
-    return;
+    exit(1);
   }
 
   std::ifstream cal_file(filename);
   if (!cal_file) {
     spdlog::warn("Failed to open calibration file: {}", filename);
-    return;
+    exit(1);
   }
 
   try {
@@ -503,7 +504,9 @@ bool   sync_packages(MeasureGroup &meas) {
 
 std::vector<pointWithCov> ComputePvList(const state_ikfom &state) {
   std::vector<pointWithCov> pv_list;
-  for (size_t i = 0; i < feats_down_world->size(); i++) {
+  pv_list.resize(feats_down_world->size());  // 预分配空间，避免并行竞争
+#pragma omp parallel for
+  for (int i = 0; i < feats_down_world->size(); i++) {
     pointWithCov pv;
     V3D          point_this = feats_down_body->points[i].getVector3fMap().cast<double>();
     CalcBodyCov(point_this, ranging_cov, angle_cov, pv.body_cov);
@@ -520,7 +523,7 @@ std::vector<pointWithCov> ComputePvList(const state_ikfom &state) {
     pv.cov  = rot_L_W * pv.body_cov * rot_L_W.transpose() +
              rot_L_W * point_crossmat * P.block<3, 3>(3, 3) * point_crossmat.transpose() * rot_L_W.transpose() +
              P.block<3, 3>(0, 0);
-    pv_list.push_back(pv);
+    pv_list[i] = pv;  // ✓ 直接赋值，线程安全
   }
   return pv_list;
 }
@@ -539,6 +542,9 @@ void map_incremental() {
                  voxel_map);
 }
 
+// Global variables to store timing for current frame
+double g_match_time = 0, g_solve_time = 0;
+
 Matrix<double, Eigen::Dynamic, 1> h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_data) {
   double match_start = omp_get_wtime();
 
@@ -555,7 +561,7 @@ Matrix<double, Eigen::Dynamic, 1> h_share_model(state_ikfom &s, esekfom::dyn_sha
     return {};
   }
 
-  match_time += omp_get_wtime() - match_start;
+  g_match_time        = omp_get_wtime() - match_start;
   double solve_start_ = omp_get_wtime();
 
   /*** Computation of Measuremnt Jacobian matrix H and measurents vector ***/
@@ -598,7 +604,7 @@ Matrix<double, Eigen::Dynamic, 1> h_share_model(state_ikfom &s, esekfom::dyn_sha
     /*** Measuremnt: distance to the closest surface/corner ***/
     ekfom_data.h(i) = -dist;
   }
-  solve_time += omp_get_wtime() - solve_start_;
+  g_solve_time = omp_get_wtime() - solve_start_;
 
   return ekfom_data.h;
 }
@@ -635,15 +641,28 @@ int main(int argc, char **argv) {
   // Load calibration parameters from JSON file
   load_calibration_from_file(FLAGS_calibration_filename);
 
-  ranging_cov            = 0.05;
-  angle_cov              = 0.2;
-  max_points_size        = 400;
-  max_voxel_size         = 0.5;
-  max_layer              = 2;
-  layer_size             = vector<int>({5, 5, 5, 5, 5});
-  min_eigen_value        = 0.01;
-  min_plane_likeness     = 0.2;
-  int skip_first_n_scans = 50;
+  ranging_cov = 0.05;
+  angle_cov   = 0.2;
+
+  if (FLAGS_indoor) {
+    spdlog::info("Indoor mode enabled.");
+    max_points_size      = 200;
+    max_voxel_size       = 0.5;
+    max_layer            = 2;
+    layer_size           = vector<int>({5, 5, 5, 5, 5});
+    filter_size_surf_min = 0.25;
+  } else {
+    spdlog::info("Outdoor mode enabled.");
+    max_points_size      = 200;
+    max_voxel_size       = 1.0;
+    max_layer            = 2;
+    layer_size           = vector<int>({5, 5, 5, 5, 5});
+    filter_size_surf_min = 0.5;
+  }
+
+  min_eigen_value                = 0.01;
+  min_plane_likeness             = 0.2;
+  int skip_to_save_first_n_scans = 50;
 
   InitVoxelMapParams(min_plane_likeness);
 
@@ -729,10 +748,10 @@ int main(int argc, char **argv) {
 
       double t0, t1, t2, t3, t5, svd_time;
 
-      match_time = 0;
-      solve_time = 0;
-      svd_time   = 0;
-      t0         = omp_get_wtime();
+      g_match_time = 0;
+      g_solve_time = 0;
+      svd_time     = 0;
+      t0           = omp_get_wtime();
 
       p_imu->Process(Measures, kf, feats_undistort);
       g_state_point = kf.get_x();
@@ -744,6 +763,8 @@ int main(int argc, char **argv) {
 
       /*** downsample the feature points in a scan ***/
       DownSamplingVoxelRandom<PointType>(*feats_undistort, *feats_down_body, filter_size_surf_min);
+      spdlog::info("Downsampled from {} to {} points with voxel size {}.", feats_undistort->points.size(),
+                   feats_down_body->points.size(), filter_size_surf_min);
       t1              = omp_get_wtime();
       feats_down_size = feats_down_body->points.size();
 
@@ -776,16 +797,19 @@ int main(int argc, char **argv) {
 
       feats_down_world->resize(feats_down_size);
 
-      t2 = omp_get_wtime();
+      double t_predict_start = omp_get_wtime();
 
       /*** iterated state estimation ***/
-      double t_update_start = omp_get_wtime();
-      double solve_H_time   = 0;
-      auto   state_predict  = kf.get_x();
+      double solve_H_time  = 0;
+      auto   state_predict = kf.get_x();
+
+      double t_predict_end        = omp_get_wtime();
+      double t_update_start_local = omp_get_wtime();
+
       kf.update_iterated_dyn_share_fastlio();
       g_state_point = kf.get_x();
 
-      double t_update_end = omp_get_wtime();
+      double t_update_end_local = omp_get_wtime();
 
       /******* Publish odometry *******/
 
@@ -795,7 +819,7 @@ int main(int argc, char **argv) {
       t5 = omp_get_wtime();
 
       /******* Publish points *******/
-      if (skip_first_n_scans-- < 0) {
+      if (skip_to_save_first_n_scans-- < 0) {
         {
           int                 size = feats_undistort->points.size();
           PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
@@ -830,18 +854,17 @@ int main(int argc, char **argv) {
       /*** Debug variables ***/
       if (runtime_pos_log) {
         frame_num++;
-        aver_time_consu = aver_time_consu * (frame_num - 1) / frame_num + (t5 - t0) / frame_num;
-        aver_time_icp   = aver_time_icp * (frame_num - 1) / frame_num + (t_update_end - t_update_start) / frame_num;
-        aver_time_match = aver_time_match * (frame_num - 1) / frame_num + (match_time) / frame_num;
-        aver_time_solve = aver_time_solve * (frame_num - 1) / frame_num + (solve_time + solve_H_time) / frame_num;
-        aver_time_const_H_time = aver_time_const_H_time * (frame_num - 1) / frame_num + solve_time / frame_num;
+        double downsample_time  = t1 - t0;
+        double match_time_frame = g_match_time;
+        double predict_time     = t_predict_end - t_predict_start;
+        double update_time      = t_update_end_local - t_update_start_local;
+        double map_incr_time    = t5 - t3;
+        double total_time       = t5 - t0;
 
         spdlog::info(
-            "[ mapping ]: frame id: {:5d} time: IMU + Map + Input Downsample: {:.6f} ave match: {:.6f} ave solve: "
-            "{:.6f} "
-            "ave ICP: {:.6f} map incre: {:.6f} ave total: {:.6f} icp: {:.6f} construct H: {:.6f}",
-            frame_num, t1 - t0, aver_time_match, aver_time_solve, t3 - t1, t5 - t3, aver_time_consu, aver_time_icp,
-            aver_time_const_H_time);
+            "[ mapping ]: frame id: {:5d} | Down: {:.6f} Match: {:.6f} Predict: {:.6f} Update: {:.6f} "
+            "MapIncr: {:.6f} Total: {:.6f}",
+            frame_num, downsample_time, match_time_frame, predict_time, update_time, map_incr_time, total_time);
       }
 
       last_timestamp = Measures.lidar_end_time;

@@ -602,10 +602,7 @@ void BuildResidualListOMP(const unordered_map<VoxelLoc, OctoTree *> &voxel_map,
   ptpl_list.clear();
   std::vector<ptpl> all_ptpl_list(pv_list.size());
   std::vector<int> useful_ptpl(pv_list.size(), false);
-#ifdef MP_EN
-  omp_set_num_threads(MP_PROC_NUM);
 #pragma omp parallel for
-#endif
   for (int i = 0; i < pv_list.size(); i++) {
     pointWithCov pv = pv_list[i];
     float loc_xyz[3];
