@@ -27,6 +27,13 @@ add_subdirectory(thirdparty/sophus)
 add_subdirectory(thirdparty/ulog_cpp)
 add_subdirectory(thirdparty/ros)
 
+if(MSVC)
+  add_compile_options(/MP)
+  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/O2 /Ob3 /MD")
+  add_compile_options($<$<CONFIG:Release>:/Zi>)
+  add_link_options($<$<CONFIG:Release>:/DEBUG>)
+endif()
+
 
 #################### generate proto srcs and headers ####################
 file(GLOB_RECURSE ALL_PROTOS "proto/*.proto")
@@ -91,7 +98,7 @@ set(
     ulog_cpp
     spdlog::spdlog_header_only
     $<TARGET_NAME:pdalcpp>
-    fmt::fmt-header-only
+    fmt::fmt
 )
 
 # add_executable(test_proto src/test_proto.cc ${PROJECT_SRCS})

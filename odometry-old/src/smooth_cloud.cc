@@ -20,14 +20,15 @@
 #include "migration/logging.h"
 #include "migration/string.h"
 
-DEFINE_string(input_las, "C:\\4.indoor-big-slow\\hall\\out\\map_aligned.las", "Input LAS file path");
+DEFINE_string(input_las, "C:\\4.indoor-big-slow\\hall\\out\\map.las", "Input LAS file path");
 DEFINE_string(output_las, "C:\\4.indoor-big-slow\\hall\\out\\map_smooth.las", "Output smoothed LAS file path");
 
-static constexpr int    kSmoothMaxNearestNeighbors = 80;
-static constexpr double kSmoothMaxSearchRadius     = 0.3;
+static constexpr int    kSmoothMaxNearestNeighbors = 40;
+static constexpr double kSmoothMaxSearchRadius     = 0.2;
 static constexpr double kSmoothSigmaD              = 0.05;
 static constexpr double kSmoothSigmaN              = 0.05;
-static constexpr double kVoxelSize                 = 0.05;
+static constexpr double kVoxelSize                 = 0.04;
+static constexpr double kSORNeighborSearchRadius   = 0.09;
 
 // Intensity statistics structure
 struct IntensityStats {
@@ -170,6 +171,7 @@ void EstimateNormals(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &cloud,
                      const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &cloud_downsampled, int k,
                      std::vector<Eigen::Vector3f> &normals) {
   normals.resize(cloud->size());
+
   pcl::KdTreeFLANN<pcl::PointXYZI>::Ptr tree(new pcl::KdTreeFLANN<pcl::PointXYZI>);
   tree->setInputCloud(cloud_downsampled);
 
@@ -196,6 +198,32 @@ void EstimateNormals(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &cloud,
 
     Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eigensolver(covariance);
     normals[i] = eigensolver.eigenvectors().col(0).cast<float>();
+  }
+}
+
+// ------------------------------------------------------------
+// Estimate filtering statistics
+// ------------------------------------------------------------
+void EstimateFilterStats(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &cloud,
+                         const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &cloud_downsampled, int k, double max_distance,
+                         std::vector<uint8_t> &filtered_flags, std::vector<float> &sor_distances) {
+  filtered_flags.resize(cloud->size(), 0);
+  sor_distances.resize(cloud->size(), 0.0);
+
+  pcl::KdTreeFLANN<pcl::PointXYZI>::Ptr tree(new pcl::KdTreeFLANN<pcl::PointXYZI>);
+  tree->setInputCloud(cloud_downsampled);
+
+  spdlog::info("Estimating filter statistics using downsampled KD-tree...");
+#pragma omp parallel for
+  for (int i = 0; i < cloud->size(); ++i) {
+    std::vector<int>   k_indices(k);
+    std::vector<float> k_sqr_distances(k);
+    if (tree->nearestKSearch(cloud->at(i), k, k_indices, k_sqr_distances) <= 3) continue;
+
+    sor_distances[i] = std::sqrt(k_sqr_distances.back()) * 1000.0;  // Convert to mm
+    if (std::sqrt(k_sqr_distances.back()) > max_distance) {
+      filtered_flags[i] = 1;
+    }
   }
 }
 
@@ -234,7 +262,8 @@ void SmoothPointCloud(pcl::PointCloud<pcl::PointXYZI>::Ptr &cloud, const std::ve
 }
 
 void WriteLasFile(const std::string &filename, const pcl::PointCloud<pcl::PointXYZI>::Ptr &cloud,
-                  const std::vector<double> &timestamps) {
+                  const std::vector<double> &timestamps, const std::vector<uint8_t> &filtered_flags,
+                  const std::vector<float> &sor_distances) {
   spdlog::info("Starting incremental LAS write example...");
   // 1. Define point cloud data layout
   pdal::PointTable table;
@@ -251,12 +280,15 @@ void WriteLasFile(const std::string &filename, const pcl::PointCloud<pcl::PointX
 
   // 3. Create PointView and fill with data
   pdal::PointViewPtr view(new pdal::PointView(table));
+  int                count = 0;
   for (int i = 0; i < cloud->size(); ++i) {
-    view->setField(pdal::Dimension::Id::X, i, cloud->points[i].x);
-    view->setField(pdal::Dimension::Id::Y, i, cloud->points[i].y);
-    view->setField(pdal::Dimension::Id::Z, i, cloud->points[i].z);
-    view->setField(pdal::Dimension::Id::Intensity, i, (uint16_t)cloud->points[i].intensity);
-    view->setField(pdal::Dimension::Id::GpsTime, i, timestamps[i]);
+    if (filtered_flags[i]) continue;  // Skip filtered points
+    view->setField(pdal::Dimension::Id::X, count, cloud->points[i].x);
+    view->setField(pdal::Dimension::Id::Y, count, cloud->points[i].y);
+    view->setField(pdal::Dimension::Id::Z, count, cloud->points[i].z);
+    view->setField(pdal::Dimension::Id::Intensity, count, cloud->points[i].intensity);
+    view->setField(pdal::Dimension::Id::GpsTime, count, timestamps[i]);
+    ++count;
   }
   writer.writeView(view);
 
@@ -284,6 +316,8 @@ int main(int argc, char **argv) {
   std::vector<double>                  timestamps;
   pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZI>);
   std::vector<Eigen::Vector3f>         normals;
+  std::vector<uint8_t>                 filtered_flags;
+  std::vector<float>                   sor_distances;
 
   // Step 0: Read input point cloud
   ReadLidarPoints(FLAGS_input_las, cloud, timestamps);
@@ -300,11 +334,13 @@ int main(int argc, char **argv) {
   // Step 2: Estimate normals for each point in the cloud using k-nearest neighbors
   EstimateNormals(cloud, cloud_downsampled, 15, normals);
 
+  EstimateFilterStats(cloud, cloud_downsampled, 15, kSORNeighborSearchRadius, filtered_flags, sor_distances);
+
   // Step 3: Smooth point cloud using bilateral-like filtering
   SmoothPointCloud(cloud, normals, kSmoothMaxNearestNeighbors, kSmoothMaxSearchRadius, kSmoothSigmaD, kSmoothSigmaN);
 
   // Step 4: Save smoothed point cloud
-  WriteLasFile(FLAGS_output_las, cloud, timestamps);
+  WriteLasFile(FLAGS_output_las, cloud, timestamps, filtered_flags, sor_distances);
 
   spdlog::info("done.");
   return 0;

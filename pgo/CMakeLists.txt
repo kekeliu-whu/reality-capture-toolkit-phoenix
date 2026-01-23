@@ -9,7 +9,7 @@ add_definitions(-D_USE_MATH_DEFINES -DPROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
 if(MSVC)
   add_compile_options(/MP)
-  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/O2 /Ob3")
+  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/O2 /Ob3 /MD")
   add_compile_options($<$<CONFIG:Release>:/Zi>)
   add_link_options($<$<CONFIG:Release>:/DEBUG>)
 endif()
