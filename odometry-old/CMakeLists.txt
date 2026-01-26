@@ -75,7 +75,7 @@ set(PGO_PRIVATE_LIBS
   rapidjson
   crashpad::crashpad
   $<TARGET_NAME:pdalcpp>
-  fmt::fmt
+  fmt::fmt-header-only
   ${OpenCV_LIBS}
   spdlog::spdlog_header_only
 )

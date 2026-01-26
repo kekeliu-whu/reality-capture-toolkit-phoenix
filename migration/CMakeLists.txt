@@ -98,7 +98,7 @@ set(
     ulog_cpp
     spdlog::spdlog_header_only
     $<TARGET_NAME:pdalcpp>
-    fmt::fmt
+    fmt::fmt-header-only
 )
 
 # add_executable(test_proto src/test_proto.cc ${PROJECT_SRCS})
