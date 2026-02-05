@@ -1,9 +1,7 @@
 #ifndef TIMER_H
 #define TIMER_H
 
-#include <sys/time.h>
-#include <stdio.h>
-#include <unistd.h>
+#include <chrono>
 
 namespace vk
 {
@@ -11,7 +9,8 @@ namespace vk
 class Timer
 {
 private:
-  timeval start_time_;
+  using Clock = std::chrono::high_resolution_clock;
+  Clock::time_point start_time_;
   double time_;
   double accumulated_;
 public:
@@ -30,21 +29,19 @@ public:
   inline void start()
   {
     accumulated_ = 0.0;
-    gettimeofday(&start_time_, NULL);
+    start_time_ = Clock::now();
   }
 
   inline void resume()
   {
-    gettimeofday(&start_time_, NULL);
+    start_time_ = Clock::now();
   }
 
   inline double stop()
   {
-    timeval end_time;
-    gettimeofday(&end_time, NULL);
-    long seconds  = end_time.tv_sec  - start_time_.tv_sec;
-    long useconds = end_time.tv_usec - start_time_.tv_usec;
-    time_ = ((seconds) + useconds*0.000001) + accumulated_;
+    auto end_time = Clock::now();
+    auto duration = std::chrono::duration<double>(end_time - start_time_);
+    time_ = duration.count() + accumulated_;
     accumulated_ = time_;
     return time_;
   }
@@ -62,16 +59,16 @@ public:
 
   static double getCurrentTime()
   {
-    timeval time_now;
-    gettimeofday(&time_now, NULL);
-    return time_now.tv_sec + time_now.tv_usec*0.000001;
+    auto now = Clock::now();
+    auto duration = std::chrono::duration<double>(now.time_since_epoch());
+    return duration.count();
   }
 
   static double getCurrentSecond()
   {
-    timeval time_now;
-    gettimeofday(&time_now, NULL);
-    return time_now.tv_sec;
+    auto now = Clock::now();
+    auto seconds = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
+    return static_cast<double>(seconds.count());
   }
 
 };

@@ -20,12 +20,8 @@ which is included as part of this source code package.
 #include <mutex>
 #include <omp.h>
 #include <pcl/common/io.h>
-#include <ros/ros.h>
 #include <thread>
-#include <unistd.h>
 #include <unordered_map>
-#include <visualization_msgs/Marker.h>
-#include <visualization_msgs/MarkerArray.h>
 
 #define VOXELMAP_HASH_P 116101
 #define VOXELMAP_MAX_N 10000000000
@@ -182,7 +178,7 @@ public:
   VoxelOctoTree *Insert(const pointWithVar &pv);
 };
 
-void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config);
+void loadVoxelConfig(VoxelMapConfig &voxel_config);
 
 class VoxelMapManager
 {
@@ -190,7 +186,6 @@ public:
   VoxelMapManager() = default;
   VoxelMapConfig config_setting_;
   int current_frame_id_ = 0;
-  ros::Publisher voxel_map_pub_;
   std::unordered_map<VOXEL_LOCATION, VoxelOctoTree *> voxel_map_;
 
   PointCloudXYZI::Ptr feats_undistort_;
@@ -248,8 +243,6 @@ public:
 private:
   void GetUpdatePlane(const VoxelOctoTree *current_octo, const int pub_max_voxel_layer, std::vector<VoxelPlane> &plane_list);
 
-  void pubSinglePlane(visualization_msgs::MarkerArray &plane_pub, const std::string plane_ns, const VoxelPlane &single_plane, const float alpha,
-                      const Eigen::Vector3d rgb);
   void CalcVectQuation(const Eigen::Vector3d &x_vec, const Eigen::Vector3d &y_vec, const Eigen::Vector3d &z_vec, geometry_msgs::Quaternion &q);
 
   void mapJet(double v, double vmin, double vmax, uint8_t &r, uint8_t &g, uint8_t &b);

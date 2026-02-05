@@ -167,7 +167,6 @@ public:
   
   double blind, blind_sqr;
   bool feature_enabled, given_offset_time;
-  ros::Publisher pub_full, pub_surf, pub_corn;
 
 private:
   void avia_handler(const livox_ros_driver::CustomMsg::ConstPtr &msg);

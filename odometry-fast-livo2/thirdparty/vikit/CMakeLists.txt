@@ -4,6 +4,12 @@ project(vikit VERSION 1.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
+find_package(OpenCV CONFIG REQUIRED)
+
+include_directories(
+  ${OPENCV_INCLUDE_DIRS}
+)
+
 add_library(${PROJECT_NAME} STATIC
   src/atan_camera.cpp
   src/equidistant_camera.cpp
@@ -15,8 +21,14 @@ add_library(${PROJECT_NAME} STATIC
   src/pinhole_camera.cpp
   src/polynomial_camera.cpp
   src/robust_cost.cpp
-  src/user_input_thread.cpp
   src/vision.cpp
 )
-target_include_directories(${PROJECT_NAME} PRIVATE include)
-target_include_directories(${PROJECT_NAME} INTERFACE include)
+
+target_include_directories(${PROJECT_NAME} PUBLIC
+  include
+)
+target_link_libraries(
+  ${PROJECT_NAME}
+  ${OpenCV_LIBS}
+  sophus
+)

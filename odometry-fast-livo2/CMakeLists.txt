@@ -53,6 +53,7 @@ include_directories(
 )
 
 add_subdirectory(../migration migration_build)
+add_subdirectory(thirdparty/vikit vikit_build)
 
 
 set(
@@ -77,7 +78,6 @@ set(
 
 set(PGO_PRIVATE_LIBS
   mimalloc
-  migration_core
   ${GFLAGS_LIBRARIES}
   ${PCL_LIBRARIES}
   ${CERES_LIBRARIES}
@@ -90,6 +90,8 @@ set(PGO_PRIVATE_LIBS
   fmt::fmt-header-only
   ${OpenCV_LIBS}
   spdlog::spdlog_header_only
+  vikit
+  migration_core
 )
 
 function(add_private_tool name)
