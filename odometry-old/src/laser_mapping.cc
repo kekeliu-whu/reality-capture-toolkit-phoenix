@@ -51,6 +51,7 @@
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <thread>
+#include <migration/proto_io.h>
 
 #include "imu_processing.h"
 #include "migration/inc_las_writer.h"
@@ -59,17 +60,9 @@
 #include "sophus/se3.hpp"
 #include "voxel_map_util.h"
 
-DEFINE_string(imu_filename, "C:/4.indoor-big-slow/outdoor/20251027113027_Imr.csv", "Path to the IMU data file");
-DEFINE_string(lidar_filename, "C:/4.indoor-big-slow/outdoor/20251027113027.bin", "Path to the LiDAR data file");
-DEFINE_string(calibration_filename, "C:/4.indoor-big-slow/outdoor/LidarCalibration.json",
-              "Path to the calibration file");
-DEFINE_string(output_dir, "C:/4.indoor-big-slow/outdoor/out", "Directory to save output trajectory");
+DEFINE_string(project_dirname, "D:\\ProjectX\\project-3d\\data\\sfm\\mixed\\indoor-office\\2026-01-14_15-29-47\\slam", "Path to the IMU data file");
+DEFINE_string(output_dir, "D:\\ProjectX\\project-3d\\data\\sfm\\mixed\\indoor-office\\2026-01-14_15-29-47\\slam\\output", "Directory to save output trajectory");
 DEFINE_bool(indoor, true, "Set to true for indoor environments");
-// DEFINE_string(imu_filename, "C:/4.indoor-big-slow/meeting-room-fenceng/20251023113331_Imr.csv", "Path to the IMU data
-// file"); DEFINE_string(lidar_filename, "C:/4.indoor-big-slow/meeting-room-fenceng/20251023113331.bin", "Path to the
-// LiDAR data file"); DEFINE_string(calibration_filename, "C:/4.indoor-big-slow/hall/LidarCalibration.json", "Path to
-// the calibration file"); DEFINE_string(output_dir, "C:/4.indoor-big-slow/meeting-room-fenceng/out", "Directory to save
-// output trajectory");
 
 /*** Time Log Variables ***/
 bool runtime_pos_log = false, extrinsic_est_en = true;
@@ -172,13 +165,18 @@ void PointBodyToWorld(const Eigen::Map<Eigen::Matrix<T, 3, 1>> &pi, Eigen::Map<E
   po[2] = p_global(2);
 }
 
-void livox_pcl_cbk(const livox_ros_driver::CustomMsg::ConstPtr &msg) {
+void livox_pcl_cbk(const std::shared_ptr<proto::LidarMsg> &msg) {
+  if (msg->points().size() == 0) {
+    spdlog::critical("Empty LiDAR frame at time: {:.6f}");
+    return;
+  }
+
   double preprocess_start_time = omp_get_wtime();
-  if (msg->header.stamp.toSec() < last_timestamp_lidar) {
+  if (msg->points().at(0).timestamp() < last_timestamp_lidar) {
     spdlog::error("lidar loop back, clear buffer");
     lidar_buffer.clear();
   }
-  last_timestamp_lidar = msg->header.stamp.toSec();
+  last_timestamp_lidar = msg->points().at(0).timestamp();
 
   PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
   p_pre->process(msg, ptr);
@@ -401,6 +399,9 @@ void load_calibration_from_file(const std::string &filename) {
           qw, qx, qy, qz, time_offset);
     }
   } catch (const std::exception &e) {
+    time_offset = 0.0;
+    extrinR.setIdentity();
+    extrinT.setZero();
     spdlog::warn("Error parsing calibration file: {}", e.what());
   }
 }
@@ -409,49 +410,26 @@ void load_calibration_from_file(const std::string &filename) {
 void load_imu_data_from_file(const std::string &filename) {
   if (!boost::filesystem::exists(filename)) {
     spdlog::error("IMU file does not exist: {}", filename);
-    throw std::runtime_error("IMU file not found");
+    exit(1);
   }
 
-  std::ifstream imu_file(filename);
-  if (!imu_file) {
-    spdlog::error("Failed to open IMU file: {}", filename);
-    throw std::runtime_error("Failed to open IMU file");
+  proto::ImuMsgList imu_msgs;
+  ReadImuFile(filename, imu_msgs);
+  for (const auto &imu_msg : imu_msgs.imu_msgs()) {
+    sensor_msgs::Imu::Ptr imu_ros_msg(new sensor_msgs::Imu());
+    imu_ros_msg->header.stamp          = ros::Time(imu_msg.timestamp() ) + ros::Duration(time_offset * 0.001);
+    imu_ros_msg->header.frame_id = "imu_link";
+    // todo kk
+    imu_ros_msg->linear_acceleration.x = imu_msg.ax() * 9.8;
+    imu_ros_msg->linear_acceleration.y = imu_msg.ay() * 9.8;
+    imu_ros_msg->linear_acceleration.z = imu_msg.az() * 9.8;
+    imu_ros_msg->angular_velocity.x    = imu_msg.gx();
+    imu_ros_msg->angular_velocity.y    = imu_msg.gy();
+    imu_ros_msg->angular_velocity.z    = imu_msg.gz();
+    imu_cbk(imu_ros_msg);
   }
 
-  // Skip header line
-  std::string header;
-  std::getline(imu_file, header);
-
-  double last_ax = 0, last_ay = 0, last_az = 0;
-  bool   is_first_imu = true;
-
-  double t, ax, ay, az, gx, gy, gz;
-  char   comma;
-  while (imu_file >> t >> comma >> ax >> comma >> ay >> comma >> az >> comma >> gx >> comma >> gy >> comma >> gz) {
-    // Skip duplicate IMU data
-    if (!is_first_imu && ax == last_ax && ay == last_ay && az == last_az) {
-      continue;
-    }
-
-    last_ax      = ax;
-    last_ay      = ay;
-    last_az      = az;
-    is_first_imu = false;
-
-    sensor_msgs::Imu::Ptr imu_msg(new sensor_msgs::Imu());
-    imu_msg->header.stamp          = ros::Time(t) + ros::Duration(time_offset * 0.001);
-    imu_msg->header.frame_id       = "imu_link";
-    imu_msg->linear_acceleration.x = ax;
-    imu_msg->linear_acceleration.y = ay;
-    imu_msg->linear_acceleration.z = az;
-    imu_msg->angular_velocity.x    = gx;
-    imu_msg->angular_velocity.y    = gy;
-    imu_msg->angular_velocity.z    = gz;
-
-    imu_cbk(imu_msg);
-  }
-
-  spdlog::info("Loaded IMU data from: {}", filename);
+  spdlog::info("Loaded IMU data from: {}, msg count: {}", filename, imu_msgs.imu_msgs_size());
 }
 
 double lidar_mean_scantime = 0.0;
@@ -639,7 +617,7 @@ int main(int argc, char **argv) {
   extrinsic_est_en     = false;
 
   // Load calibration parameters from JSON file
-  load_calibration_from_file(FLAGS_calibration_filename);
+  load_calibration_from_file(FLAGS_project_dirname + "/calibration.dat");
 
   ranging_cov = 0.05;
   angle_cov   = 0.2;
@@ -696,20 +674,16 @@ int main(int argc, char **argv) {
 
   /*** Load IMU data ***/
   try {
-    load_imu_data_from_file(FLAGS_imu_filename);
+    load_imu_data_from_file(FLAGS_project_dirname + "/imu.dat");
   } catch (const std::exception &e) {
     spdlog::error("Failed to load IMU data: {}", e.what());
     return -1;
   }
 
   /*** Create LiDAR file reader ***/
-  std::unique_ptr<LidarFileReader> lidar_reader;
-  try {
-    lidar_reader = std::make_unique<LidarFileReader>(FLAGS_lidar_filename, 0.1);  // 0.1 seconds per frame
-  } catch (const std::exception &e) {
-    spdlog::error("Failed to create LiDAR reader: {}", e.what());
-    return -1;
-  }
+  SequentialLidarFileReader<proto::LidarMsg> lidar_reader;
+  lidar_reader.Open(FLAGS_project_dirname + "/lidar.dat");
+  Ptr<proto::LidarMsg> lidar_msg;
 
   pdal::PointTable table;
   table.layout()->registerDim(pdal::Dimension::Id::X);
@@ -728,12 +702,12 @@ int main(int argc, char **argv) {
 
   int count = 0;
   // Main processing loop: read and process LiDAR data frame by frame
-  while (!lidar_reader->isFileEnded() && !flg_exit) {
+  while (!lidar_reader.IsFileEnded() && !flg_exit) {
     // Read one frame of point cloud data
-    livox_ros_driver::CustomMsg::Ptr scan_msg;
-    if (lidar_reader->readOneScan(scan_msg)) {
+    std::shared_ptr<proto::LidarMsg> scan_msg{new proto::LidarMsg()};
+    if (lidar_reader.ReadNext(scan_msg)) {
       // Send point cloud data to processing pipeline
-      if (scan_msg && scan_msg->point_num > 0) {
+      if (scan_msg && scan_msg->points().size() > 0) {
         livox_pcl_cbk(scan_msg);
       }
     }
@@ -848,7 +822,7 @@ int main(int argc, char **argv) {
           SaveTraj(fp_traj, last_timestamp, g_state_point.offset_R_L_I, g_state_point.offset_T_L_I, g_state_point.grav,
                    imu_poses);
         }
-        std::cout << "Progress " << lidar_reader->getProgress() << std::endl;
+        std::cout << "Progress " << lidar_reader.getProgress() << "%" << std::endl;
       }
 
       /*** Debug variables ***/
@@ -873,9 +847,6 @@ int main(int argc, char **argv) {
 
   las_writer->finalize(table);
   spdlog::info("Finished writing map to LAS file: {}", FLAGS_output_dir + "/map.las");
-
-  // Clean up resources (unique_ptr auto cleanup)
-  lidar_reader.reset();
 
   /**************** save map ****************/
   // Clean up LAS writer (unique_ptr auto cleanup)

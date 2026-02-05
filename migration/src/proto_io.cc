@@ -11,8 +11,6 @@
 
 #include "migration/proto_io.h"
 
-namespace {
-
 void FastGzipString(const std::string &uncompressed, std::string *compressed) {
   boost::iostreams::filtering_ostream out;
   out.push(boost::iostreams::zstd_compressor(boost::iostreams::zstd::default_compression));
@@ -27,29 +25,7 @@ void FastGunzipString(const std::string &compressed, std::string *decompressed) 
   boost::iostreams::write(out, reinterpret_cast<const char *>(compressed.data()), compressed.size());
 }
 
-bool ReadDelimitedFrom(std::ifstream &rawInput, google::protobuf::MessageLite *message) {
-  if (!rawInput) {
-    return false;
-  }
-
-  int len = 0;
-  rawInput.read((char *)&len, sizeof(len));
-
-  if (len <= 0) {
-    return false;
-  }
-
-  std::string buffer(len, 0);
-  rawInput.read(&buffer[0], len);
-
-  if (!rawInput) {
-    return false;
-  }
-
-  std::string buffer_decompressed;
-  FastGunzipString(buffer, &buffer_decompressed);
-  return message->ParseFromString(buffer_decompressed);
-}
+namespace {
 
 bool ReadSingleMsgFile(const std::string &filename, google::protobuf::Message &message) {
   std::ifstream file(filename, std::ios::in | std::ios::binary);
@@ -101,18 +77,28 @@ bool WriteDelimitedTo(const google::protobuf::MessageLite &message, std::ofstrea
   return true;
 }
 
-bool ReadLidarFile(const std::string &filename, std::function<void(const std::shared_ptr<const proto::LidarMsg> &)> callback) {
-  std::ifstream infile(filename, std::ios::in | std::ios::binary);
-  if (!infile.is_open()) {
-    spdlog::info("Failed to open file: {}", filename);
+bool ReadDelimitedFrom(std::ifstream &rawInput, google::protobuf::MessageLite *message) {
+  if (!rawInput) {
     return false;
   }
 
-  std::shared_ptr<proto::LidarMsg> scan{new proto::LidarMsg()};
-  while (ReadDelimitedFrom(infile, scan.get())) {
-    callback(scan);
+  int len = 0;
+  rawInput.read((char *)&len, sizeof(len));
+
+  if (len <= 0) {
+    return false;
   }
-  return true;
+
+  std::string buffer(len, 0);
+  rawInput.read(&buffer[0], len);
+
+  if (!rawInput) {
+    return false;
+  }
+
+  std::string buffer_decompressed;
+  FastGunzipString(buffer, &buffer_decompressed);
+  return message->ParseFromString(buffer_decompressed);
 }
 
 bool WriteLidarFile(const std::string &filename, const std::vector<ConstPtr<proto::LidarMsg>> &scans) {

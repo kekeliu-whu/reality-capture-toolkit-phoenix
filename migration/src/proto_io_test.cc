@@ -87,10 +87,12 @@ TEST(SensorIO, ReadWriteLidarFile) {
   EXPECT_TRUE(WriteLidarFile(filename, lidar_msgs));
 
   std::vector<ConstPtr<proto::LidarMsg>> lidar_msgs_out;
-  EXPECT_TRUE(ReadLidarFile(
-      filename, [&lidar_msgs_out](const ConstPtr<proto::LidarMsg> &lidar_msg) {
-        lidar_msgs_out.push_back(lidar_msg);
-      }));
+  SequentialLidarFileReader<proto::LidarMsg> reader;
+  EXPECT_TRUE(reader.Open(filename));
+  Ptr<proto::LidarMsg> msg;
+  while (reader.ReadNext(msg)) {
+    lidar_msgs_out.push_back(msg);
+  }
 
   EXPECT_EQ(lidar_msgs.size(), lidar_msgs_out.size());
   for (int i = 0; i < lidar_msgs.size(); i++) {

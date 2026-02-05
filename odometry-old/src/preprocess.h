@@ -4,6 +4,7 @@
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <sensor_msgs/PointCloud2.h>
+#include <migration/proto_io.h>
 
 using namespace std;
 
@@ -72,7 +73,7 @@ class Preprocess
   Preprocess();
   ~Preprocess();
   
-  void process(const livox_ros_driver::CustomMsg::ConstPtr &msg, PointCloudXYZI::Ptr &pcl_out);
+  void process(const std::shared_ptr<proto::LidarMsg> &msg, PointCloudXYZI::Ptr &pcl_out);
 
   // sensor_msgs::PointCloud2::ConstPtr pointcloud;
   PointCloudXYZI pl_full, pl_surf;
@@ -81,7 +82,7 @@ class Preprocess
   bool given_offset_time;
 
   private:
-  void avia_handler(const livox_ros_driver::CustomMsg::ConstPtr &msg);
+  void avia_handler(const std::shared_ptr<proto::LidarMsg> &msg);
   void oust64_handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
   void velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg, bool use_hilti_as_velodyne = false);
 };
