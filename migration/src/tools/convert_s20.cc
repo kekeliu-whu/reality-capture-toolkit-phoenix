@@ -12,9 +12,10 @@
 #include "proto/calib.pb.h"
 #include "proto/sensors.pb.h"
 
-DEFINE_string(bag_filename, "D:/ProjectX/project-3d/data/sfm/mixed/indoor-office/2026-01-14_15-29-47/all_2026-01-14-15-29-55.bag",
+DEFINE_string(bag_filename, "\\\\wsl.localhost\\Ubuntu-24.04\\home\\rick\\iKalibr\\2026-02-06_11-34-29\\all_2026-02-06-11-34-35.bag",
               "Point cloud filename");
-DEFINE_string(output_dir, "D:/ProjectX/project-3d/data/sfm/mixed/indoor-office/2026-01-14_15-29-47/slam", "Output dir to save converted data");
+DEFINE_string(output_dir, "D:\\slam",
+              "Output dir to save converted data");
 
 template <int Rows, int Cols>
 Eigen::Matrix<double, Rows, Cols> ReadMatrix(const std::vector<double>& mat) {
