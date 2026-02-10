@@ -1,10 +1,10 @@
 #include <custom_msgs/LixelAnyData.h>
 #include <gflags/gflags.h>
+#include <livox_ros_driver/CustomMsg.h>
 #include <nav_msgs/Odometry.h>
 #include <rosbag/bag.h>
 #include <rosbag/view.h>
 #include <sensor_msgs/Imu.h>
-#include <livox_ros_driver/CustomMsg.h>
 #include <yaml-cpp/yaml.h>
 #include <Eigen/Eigen>
 
@@ -12,7 +12,8 @@
 #include "proto/calib.pb.h"
 #include "proto/sensors.pb.h"
 
-DEFINE_string(bag_filename, "D:/ProjectX/project-3d/data/sfm/mixed/indoor-office/2026-01-14_15-29-47/all_2026-01-14-15-29-55.bag", "Point cloud filename");
+DEFINE_string(bag_filename, "D:/ProjectX/project-3d/data/sfm/mixed/indoor-office/2026-01-14_15-29-47/all_2026-01-14-15-29-55.bag",
+              "Point cloud filename");
 DEFINE_string(output_dir, "D:/ProjectX/project-3d/data/sfm/mixed/indoor-office/2026-01-14_15-29-47/slam", "Output dir to save converted data");
 
 template <int Rows, int Cols>
@@ -34,7 +35,7 @@ void PointCloudCallback(const livox_ros_driver::CustomMsgConstPtr& msg, std::sha
   for (size_t i = 0; i < msg->points.size(); ++i) {
     auto& pt = msg->points[i];
 
-    if((pt.tag & 0x30) == 0x10 || (pt.tag & 0x30) == 0x00) {
+    if ((pt.tag & 0x30) == 0x10 || (pt.tag & 0x30) == 0x00) {
       auto point = lidar_msg->add_points();
       point->set_x(pt.x);
       point->set_y(pt.y);
@@ -53,12 +54,11 @@ int main(int argc, char** argv) {
 
   proto::SensorCalib sc;
   proto::ImuMsgList imu_msg_list;
-  proto::EncoderMsgList encoder_msg_list;
   SequentialLidarFileWriter<proto::LidarMsg> lidar_writer;
   lidar_writer.Open(FLAGS_output_dir + "/lidar.dat");
 
   for (const auto& m : rosbag::View(bag)) {
- if (m.getTopic() == "/livox/imu") {
+    if (m.getTopic() == "/livox/imu") {
       auto msg = m.instantiate<sensor_msgs::Imu>();
 
       auto new_msg = imu_msg_list.add_imu_msgs();
@@ -66,9 +66,9 @@ int main(int argc, char** argv) {
       new_msg->set_gx(msg->angular_velocity.x);
       new_msg->set_gy(msg->angular_velocity.y);
       new_msg->set_gz(msg->angular_velocity.z);
-      new_msg->set_ax(msg->linear_acceleration.x);
-      new_msg->set_ay(msg->linear_acceleration.y);
-      new_msg->set_az(msg->linear_acceleration.z);
+      new_msg->set_ax(msg->linear_acceleration.x * 9.8);
+      new_msg->set_ay(msg->linear_acceleration.y * 9.8);
+      new_msg->set_az(msg->linear_acceleration.z * 9.8);
     } else if (m.getTopic() == "/livox/lidar") {
       auto msg = m.instantiate<livox_ros_driver::CustomMsg>();
 
@@ -77,9 +77,19 @@ int main(int argc, char** argv) {
       lidar_writer.Write(lidar_msg);
     }
   }
-  WriteSensorCalibFile(FLAGS_output_dir + "/calibration.dat", sc);
+
+  {
+    sc.mutable_lidar_to_encoder()->set_tx(-0.011);
+    sc.mutable_lidar_to_encoder()->set_ty(-0.02329);
+    sc.mutable_lidar_to_encoder()->set_tz(0.04412);
+    sc.mutable_lidar_to_encoder()->set_rw(1);
+    sc.mutable_lidar_to_encoder()->set_rx(0);
+    sc.mutable_lidar_to_encoder()->set_ry(0);
+    sc.mutable_lidar_to_encoder()->set_rz(0);
+
+    WriteSensorCalibFile(FLAGS_output_dir + "/calibration.dat", sc);
+  }
   WriteImuFile(FLAGS_output_dir + "/imu.dat", imu_msg_list);
-  WriteEncoderFile(FLAGS_output_dir + "/encoder.dat", encoder_msg_list);
 
   spdlog::info("done.");
 }

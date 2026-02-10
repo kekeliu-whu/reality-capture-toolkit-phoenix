@@ -109,10 +109,12 @@ set(TEST_LIB ${PROJECT_NAME})
 add_test_library_srcs("${PROJECT_SRCS}")
 enable_automatic_test_and_benchmark()
 
-add_executable(convert_l2pro src/convert_l2pro.cc)
+add_executable(convert_l2pro src/tools/convert_l2pro.cc)
 target_link_libraries(convert_l2pro ${TEST_LIB})
-add_executable(convert_s20 src/convert_s20.cc)
+add_executable(convert_s20 src/tools/convert_s20.cc)
 target_link_libraries(convert_s20 ${TEST_LIB})
+add_executable(convert_spv src/tools/convert_spv.cc)
+target_link_libraries(convert_spv ${TEST_LIB})
 
 target_include_directories(
     ${PROJECT_NAME}

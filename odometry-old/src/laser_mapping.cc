@@ -37,6 +37,7 @@
 #include <geometry_msgs/Vector3.h>
 #include <gflags/gflags.h>
 #include <livox_ros_driver/CustomMsg.h>
+#include <migration/proto_io.h>
 #include <omp.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_cloud.h>
@@ -51,7 +52,6 @@
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <thread>
-#include <migration/proto_io.h>
 
 #include "imu_processing.h"
 #include "migration/inc_las_writer.h"
@@ -60,8 +60,11 @@
 #include "sophus/se3.hpp"
 #include "voxel_map_util.h"
 
-DEFINE_string(project_dirname, "D:\\ProjectX\\project-3d\\data\\sfm\\mixed\\indoor-office\\2026-01-14_15-29-47\\slam", "Path to the IMU data file");
-DEFINE_string(output_dir, "D:\\ProjectX\\project-3d\\data\\sfm\\mixed\\indoor-office\\2026-01-14_15-29-47\\slam\\output", "Directory to save output trajectory");
+DEFINE_string(project_dirname, "D:\\ProjectX\\project-3d\\data\\sfm\\mixed\\indoor-office\\2026-01-14_15-29-47\\slam",
+              "Path to the IMU data file");
+DEFINE_string(output_dir,
+              "D:\\ProjectX\\project-3d\\data\\sfm\\mixed\\indoor-office\\2026-01-14_15-29-47\\slam\\output",
+              "Directory to save output trajectory");
 DEFINE_bool(indoor, true, "Set to true for indoor environments");
 
 /*** Time Log Variables ***/
@@ -74,7 +77,6 @@ double filter_size_surf_min = 0;
 double lidar_end_time       = 0;
 int    feats_down_size = 0, NUM_MAX_ITERATIONS = 0;
 bool   lidar_pushed, flg_first_scan = true, flg_exit = false;
-double time_offset = 0.0;
 
 std::deque<double>                     time_buffer;
 std::deque<PointCloudXYZI::Ptr>        lidar_buffer;
@@ -198,209 +200,24 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in) {
   imu_buffer.push_back(msg);
 }
 
-#pragma pack(push, 1)
-struct Point {
-  double  timestamp;
-  float   x;
-  float   y;
-  float   z;
-  uint8_t intensity;
-  uint8_t channel_num;
-  uint8_t echo_num;
-  uint8_t rest;
-};
-#pragma pack(pop)
-
-#pragma pack(push, 1)
-struct ScanData {
-  uint64_t point_num;
-  Point   *points;
-};
-#pragma pack(pop)
-
-#pragma pack(push, 1)
-struct LidarScan {
-  uint64_t scan_data_len;
-  ScanData scan_data;
-};
-#pragma pack(pop)
-
-// LiDAR file reader class
-class LidarFileReader {
- private:
-  std::ifstream file_;
-  std::string   filename_;
-  double        last_frame_time_;
-  double        frame_interval_;
-  bool          is_initialized_;
-  bool          file_ended_;
-  uint64_t      total_points;
-  uint64_t      read_points;
-
- public:
-  LidarFileReader(const std::string &filename, double frame_interval = 0.1)
-      : filename_(filename),
-        last_frame_time_(0.0),
-        frame_interval_(frame_interval),
-        is_initialized_(false),
-        file_ended_(false),
-        total_points(0),
-        read_points(0) {
-    if (!boost::filesystem::exists(filename)) {
-      spdlog::critical("LiDAR file does not exist: {}", filename);
-      exit(1);
-    }
-
-    file_ = std::ifstream(filename.c_str(), std::ios::binary);
-    if (!file_) {
-      spdlog::critical("Failed to open LiDAR file: {}", filename);
-      exit(1);
-    }
-
-    // Skip header line
-    int64_t scan_data_len;
-    file_.read(reinterpret_cast<char *>(&scan_data_len), sizeof(uint64_t));
-    int64_t point_num;
-    file_.read(reinterpret_cast<char *>(&point_num), sizeof(uint64_t));
-    total_points = point_num;
-
-    spdlog::info("Opened LiDAR file: {}", filename);
-  }
-
-  // Read one frame of point cloud data
-  // Return value: true if successfully read, false if file ended
-  bool readOneScan(livox_ros_driver::CustomMsg::Ptr &scan_msg) {
-    if (file_ended_ || !file_) {
-      return false;
-    }
-
-    scan_msg.reset(new livox_ros_driver::CustomMsg());
-    scan_msg->header.frame_id = "lidar_link";
-    scan_msg->point_num       = 0;
-
-    while (true) {
-      Point pt;
-      if (!file_.read(reinterpret_cast<char *>(&pt), sizeof(Point))) {
-        file_ended_ = true;
-        return false;
-      }
-      read_points++;
-
-      if (flg_exit) {
-        file_ended_ = true;
-        return false;
-      }
-
-      // Initialize first frame
-      if (!is_initialized_) {
-        last_frame_time_       = pt.timestamp;
-        scan_msg->header.stamp = ros::Time(pt.timestamp);
-        scan_msg->timebase     = static_cast<uint64_t>(pt.timestamp * 1e9);
-        is_initialized_        = true;
-      }
-
-      // Check if current frame time range is exceeded
-      if (pt.timestamp - last_frame_time_ >= frame_interval_ && scan_msg->point_num > 0) {
-        // Current line is the first point of next frame, need to roll back and process in next call
-        // Since file pointer cannot be rolled back to line start, we need to save this point
-        // For simplified processing, add this point to next frame
-        // Update frame time to this point's time
-        last_frame_time_ = pt.timestamp;
-
-        spdlog::info("Read a scan with {} points.", scan_msg->point_num);
-        // Return current frame (excluding this new point)
-        return scan_msg->point_num > 0;
-      }
-
-      // If it's the start of a new frame (point count is 0 and initialized)
-      if (scan_msg->point_num == 0 && is_initialized_) {
-        scan_msg->header.stamp = ros::Time(last_frame_time_);
-        scan_msg->timebase     = static_cast<uint64_t>(last_frame_time_ * 1e9);
-      }
-
-      // Add point to current frame
-      livox_ros_driver::CustomPoint point;
-      point.x            = pt.x;
-      point.y            = pt.y;
-      point.z            = pt.z;
-      point.reflectivity = static_cast<uint8_t>(pt.intensity);
-      point.offset_time  = static_cast<uint32_t>((pt.timestamp - scan_msg->header.stamp.toSec()) * 1e9);
-      point.line         = pt.channel_num;
-      point.tag          = 0;
-
-      scan_msg->points.push_back(point);
-      scan_msg->point_num++;
-    }
-
-    // File ended, return last frame (if there is data)
-    return scan_msg->point_num > 0;
-  }
-
-  bool isFileEnded() const { return file_ended_; }
-
-  void setFrameInterval(double interval) { frame_interval_ = interval; }
-
-  double getProgress() const { return total_points > 0 ? (read_points / (double)total_points) * 100.0 : 0.0; }
-};
-
-// Load calibration parameters from JSON file
-void load_calibration_from_file(const std::string &filename) {
+void load_calibration_from_file(const std::string &filename, Eigen::Matrix3d &Lidar_R_wrt_IMU,
+                                Eigen::Vector3d &Lidar_T_wrt_IMU) {
   if (!boost::filesystem::exists(filename)) {
-    spdlog::warn("Calibration file does not exist: {}", filename);
+    spdlog::error("Calibration file does not exist: {}", filename);
     exit(1);
   }
 
-  std::ifstream cal_file(filename);
-  if (!cal_file) {
-    spdlog::warn("Failed to open calibration file: {}", filename);
-    exit(1);
-  }
+  proto::SensorCalib calib;
+  ReadSensorCalibFile(filename, calib);
 
-  try {
-    nlohmann::json root;
-    cal_file >> root;
+  // Lidar to IMU
+  Lidar_R_wrt_IMU = Eigen::Quaterniond(calib.lidar_to_encoder().rw(), calib.lidar_to_encoder().rx(),
+                                       calib.lidar_to_encoder().ry(), calib.lidar_to_encoder().rz())
+                        .toRotationMatrix();
+  Lidar_T_wrt_IMU << calib.lidar_to_encoder().tx(), calib.lidar_to_encoder().ty(), calib.lidar_to_encoder().tz();
 
-    // Extract Lidar_offset values (Lidar_T_wrt_IMU)
-    if (root.contains("Info") && root["Info"].contains("Lidar_Parameter") &&
-        root["Info"]["Lidar_Parameter"].contains("Lidar_to_IMU") &&
-        root["Info"]["Lidar_Parameter"]["Lidar_to_IMU"].contains("Lidar_offset")) {
-      const auto &offset = root["Info"]["Lidar_Parameter"]["Lidar_to_IMU"]["Lidar_offset"];
-      double      x      = offset["x"].get<double>();
-      double      y      = offset["y"].get<double>();
-      double      z      = offset["z"].get<double>();
-      Lidar_T_wrt_IMU            = Eigen::Vector3d(x, y, z);
-      spdlog::info("Loaded Lidar_T_wrt_IMU from calibration: [{:.6f}, {:.6f}, {:.6f}]", x, y, z);
-    }
-
-    // Extract Lidar_Rotations (quaternion) and convert to rotation matrix (Lidar_R_wrt_IMU)
-    if (root.contains("Info") && root["Info"].contains("Lidar_Parameter") &&
-        root["Info"]["Lidar_Parameter"].contains("Lidar_to_IMU") &&
-        root["Info"]["Lidar_Parameter"]["Lidar_to_IMU"].contains("Lidar_Rotations")) {
-      const auto &quat_json = root["Info"]["Lidar_Parameter"]["Lidar_to_IMU"]["Lidar_Rotations"];
-      double      qw        = quat_json["qw"].get<double>();
-      double      qx        = quat_json["qx"].get<double>();
-      double      qy        = quat_json["qy"].get<double>();
-      double      qz        = quat_json["qz"].get<double>();
-
-      time_offset = root["Info"]["Lidar_Parameter"]["Lidar_to_IMU"]["ImutimeCorrectMs"].get<double>();
-
-      Eigen::Quaterniond quat(qw, qx, qy, qz);
-      Lidar_R_wrt_IMU = quat.toRotationMatrix();
-
-      Lidar_T_wrt_IMU = -(Lidar_R_wrt_IMU.transpose() * Lidar_T_wrt_IMU);
-      Lidar_R_wrt_IMU.transposeInPlace();
-
-      spdlog::info(
-          "Loaded Lidar_R_wrt_IMU (from quaternion) from calibration: qw={:.6f}, qx={:.6f}, qy={:.6f}, qz={:.6f}, "
-          "time_offset={:.6f}",
-          qw, qx, qy, qz, time_offset);
-    }
-  } catch (const std::exception &e) {
-    time_offset = 0.0;
-    Lidar_R_wrt_IMU.setIdentity();
-    Lidar_T_wrt_IMU.setZero();
-    spdlog::warn("Error parsing calibration file: {}", e.what());
-  }
+  spdlog::info("Loaded calibration from: {}", filename);
+  spdlog::info("Lidar_T_wrt_IMU: {:.6f} {:.6f} {:.6f}", Lidar_T_wrt_IMU[0], Lidar_T_wrt_IMU[1], Lidar_T_wrt_IMU[2]);
 }
 
 // Read data from IMU file and fill into buffer
@@ -414,12 +231,12 @@ void load_imu_data_from_file(const std::string &filename) {
   ReadImuFile(filename, imu_msgs);
   for (const auto &imu_msg : imu_msgs.imu_msgs()) {
     sensor_msgs::Imu::Ptr imu_ros_msg(new sensor_msgs::Imu());
-    imu_ros_msg->header.stamp          = ros::Time(imu_msg.timestamp() ) + ros::Duration(time_offset * 0.001);
+    imu_ros_msg->header.stamp    = ros::Time(imu_msg.timestamp());
     imu_ros_msg->header.frame_id = "imu_link";
     // todo kk
-    imu_ros_msg->linear_acceleration.x = imu_msg.ax() * 9.8;
-    imu_ros_msg->linear_acceleration.y = imu_msg.ay() * 9.8;
-    imu_ros_msg->linear_acceleration.z = imu_msg.az() * 9.8;
+    imu_ros_msg->linear_acceleration.x = imu_msg.ax();
+    imu_ros_msg->linear_acceleration.y = imu_msg.ay();
+    imu_ros_msg->linear_acceleration.z = imu_msg.az();
     imu_ros_msg->angular_velocity.x    = imu_msg.gx();
     imu_ros_msg->angular_velocity.y    = imu_msg.gy();
     imu_ros_msg->angular_velocity.z    = imu_msg.gz();
@@ -520,11 +337,12 @@ void map_incremental() {
 // Global variables to store timing for current frame
 double g_match_time = 0, g_solve_time = 0;
 
-Eigen::Matrix<double, Eigen::Dynamic, 1> h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_data) {
+Eigen::Matrix<double, Eigen::Dynamic, 1> h_share_model(state_ikfom                           &s,
+                                                       esekfom::dyn_share_datastruct<double> &ekfom_data) {
   double match_start = omp_get_wtime();
 
   std::vector<pointWithCov> pv_list = ComputePvList(s);
-  std::vector<V3D>     non_match_list;
+  std::vector<V3D>          non_match_list;
   /** LiDAR match based on 3 sigma criterion **/
   BuildResidualListOMP(voxel_map, max_voxel_size, 3.0, max_layer, pv_list, ptpl_list, non_match_list);
 
@@ -614,7 +432,7 @@ int main(int argc, char **argv) {
   extrinsic_est_en     = false;
 
   // Load calibration parameters from JSON file
-  load_calibration_from_file(FLAGS_project_dirname + "/calibration.dat");
+  load_calibration_from_file(FLAGS_project_dirname + "/calibration.dat", Lidar_R_wrt_IMU, Lidar_T_wrt_IMU);
 
   ranging_cov = 0.05;
   angle_cov   = 0.2;
@@ -656,7 +474,7 @@ int main(int argc, char **argv) {
   kf.init_dyn_share(get_f, df_dx, df_dw, h_share_model, NUM_MAX_ITERATIONS, epsi);
 
   /*** traj record ***/
-  std::string        traj_dir = FLAGS_output_dir + "/traj.txt";
+  std::string   traj_dir = FLAGS_output_dir + "/traj.txt";
   std::ofstream fp_traj(traj_dir);
   if (!fp_traj) {
     spdlog::error("Failed to open trajectory file: {}", traj_dir);
@@ -713,7 +531,7 @@ int main(int argc, char **argv) {
         continue;
       }
 
-      double t0, t1, t2, t3, t5, svd_time;
+      double t0, t1, t3, t5, svd_time;
 
       g_match_time = 0;
       g_solve_time = 0;
