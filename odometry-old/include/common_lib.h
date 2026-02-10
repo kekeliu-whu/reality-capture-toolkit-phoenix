@@ -9,9 +9,6 @@
 #include <nav_msgs/Odometry.h>
 #include <deque>
 
-using namespace std;
-using namespace Eigen;
-
 #define G_m_s2 (9.81)         // Gravaty const in GuangDong/China
 #define DIM_STATE (18)        // Dimension of states (Let Dim(SO(3)) = 3)
 #define INIT_COV   (1)
@@ -25,16 +22,16 @@ using namespace Eigen;
 
 typedef pcl::PointXYZINormal PointType;
 typedef pcl::PointCloud<PointType> PointCloudXYZI;
-typedef vector<PointType, Eigen::aligned_allocator<PointType>>  PointVector;
-typedef Vector3d V3D;
-typedef Matrix3d M3D;
-typedef Vector3f V3F;
-typedef Matrix3f M3F;
+typedef std::vector<PointType, Eigen::aligned_allocator<PointType>>  PointVector;
+typedef Eigen::Vector3d V3D;
+typedef Eigen::Matrix3d M3D;
+typedef Eigen::Vector3f V3F;
+typedef Eigen::Matrix3f M3F;
 
-#define MD(a,b)  Matrix<double, (a), (b)>
-#define VD(a)    Matrix<double, (a), 1>
-#define MF(a,b)  Matrix<float, (a), (b)>
-#define VF(a)    Matrix<float, (a), 1>
+#define MD(a,b)  Eigen::Matrix<double, (a), (b)>
+#define VD(a)    Eigen::Matrix<double, (a), 1>
+#define MF(a,b)  Eigen::Matrix<float, (a), (b)>
+#define VF(a)    Eigen::Matrix<float, (a), 1>
 
 struct MeasureGroup     // Lidar data and imu dates for the curent process
 {
@@ -84,7 +81,7 @@ struct StatesGroup
         return *this;
 	};
 
-    StatesGroup operator+(const Matrix<double, DIM_STATE, 1> &state_add)
+    StatesGroup operator+(const Eigen::Matrix<double, DIM_STATE, 1> &state_add)
 	{
         StatesGroup a;
 		a.rot_end = this->rot_end * Exp(state_add(0,0), state_add(1,0), state_add(2,0));
@@ -97,7 +94,7 @@ struct StatesGroup
 		return a;
 	};
 
-    StatesGroup& operator+=(const Matrix<double, DIM_STATE, 1> &state_add)
+    StatesGroup& operator+=(const Eigen::Matrix<double, DIM_STATE, 1> &state_add)
 	{
         this->rot_end = this->rot_end * Exp(state_add(0,0), state_add(1,0), state_add(2,0));
 		this->pos_end += state_add.block<3,1>(3,0);
@@ -108,9 +105,9 @@ struct StatesGroup
 		return *this;
 	};
 
-    Matrix<double, DIM_STATE, 1> operator-(const StatesGroup& b)
+    Eigen::Matrix<double, DIM_STATE, 1> operator-(const StatesGroup& b)
 	{
-        Matrix<double, DIM_STATE, 1> a;
+        Eigen::Matrix<double, DIM_STATE, 1> a;
         M3D rotd(b.rot_end.transpose() * this->rot_end);
         a.block<3,1>(0,0)  = Log(rotd);
         a.block<3,1>(3,0)  = this->pos_end - b.pos_end;
@@ -134,12 +131,12 @@ struct StatesGroup
     V3D bias_g;       // gyroscope bias
     V3D bias_a;       // accelerator bias
     V3D gravity;      // the estimated gravity acceleration
-    Matrix<double, DIM_STATE, DIM_STATE>  cov;     // states covariance
+    Eigen::Matrix<double, DIM_STATE, DIM_STATE>  cov;     // states covariance
 };
 
 template<typename T>
-auto set_pose6d(const double t, const Matrix<T, 3, 1> &a, const Matrix<T, 3, 1> &g, \
-                const Matrix<T, 3, 1> &v, const Matrix<T, 3, 1> &p, const Matrix<T, 3, 3> &R)
+auto set_pose6d(const double t, const Eigen::Matrix<T, 3, 1> &a, const Eigen::Matrix<T, 3, 1> &g, \
+                const Eigen::Matrix<T, 3, 1> &v, const Eigen::Matrix<T, 3, 1> &p, const Eigen::Matrix<T, 3, 3> &R)
 {
     Pose6D rot_kp;
     rot_kp.offset_time = t;
@@ -151,7 +148,7 @@ auto set_pose6d(const double t, const Matrix<T, 3, 1> &a, const Matrix<T, 3, 1> 
         rot_kp.pos[i] = p(i);
     }
     rot_kp.rot = R;
-    return move(rot_kp);
+    return std::move(rot_kp);
 }
 
 /* comment
@@ -162,10 +159,10 @@ where A0_i = [x_i, y_i, z_i], x0 = [A/D, B/D, C/D]^T, b0 = [-1, ..., -1]^T
 normvec:  normalized x0
 */
 template<typename T>
-bool esti_normvector(Matrix<T, 3, 1> &normvec, const PointVector &point, const T &threshold, const int &point_num)
+bool esti_normvector(Eigen::Matrix<T, 3, 1> &normvec, const PointVector &point, const T &threshold, const int &point_num)
 {
-    MatrixXf A(point_num, 3);
-    MatrixXf b(point_num, 1);
+    Eigen::MatrixXf A(point_num, 3);
+    Eigen::MatrixXf b(point_num, 1);
     b.setOnes();
     b *= -1.0f;
 
@@ -195,10 +192,10 @@ inline float calc_dist(PointType p1, PointType p2){
 }
 
 template<typename T>
-bool esti_plane(Matrix<T, 4, 1> &pca_result, const PointVector &point, const T &threshold)
+bool esti_plane(Eigen::Matrix<T, 4, 1> &pca_result, const PointVector &point, const T &threshold)
 {
-    Matrix<T, NUM_MATCH_POINTS, 3> A;
-    Matrix<T, NUM_MATCH_POINTS, 1> b;
+    Eigen::Matrix<T, NUM_MATCH_POINTS, 3> A;
+    Eigen::Matrix<T, NUM_MATCH_POINTS, 1> b;
     A.setZero();
     b.setOnes();
     b *= -1.0f; // BUG: If the plane passes through the origin, the normvec solved below may be extremely large, which may cause some numerical computation problems. A better way is to first calculate center and covariance, then calculate the plane normal vector through covariance

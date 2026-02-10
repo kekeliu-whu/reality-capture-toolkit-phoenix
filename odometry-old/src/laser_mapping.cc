@@ -78,9 +78,9 @@ double time_offset = 0.0;
 
 Eigen::Vector3d                   extrinT;
 Eigen::Matrix3d                   extrinR;
-deque<double>                     time_buffer;
-deque<PointCloudXYZI::Ptr>        lidar_buffer;
-deque<sensor_msgs::Imu::ConstPtr> imu_buffer;
+std::deque<double>                     time_buffer;
+std::deque<PointCloudXYZI::Ptr>        lidar_buffer;
+std::deque<sensor_msgs::Imu::ConstPtr> imu_buffer;
 
 PointCloudXYZI::Ptr featsFromMap(new PointCloudXYZI());
 PointCloudXYZI::Ptr feats_undistort(new PointCloudXYZI());
@@ -97,8 +97,8 @@ MeasureGroup                                 Measures;
 esekfom::esekf<state_ikfom, 12, input_ikfom> kf;
 state_ikfom                                  g_state_point;
 
-shared_ptr<Preprocess> p_pre(new Preprocess());
-shared_ptr<ImuProcess> p_imu(new ImuProcess());
+std::shared_ptr<Preprocess> p_pre(new Preprocess());
+std::shared_ptr<ImuProcess> p_imu(new ImuProcess());
 
 /////////////////// voxel map config begin ///////////////////
 double                                   ranging_cov     = 0.05;
@@ -523,10 +523,10 @@ void map_incremental() {
 // Global variables to store timing for current frame
 double g_match_time = 0, g_solve_time = 0;
 
-Matrix<double, Eigen::Dynamic, 1> h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_data) {
+Eigen::Matrix<double, Eigen::Dynamic, 1> h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_data) {
   double match_start = omp_get_wtime();
 
-  vector<pointWithCov> pv_list = ComputePvList(s);
+  std::vector<pointWithCov> pv_list = ComputePvList(s);
   std::vector<V3D>     non_match_list;
   /** LiDAR match based on 3 sigma criterion **/
   BuildResidualListOMP(voxel_map, max_voxel_size, 3.0, max_layer, pv_list, ptpl_list, non_match_list);
@@ -543,7 +543,7 @@ Matrix<double, Eigen::Dynamic, 1> h_share_model(state_ikfom &s, esekfom::dyn_sha
   double solve_start_ = omp_get_wtime();
 
   /*** Computation of Measuremnt Jacobian matrix H and measurents vector ***/
-  ekfom_data.h_x = MatrixXd::Zero(effct_feat_num, 12);  // 23
+  ekfom_data.h_x = Eigen::MatrixXd::Zero(effct_feat_num, 12);  // 23
   ekfom_data.h.resize(effct_feat_num);
   ekfom_data.R.resize(effct_feat_num, 1);
 
@@ -627,14 +627,14 @@ int main(int argc, char **argv) {
     max_points_size      = 200;
     max_voxel_size       = 0.5;
     max_layer            = 2;
-    layer_size           = vector<int>({5, 5, 5, 5, 5});
+    layer_size           = std::vector<int>({5, 5, 5, 5, 5});
     filter_size_surf_min = 0.25;
   } else {
     spdlog::info("Outdoor mode enabled.");
     max_points_size      = 200;
     max_voxel_size       = 1.0;
     max_layer            = 2;
-    layer_size           = vector<int>({5, 5, 5, 5, 5});
+    layer_size           = std::vector<int>({5, 5, 5, 5, 5});
     filter_size_surf_min = 0.5;
   }
 
@@ -659,11 +659,11 @@ int main(int argc, char **argv) {
   p_imu->set_acc_bias_cov(V3D(b_acc_cov, b_acc_cov, b_acc_cov));
 
   double epsi[23] = {0.001};
-  fill(epsi, epsi + 23, 0.001);
+  std::fill(epsi, epsi + 23, 0.001);
   kf.init_dyn_share(get_f, df_dx, df_dw, h_share_model, NUM_MAX_ITERATIONS, epsi);
 
   /*** traj record ***/
-  string        traj_dir = FLAGS_output_dir + "/traj.txt";
+  std::string        traj_dir = FLAGS_output_dir + "/traj.txt";
   std::ofstream fp_traj(traj_dir);
   if (!fp_traj) {
     spdlog::error("Failed to open trajectory file: {}", traj_dir);

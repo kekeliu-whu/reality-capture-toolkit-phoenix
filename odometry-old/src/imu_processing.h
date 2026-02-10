@@ -59,7 +59,7 @@ class ImuProcess {
   V3D            cov_bias_gyr;
   V3D            cov_bias_acc;
   double         first_lidar_time;
-  vector<Pose6D> IMUpose;
+  std::vector<Pose6D> IMUpose;
 
  private:
   void IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, int &N);
@@ -67,8 +67,8 @@ class ImuProcess {
                     PointCloudXYZI &pcl_in_out);
 
   sensor_msgs::ImuConstPtr        last_imu_;
-  deque<sensor_msgs::ImuConstPtr> v_imu_;
-  vector<M3D>                     v_rot_pcl_;
+  std::deque<sensor_msgs::ImuConstPtr> v_imu_;
+  std::vector<M3D>                     v_rot_pcl_;
   M3D                             Lidar_R_wrt_IMU;
   V3D                             Lidar_T_wrt_IMU;
   V3D                             mean_acc;

@@ -6,8 +6,6 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <migration/proto_io.h>
 
-using namespace std;
-
 typedef pcl::PointXYZINormal       PointType;
 typedef pcl::PointCloud<PointType> PointCloudXYZI;
 

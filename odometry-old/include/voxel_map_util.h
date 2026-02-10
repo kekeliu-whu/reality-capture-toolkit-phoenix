@@ -145,7 +145,7 @@ void BuildSingleResidual(const pointWithCov &pv, const OctoTree *current_octo,
 void GetUpdatePlane(const OctoTree *current_octo, const int pub_max_voxel_layer,
                     std::vector<Plane> &plane_list);
 
-void BuildResidualListOMP(const unordered_map<VoxelLoc, OctoTree *> &voxel_map,
+void BuildResidualListOMP(const std::unordered_map<VoxelLoc, OctoTree *> &voxel_map,
                           const double voxel_size, const double sigma_num,
                           const int max_layer,
                           const std::vector<pointWithCov> &pv_list,
@@ -153,7 +153,7 @@ void BuildResidualListOMP(const unordered_map<VoxelLoc, OctoTree *> &voxel_map,
                           std::vector<Eigen::Vector3d> &non_match);
 
 void BuildResidualListNormal(
-    const unordered_map<VoxelLoc, OctoTree *> &voxel_map,
+    const std::unordered_map<VoxelLoc, OctoTree *> &voxel_map,
     const double voxel_size, const double sigma_num, const int max_layer,
     const std::vector<pointWithCovMeta> &pv_list, std::vector<ptpl> &ptpl_list,
     std::vector<Eigen::Vector3d> &non_match);

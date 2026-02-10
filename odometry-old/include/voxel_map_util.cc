@@ -593,7 +593,7 @@ void BuildSingleResidual(const pointWithCov &pv, const OctoTree *current_octo,
 //   }
 // }
 
-void BuildResidualListOMP(const unordered_map<VoxelLoc, OctoTree *> &voxel_map,
+void BuildResidualListOMP(const std::unordered_map<VoxelLoc, OctoTree *> &voxel_map,
                           const double voxel_size, const double sigma_num,
                           const int max_layer,
                           const std::vector<pointWithCov> &pv_list,
@@ -688,7 +688,7 @@ void DownSamplingVoxel(const pcl::PointCloud<PointType> &cloud_in,
     return;
   }
 
-  unordered_map<VoxelLoc, M_POINT> feat_map;
+  std::unordered_map<VoxelLoc, M_POINT> feat_map;
 
   for (uint32_t i = 0; i < cloud_in.size(); i++) {
     Eigen::Vector3d p_c = cloud_in[i].getVector3fMap().cast<double>();
@@ -731,7 +731,7 @@ void DownSamplingVoxelRandom(const pcl::PointCloud<PointType> &cloud_in,
     return;
   }
 
-  unordered_map<VoxelLoc, M_POINT> feat_map;
+  std::unordered_map<VoxelLoc, M_POINT> feat_map;
 
   for (uint32_t i = 0; i < cloud_in.size(); i++) {
     Eigen::Vector3d p_c = cloud_in[i].getVector3fMap().cast<double>();
