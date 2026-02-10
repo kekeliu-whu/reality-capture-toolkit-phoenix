@@ -76,8 +76,6 @@ int    feats_down_size = 0, NUM_MAX_ITERATIONS = 0;
 bool   lidar_pushed, flg_first_scan = true, flg_exit = false;
 double time_offset = 0.0;
 
-Eigen::Vector3d                   extrinT;
-Eigen::Matrix3d                   extrinR;
 std::deque<double>                     time_buffer;
 std::deque<PointCloudXYZI::Ptr>        lidar_buffer;
 std::deque<sensor_msgs::Imu::ConstPtr> imu_buffer;
@@ -86,7 +84,6 @@ PointCloudXYZI::Ptr featsFromMap(new PointCloudXYZI());
 PointCloudXYZI::Ptr feats_undistort(new PointCloudXYZI());
 PointCloudXYZI::Ptr feats_down_body(new PointCloudXYZI());
 PointCloudXYZI::Ptr feats_down_world(new PointCloudXYZI());
-PointCloudXYZI::Ptr _featsArray;
 
 V3D position_last(V3D::Zero());
 V3D Lidar_T_wrt_IMU(V3D::Zero());
@@ -363,7 +360,7 @@ void load_calibration_from_file(const std::string &filename) {
     nlohmann::json root;
     cal_file >> root;
 
-    // Extract Lidar_offset values (extrinT)
+    // Extract Lidar_offset values (Lidar_T_wrt_IMU)
     if (root.contains("Info") && root["Info"].contains("Lidar_Parameter") &&
         root["Info"]["Lidar_Parameter"].contains("Lidar_to_IMU") &&
         root["Info"]["Lidar_Parameter"]["Lidar_to_IMU"].contains("Lidar_offset")) {
@@ -371,11 +368,11 @@ void load_calibration_from_file(const std::string &filename) {
       double      x      = offset["x"].get<double>();
       double      y      = offset["y"].get<double>();
       double      z      = offset["z"].get<double>();
-      extrinT            = Eigen::Vector3d(x, y, z);
-      spdlog::info("Loaded extrinT from calibration: [{:.6f}, {:.6f}, {:.6f}]", x, y, z);
+      Lidar_T_wrt_IMU            = Eigen::Vector3d(x, y, z);
+      spdlog::info("Loaded Lidar_T_wrt_IMU from calibration: [{:.6f}, {:.6f}, {:.6f}]", x, y, z);
     }
 
-    // Extract Lidar_Rotations (quaternion) and convert to rotation matrix (extrinR)
+    // Extract Lidar_Rotations (quaternion) and convert to rotation matrix (Lidar_R_wrt_IMU)
     if (root.contains("Info") && root["Info"].contains("Lidar_Parameter") &&
         root["Info"]["Lidar_Parameter"].contains("Lidar_to_IMU") &&
         root["Info"]["Lidar_Parameter"]["Lidar_to_IMU"].contains("Lidar_Rotations")) {
@@ -388,20 +385,20 @@ void load_calibration_from_file(const std::string &filename) {
       time_offset = root["Info"]["Lidar_Parameter"]["Lidar_to_IMU"]["ImutimeCorrectMs"].get<double>();
 
       Eigen::Quaterniond quat(qw, qx, qy, qz);
-      extrinR = quat.toRotationMatrix();
+      Lidar_R_wrt_IMU = quat.toRotationMatrix();
 
-      extrinT = -(extrinR.transpose() * extrinT);
-      extrinR.transposeInPlace();
+      Lidar_T_wrt_IMU = -(Lidar_R_wrt_IMU.transpose() * Lidar_T_wrt_IMU);
+      Lidar_R_wrt_IMU.transposeInPlace();
 
       spdlog::info(
-          "Loaded extrinR (from quaternion) from calibration: qw={:.6f}, qx={:.6f}, qy={:.6f}, qz={:.6f}, "
+          "Loaded Lidar_R_wrt_IMU (from quaternion) from calibration: qw={:.6f}, qx={:.6f}, qy={:.6f}, qz={:.6f}, "
           "time_offset={:.6f}",
           qw, qx, qy, qz, time_offset);
     }
   } catch (const std::exception &e) {
     time_offset = 0.0;
-    extrinR.setIdentity();
-    extrinT.setZero();
+    Lidar_R_wrt_IMU.setIdentity();
+    Lidar_T_wrt_IMU.setZero();
     spdlog::warn("Error parsing calibration file: {}", e.what());
   }
 }
@@ -648,10 +645,6 @@ int main(int argc, char **argv) {
   int    effect_feat_num = 0, frame_num = 0;
   double aver_time_consu = 0, aver_time_icp = 0, aver_time_match = 0, aver_time_solve = 0, aver_time_const_H_time = 0;
 
-  _featsArray.reset(new PointCloudXYZI());
-
-  Lidar_T_wrt_IMU = extrinT;
-  Lidar_R_wrt_IMU = extrinR;
   p_imu->set_extrinsic(Lidar_T_wrt_IMU, Lidar_R_wrt_IMU);
   p_imu->set_gyr_cov(V3D(gyr_cov, gyr_cov, gyr_cov));
   p_imu->set_acc_cov(V3D(acc_cov, acc_cov, acc_cov));
