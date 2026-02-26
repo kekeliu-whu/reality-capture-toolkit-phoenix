@@ -2,7 +2,8 @@ syntax = "proto3";
 
 package proto;
 
-message Rigid3d {
+message SensorExtrinsic {
+  double time_offset = 1;
   double tx = 2;
   double ty = 3;
   double tz = 4;
@@ -10,6 +11,19 @@ message Rigid3d {
   double ry = 6;
   double rz = 7;
   double rw = 8;
+}
+
+message CameraParam {
+  SensorExtrinsic extrinsic = 1;
+  double fx = 2;
+  double fy = 3;
+  double cx = 4;
+  double cy = 5;
+  double k1 = 6;
+  double k2 = 7;
+  double k3 = 8;
+  double k4 = 9;
+  string name = 11;
 }
 
 message Matrix3 {
@@ -20,7 +34,7 @@ message Vector3 {
   repeated double data = 1; // 存储3个元素的向量
 }
 
-message ImuInstrinsicTpmIcra2014 {
+message ImuIntrinsicTpmIcra2014 {
   Matrix3 Ta = 1;
   Matrix3 Ka = 2;
   Vector3 Ba = 3;
@@ -30,23 +44,24 @@ message ImuInstrinsicTpmIcra2014 {
   Vector3 Bg = 6;
 }
 
-message ImuInstrinsic {
-  oneof imu_model { ImuInstrinsicTpmIcra2014 tpm = 1; }
+message ImuIntrinsic {
+  oneof imu_model { ImuIntrinsicTpmIcra2014 tpm = 1; }
 }
 
-message LidarInstrinsicSimple {
+message LidarIntrinsicSimple {
   double e = 1;
   repeated double s = 2;
 }
 
-message LidarInstrinsic {
-  oneof lidar_model { LidarInstrinsicSimple simple = 1; }
+message LidarIntrinsic {
+  oneof lidar_model { LidarIntrinsicSimple simple = 1; }
 }
 
 message SensorCalib {
   bool has_encoder = 1;
-  Rigid3d lidar_to_encoder = 2;
-  Rigid3d encoder_to_imu = 3;
-  LidarInstrinsic lidar_instrinsic = 4;
-  ImuInstrinsic imu_instrinsic = 5;
+  SensorExtrinsic lidar_to_encoder = 2;
+  SensorExtrinsic encoder_to_imu = 3;
+  LidarIntrinsic lidar_intrinsic = 4;
+  ImuIntrinsic imu_intrinsic = 5;
+  repeated CameraParam camera_param = 6;
 }
