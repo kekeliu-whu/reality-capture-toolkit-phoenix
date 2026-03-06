@@ -8,13 +8,15 @@
 #include <yaml-cpp/yaml.h>
 #include <Eigen/Eigen>
 
+#include <filesystem>
 #include "migration/proto_io.h"
 #include "proto/calib.pb.h"
 #include "proto/sensors.pb.h"
 
-DEFINE_string(bag_filename, "\\\\wsl.localhost\\Ubuntu-24.04\\home\\rick\\iKalibr\\2026-02-06_11-34-29\\all_2026-02-06-11-34-35.bag",
+DEFINE_string(bag_filename, "\\\\wsl.localhost\\Ubuntu-24.04\\home\\rick\\iKalibr\\src\\iKalibr\\2026-02-06_11-34-29-s20\\all_2026-02-06-11-34-35.bag",
               "Point cloud filename");
-DEFINE_string(calib_filename, "\\\\wsl.localhost\\Ubuntu-24.04\\home\\rick\\iKalibr\\2026-02-06_11-34-29\\ikalibr_param.yaml",
+DEFINE_string(calib_filename,
+              "\\\\wsl.localhost\\Ubuntu-24.04\\home\\rick\\iKalibr\\src\\iKalibr\\2026-02-06_11-34-29-s20\\ikalibr_output\\ikalibr_param.yaml",
               "Calibration filename");
 DEFINE_string(output_dir, "D:\\slam", "Output dir to save converted data");
 
@@ -54,6 +56,11 @@ int main(int argc, char** argv) {
   rosbag::Bag bag;
   bag.open(FLAGS_bag_filename, rosbag::bagmode::Read);
 
+  if (!std::filesystem::exists(FLAGS_output_dir)) {
+    spdlog::info("Output directory does not exist. Creating: {}", FLAGS_output_dir);
+    std::filesystem::create_directories(FLAGS_output_dir);
+  }
+
   proto::SensorCalib sc;
   proto::ImuMsgList imu_msg_list;
   SequentialLidarFileWriter<proto::LidarMsg> lidar_writer;
@@ -71,6 +78,10 @@ int main(int argc, char** argv) {
       new_msg->set_ax(msg->linear_acceleration.x * 9.8);
       new_msg->set_ay(msg->linear_acceleration.y * 9.8);
       new_msg->set_az(msg->linear_acceleration.z * 9.8);
+
+      // spdlog::info("Processed IMU message at time: {:.6f} acc: {:.3f}, {:.3f}, {:.3f} gyro: {:.3f}, {:.3f}, {:.3f}", msg->header.stamp.toSec(),
+      //              msg->linear_acceleration.x * 9.8, msg->linear_acceleration.y * 9.8, msg->linear_acceleration.z * 9.8, msg->angular_velocity.x,
+      //              msg->angular_velocity.y, msg->angular_velocity.z);
     } else if (m.getTopic() == "/livox/lidar") {
       auto msg = m.instantiate<livox_ros_driver::CustomMsg>();
 

@@ -60,11 +60,8 @@
 #include "sophus/se3.hpp"
 #include "voxel_map_util.h"
 
-DEFINE_string(project_dirname, "D:\\ProjectX\\project-3d\\data\\sfm\\mixed\\indoor-office\\2026-01-14_15-29-47\\slam",
-              "Path to the IMU data file");
-DEFINE_string(output_dir,
-              "D:\\ProjectX\\project-3d\\data\\sfm\\mixed\\indoor-office\\2026-01-14_15-29-47\\slam\\output",
-              "Directory to save output trajectory");
+DEFINE_string(project_dirname, "D:\\slam", "Path to the IMU data file");
+DEFINE_string(output_dir, "D:\\slam\\output", "Directory to save output trajectory");
 DEFINE_bool(indoor, true, "Set to true for indoor environments");
 
 /*** Time Log Variables ***/
@@ -87,9 +84,10 @@ PointCloudXYZI::Ptr feats_undistort(new PointCloudXYZI());
 PointCloudXYZI::Ptr feats_down_body(new PointCloudXYZI());
 PointCloudXYZI::Ptr feats_down_world(new PointCloudXYZI());
 
-V3D position_last(V3D::Zero());
-V3D Lidar_T_wrt_IMU(V3D::Zero());
-M3D Lidar_R_wrt_IMU(M3D::Identity());
+V3D    position_last(V3D::Zero());
+V3D    Lidar_T_wrt_IMU(V3D::Zero());
+M3D    Lidar_R_wrt_IMU(M3D::Identity());
+double g_lidar_to_imu_offset = 0.0;  // time offset between lidar and imu
 
 /*** EKF inputs and output ***/
 MeasureGroup                                 Measures;
@@ -166,7 +164,7 @@ void PointBodyToWorld(const Eigen::Map<Eigen::Matrix<T, 3, 1>> &pi, Eigen::Map<E
 
 void livox_pcl_cbk(const std::shared_ptr<proto::LidarMsg> &msg) {
   if (msg->points().size() == 0) {
-    spdlog::critical("Empty LiDAR frame at time: {:.6f}");
+    spdlog::critical("Empty LiDAR frame at time: {:.6f}", msg->points().at(0).timestamp());
     return;
   }
 
@@ -186,13 +184,14 @@ void livox_pcl_cbk(const std::shared_ptr<proto::LidarMsg> &msg) {
 void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in) {
   sensor_msgs::Imu::Ptr msg(new sensor_msgs::Imu(*msg_in));
 
-  msg->header.stamp = ros::Time().fromSec(msg_in->header.stamp.toSec());
+  msg->header.stamp =
+      ros::Time().fromSec(msg_in->header.stamp.toSec() + g_lidar_to_imu_offset);
 
   double timestamp = msg->header.stamp.toSec();
 
   if (timestamp < last_timestamp_imu) {
-    spdlog::warn("imu loop back, clear buffer");
-    imu_buffer.clear();
+    spdlog::warn("imu loop back, skip data at time: {:.6f}", timestamp);
+    return;
   }
 
   last_timestamp_imu = timestamp;
@@ -201,7 +200,7 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in) {
 }
 
 void load_calibration_from_file(const std::string &filename, Eigen::Matrix3d &Lidar_R_wrt_IMU,
-                                Eigen::Vector3d &Lidar_T_wrt_IMU) {
+                                Eigen::Vector3d &Lidar_T_wrt_IMU, double &lidar_to_imu_offset) {
   if (!boost::filesystem::exists(filename)) {
     spdlog::error("Calibration file does not exist: {}", filename);
     exit(1);
@@ -215,9 +214,13 @@ void load_calibration_from_file(const std::string &filename, Eigen::Matrix3d &Li
                                        calib.lidar_to_encoder().ry(), calib.lidar_to_encoder().rz())
                         .toRotationMatrix();
   Lidar_T_wrt_IMU << calib.lidar_to_encoder().tx(), calib.lidar_to_encoder().ty(), calib.lidar_to_encoder().tz();
+  lidar_to_imu_offset = calib.lidar_to_encoder().time_offset();
 
   spdlog::info("Loaded calibration from: {}", filename);
   spdlog::info("Lidar_T_wrt_IMU: {:.6f} {:.6f} {:.6f}", Lidar_T_wrt_IMU[0], Lidar_T_wrt_IMU[1], Lidar_T_wrt_IMU[2]);
+  spdlog::info("Lidar_R_wrt_IMU: {:.6f} {:.6f} {:.6f} {:.6f}", calib.lidar_to_encoder().rx(),
+               calib.lidar_to_encoder().ry(), calib.lidar_to_encoder().rz(), calib.lidar_to_encoder().rw());
+  spdlog::info("Lidar to IMU time offset: {:.6f}", lidar_to_imu_offset);
 }
 
 // Read data from IMU file and fill into buffer
@@ -432,7 +435,8 @@ int main(int argc, char **argv) {
   extrinsic_est_en     = false;
 
   // Load calibration parameters from JSON file
-  load_calibration_from_file(FLAGS_project_dirname + "/calibration.dat", Lidar_R_wrt_IMU, Lidar_T_wrt_IMU);
+  load_calibration_from_file(FLAGS_project_dirname + "/calibration.dat", Lidar_R_wrt_IMU, Lidar_T_wrt_IMU,
+                             g_lidar_to_imu_offset);
 
   ranging_cov = 0.05;
   angle_cov   = 0.2;
