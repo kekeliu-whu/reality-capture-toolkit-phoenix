@@ -45,7 +45,7 @@ parser.add_argument(
 parser.add_argument(
     "--output-dir",
     type=str,
-    default="D:/slam/cameras/",
+    default="D:/slam/camera/",
     help="输出目录",
 )
 

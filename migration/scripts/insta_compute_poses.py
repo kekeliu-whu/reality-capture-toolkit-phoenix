@@ -280,7 +280,7 @@ def process_poses(poses_file, calib_file, image_folder, output_file, image_list=
                 img_relative_path = img_path.relative_to(image_folder)
 
                 # Skip if already processed (avoid duplicates)
-                path_str = str(img_relative_path)
+                path_str = str(img_relative_path.as_posix())
                 if path_str in processed_files:
                     continue
                 processed_files.add(path_str)
@@ -346,14 +346,14 @@ def main():
     parser.add_argument(
         "--image-folder",
         "-i",
-        default=r"D:/slam/cameras",
-        help="Path to parent folder containing cam0, cam1, ... subdirectories (default: D:\\slam\\cameras)",
+        default=r"D:/slam/camera",
+        help="Path to parent folder containing cam0, cam1, ... subdirectories (default: D:\\slam\\camera)",
     )
     parser.add_argument(
         "--output",
         "-o",
-        default=r"D:/slam/cameras/ImgPoses.txt",
-        help="Output file path (default: D:\\slam\\cameras\\ImgPoses.txt)",
+        default=r"D:/slam/camera/ImgPose.txt",
+        help="Output file path (default: D:\\slam\\camera\\ImgPose.txt)",
     )
     parser.add_argument(
         "--image-list",
@@ -377,4 +377,4 @@ def main():
 
 
 if __name__ == "__main__":
-    exit(main())
+    main()

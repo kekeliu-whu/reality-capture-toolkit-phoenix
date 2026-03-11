@@ -25,7 +25,7 @@ SAVE_PLOTS = True   # 是否保存图形到文件（coarse_alignment_correlation
 
 # ========== 文件路径（以下通过命令行参数传入，此处为默认值）==========
 DEFAULT_IMU_DEVICE_FILE = R"D:\slam\imu.dat"
-DEFAULT_IMU_INSTA_FILE = R"D:/slam/cameras/insv.dat"
+DEFAULT_IMU_INSTA_FILE = R"D:/slam/camera/insv.dat"
 
 # ========== B-spline 插值参数 ==========
 SPLINE_KNOTS = 3              # B-spline 的阶数（次数）
