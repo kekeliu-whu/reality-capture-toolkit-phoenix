@@ -137,7 +137,7 @@ if (-not $images_path) {
   --images_path "$images_path" `
   --sfm_result_path "$dataDir\xsfm\sparse\0" `
   --point_cloud_filename "$dataDir\map.las" `
-  --output_path "$dataDir\xsfm\colorized"
+  --output_path "$dataDir"
 
 if ($LASTEXITCODE -ne 0) {
   Write-Host "Error in Step 5" -ForegroundColor Red
