@@ -112,7 +112,8 @@ $camera_dir = Join-Path $outputdir "camera"
 
 & $insta_extraction_exe `
     --input-video-filename $insvpath `
-    --output-dir $camera_dir
+    --output-dir $camera_dir `
+    --no-export-frames
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Data extraction failed" -ForegroundColor Red
@@ -121,9 +122,66 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "✓ Camera data extracted to: $camera_dir" -ForegroundColor Green
 
-# Step 3: Run lasermapping if not skipped
+
+# Step 3: Run time synchronization and pose computation tools
+Write-Host "`n=== Step 3: Synchronizing IMU data ===" -ForegroundColor Cyan
+
+# Check if time sync tool exists
+if (!(Test-Path $insta_sync_exe)) {
+    Write-Host "ERROR: insta_time_sync.exe not found at $insta_sync_exe" -ForegroundColor Red
+    exit 1
+}
+
+$imu_insv_dat = Join-Path $camera_dir "insv.dat"
+$device_imu_dat = Join-Path $outputdir "imu.dat"
+
+# Check if required input files exist
+if (!(Test-Path $device_imu_dat)) {
+    Write-Host "ERROR: Device IMU file not found: $device_imu_dat" -ForegroundColor Red
+    exit 1
+}
+
+if (!(Test-Path $imu_insv_dat)) {
+    Write-Host "ERROR: Insta IMU file not found: $imu_insv_dat" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "Running IMU time synchronization..." -ForegroundColor Yellow
+
+# Capture output to extract time delay
+$output = & $insta_sync_exe `
+    --device $device_imu_dat `
+    --insta $imu_insv_dat 2>&1
+
+# Convert output to string for regex matching
+$output_text = $output -join "`n"
+Write-Host $output_text
+
+# Extract time delay from output: "final time delay (s): NUMBER"
+if ($output_text -match 'final time delay \(s\):\s*([\d\-\.]+)') {
+    $time_offset = [double]$matches[1]
+    Write-Host "✓ Extracted time delay: $time_offset seconds" -ForegroundColor Green
+} else {
+    Write-Host "ERROR: Could not extract time delay from insta_time_sync output" -ForegroundColor Red
+    Write-Host "Expected to find: 'final time delay (s): <number>'" -ForegroundColor Red
+    exit 1
+}
+
+# Step 4: Extract images with timestamp offsets (using extracted time delay)
+& $insta_extraction_exe `
+    --input-video-filename $insvpath `
+    --output-dir $camera_dir `
+    --time-offset $time_offset `
+    --export-frames
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: Data extraction failed" -ForegroundColor Red
+    exit 1
+}
+
+# Step 5: Run lasermapping if not skipped
 if (!$skip_lasermapping) {
-    Write-Host "`n=== Step 3: Computing trajectory from lidar data ===" -ForegroundColor Yellow
+    Write-Host "`n=== Step 5: Computing trajectory from lidar data ===" -ForegroundColor Yellow
     Write-Host "⚠ This step requires pre-processed lidar data from S20 conversion" -ForegroundColor Yellow
     Write-Host "  Note: slam_core_main needs pre-processed .dat files in $outputdir" -ForegroundColor Yellow
     Write-Host "  - calibration.dat" -ForegroundColor Gray
@@ -157,35 +215,8 @@ if (!$skip_lasermapping) {
     }
 }
 
-# Step 4: Synchronize IMU data
-Write-Host "`n=== Step 4: Synchronizing IMU data ===" -ForegroundColor Cyan
-
-# Check if time sync is needed
-if (Test-Path $insta_sync_exe) {
-    Write-Host "Attempting IMU time synchronization..." -ForegroundColor Yellow
-    
-    $imu_insv_dat = Join-Path $camera_dir "insv.dat"
-    $device_imu_dat = Join-Path $outputdir "imu.dat"
-    
-    if (Test-Path $device_imu_dat) {
-        & $insta_sync_exe `
-            --device $device_imu_dat `
-            --insta $imu_insv_dat
-        
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "⚠ IMU sync failed, continuing without sync" -ForegroundColor Yellow
-        } else {
-            Write-Host "✓ IMU time synchronized" -ForegroundColor Green
-        }
-    } else {
-        Write-Host "⚠ Device IMU file not found: $device_imu_dat" -ForegroundColor Yellow
-    }
-} else {
-    Write-Host "⚠ insta_time_sync.exe not found, skipping IMU synchronization" -ForegroundColor Yellow
-}
-
-# Step 5: Compute camera poses
-Write-Host "`n=== Step 5: Computing camera poses ===" -ForegroundColor Cyan
+# Step 7: Compute camera poses
+Write-Host "`n=== Step 7: Computing camera poses ===" -ForegroundColor Cyan
 
 if (Test-Path $insta_poses_exe) {
     # Look for pose file in laser mapping output directory

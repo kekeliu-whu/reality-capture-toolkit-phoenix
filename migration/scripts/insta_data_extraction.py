@@ -60,9 +60,9 @@ parser.add_argument(
 # --------- 数据导出参数 ---------
 parser.add_argument(
     "--export-frames",
-    action="store_true",
+    action=argparse.BooleanOptionalAction,
     default=True,
-    help="是否导出相机帧（默认: 导出）",
+    help="是否导出相机帧（默认: 导出；可用 --no-export-frames 关闭）",
 )
 
 # 解析命令行参数
