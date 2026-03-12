@@ -9,6 +9,7 @@ import subprocess
 import json
 import cv2
 import argparse
+import sys
 
 # ============================================================
 # 尝试导入ROS相关库（可选）
@@ -422,7 +423,7 @@ if not EXPORT_FRAMES:
     print("\n" + "=" * 60)
     print("⚠ 注意: 未导出相机帧，时间戳数据未被使用")
     print("=" * 60)
-    exit(0)
+    sys.exit(0)
 
 # 获取时间戳数据（在提取帧之前）
 print("\n" + "=" * 60)
