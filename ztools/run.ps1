@@ -91,16 +91,16 @@ if (!$skip_convert_s20) {
                 --output_dir $outputdir
             
             if ($LASTEXITCODE -eq 0) {
-                Write-Host "✓ S20 conversion completed" -ForegroundColor Green
+                Write-Host "[OK] S20 conversion completed" -ForegroundColor Green
             } else {
-                Write-Host "⚠ S20 conversion failed" -ForegroundColor Yellow
+                Write-Host "[WARN] S20 conversion failed" -ForegroundColor Yellow
             }
         } else {
-            Write-Host "⚠ Calibration file not found or not provided: $calibfile" -ForegroundColor Yellow
+            Write-Host "[WARN] Calibration file not found or not provided: $calibfile" -ForegroundColor Yellow
             Write-Host "  Usage: -calibfile path/to/calib.yaml" -ForegroundColor Yellow
         }
     } else {
-        Write-Host "⚠ convert_s20.exe not found at: $convert_s20_exe" -ForegroundColor Yellow
+        Write-Host "[WARN] convert_s20.exe not found at: $convert_s20_exe" -ForegroundColor Yellow
     }
 } else {
     Write-Host "=== Step 1: Skipping S20 conversion ===" -ForegroundColor Yellow
@@ -120,7 +120,7 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-Write-Host "✓ Camera data extracted to: $camera_dir" -ForegroundColor Green
+Write-Host "[OK] Camera data extracted to: $camera_dir" -ForegroundColor Green
 
 
 # Step 3: Run time synchronization and pose computation tools
@@ -148,19 +148,47 @@ if (!(Test-Path $imu_insv_dat)) {
 
 Write-Host "Running IMU time synchronization..." -ForegroundColor Yellow
 
+$sync_cmd = "$insta_sync_exe --device $device_imu_dat --insta $imu_insv_dat"
+Write-Host "Running: $sync_cmd" -ForegroundColor Gray
+
 # Capture output to extract time delay
-$output = & $insta_sync_exe `
-    --device $device_imu_dat `
-    --insta $imu_insv_dat 2>&1
+$stdout_file = [System.IO.Path]::GetTempFileName()
+$stderr_file = [System.IO.Path]::GetTempFileName()
+
+try {
+    $sync_proc = Start-Process `
+        -FilePath $insta_sync_exe `
+        -ArgumentList @("--device", $device_imu_dat, "--insta", $imu_insv_dat) `
+        -NoNewWindow `
+        -Wait `
+        -PassThru `
+        -RedirectStandardOutput $stdout_file `
+        -RedirectStandardError $stderr_file
+
+    $sync_exit_code = $sync_proc.ExitCode
+    $stdout_text = if (Test-Path $stdout_file) { Get-Content -Path $stdout_file -Raw } else { "" }
+    $stderr_text = if (Test-Path $stderr_file) { Get-Content -Path $stderr_file -Raw } else { "" }
+    $output_text = ($stdout_text + "`n" + $stderr_text).Trim()
+}
+finally {
+    Remove-Item -Path $stdout_file -ErrorAction SilentlyContinue
+    Remove-Item -Path $stderr_file -ErrorAction SilentlyContinue
+}
 
 # Convert output to string for regex matching
-$output_text = $output -join "`n"
-Write-Host $output_text
+if ($output_text) {
+    Write-Host $output_text
+}
+
+if ($sync_exit_code -ne 0) {
+    Write-Host "ERROR: insta_time_sync failed with exit code $sync_exit_code" -ForegroundColor Red
+    exit $sync_exit_code
+}
 
 # Extract time delay from output: "final time delay (s): NUMBER"
 if ($output_text -match 'final time delay \(s\):\s*([\d\-\.]+)') {
     $time_offset = [double]$matches[1]
-    Write-Host "✓ Extracted time delay: $time_offset seconds" -ForegroundColor Green
+    Write-Host "[OK] Extracted time delay: $time_offset seconds" -ForegroundColor Green
 } else {
     Write-Host "ERROR: Could not extract time delay from insta_time_sync output" -ForegroundColor Red
     Write-Host "Expected to find: 'final time delay (s): <number>'" -ForegroundColor Red
@@ -182,7 +210,7 @@ if ($LASTEXITCODE -ne 0) {
 # Step 5: Run lasermapping if not skipped
 if (!$skip_lasermapping) {
     Write-Host "`n=== Step 5: Computing trajectory from lidar data ===" -ForegroundColor Yellow
-    Write-Host "⚠ This step requires pre-processed lidar data from S20 conversion" -ForegroundColor Yellow
+    Write-Host "[WARN] This step requires pre-processed lidar data from S20 conversion" -ForegroundColor Yellow
     Write-Host "  Note: slam_core_main needs pre-processed .dat files in $outputdir" -ForegroundColor Yellow
     Write-Host "  - calibration.dat" -ForegroundColor Gray
     Write-Host "  - imu.dat" -ForegroundColor Gray
@@ -202,12 +230,12 @@ if (!$skip_lasermapping) {
             & $lasermapping_exe "-project_dirname=$outputdir" "-output_dir=$outputdir"
             
             if ($LASTEXITCODE -eq 0) {
-                Write-Host "✓ Trajectory computed" -ForegroundColor Green
+                Write-Host "[OK] Trajectory computed" -ForegroundColor Green
             } else {
-                Write-Host "⚠ Trajectory computation failed (may need ROS environment)" -ForegroundColor Yellow
+                Write-Host "[WARN] Trajectory computation failed (may need ROS environment)" -ForegroundColor Yellow
             }
         } else {
-            Write-Host "⚠ slam_core_main.exe not found" -ForegroundColor Yellow
+            Write-Host "[WARN] slam_core_main.exe not found" -ForegroundColor Yellow
         }
     } else {
         Write-Host "  Data files not found, skipping trajectory computation" -ForegroundColor Yellow
@@ -236,18 +264,18 @@ if (Test-Path $insta_poses_exe) {
             --output $img_pose_output
         
         if ($LASTEXITCODE -eq 0) {
-            Write-Host "✓ Camera poses computed: $img_pose_output" -ForegroundColor Green
+            Write-Host "[OK] Camera poses computed: $img_pose_output" -ForegroundColor Green
         } else {
-            Write-Host "⚠ Pose computation failed" -ForegroundColor Yellow
+            Write-Host "[WARN] Pose computation failed" -ForegroundColor Yellow
         }
     } else {
-        Write-Host "⚠ Trajectory or calibration file not found" -ForegroundColor Yellow
+        Write-Host "[WARN] Trajectory or calibration file not found" -ForegroundColor Yellow
         Write-Host "  Expected in: $outputdir" -ForegroundColor Yellow
         Write-Host "  Looking for: traj.txt and calibration.dat" -ForegroundColor Yellow
         Write-Host "  Hint: LaserMapping should have generated these files" -ForegroundColor Yellow
     }
 } else {
-    Write-Host "⚠ insta_compute_poses.exe not found, skipping pose computation" -ForegroundColor Yellow
+    Write-Host "[WARN] insta_compute_poses.exe not found, skipping pose computation" -ForegroundColor Yellow
 }
 
 # Summary
@@ -262,10 +290,10 @@ if (Test-Path $outputdir) {
     Get-ChildItem -Path $outputdir -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
         $indent = ("  " * ($_.FullName -replace "[^\\]" | Measure-Object -Character).Characters)
         if ($_.PSIsContainer) {
-            Write-Host "$indent📁 $($_.Name)/"
+            Write-Host "$indent[DIR] $($_.Name)/"
         } else {
             $size = if ($_.Length -gt 1MB) { "$([Math]::Round($_.Length/1MB, 2)) MB" } else { "$([Math]::Round($_.Length/1KB, 2)) KB" }
-            Write-Host "$indent📄 $($_.Name) ($size)"
+            Write-Host "$indent[FILE] $($_.Name) ($size)"
         }
     }
 }

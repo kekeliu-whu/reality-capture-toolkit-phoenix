@@ -16,7 +16,7 @@ import argparse
 from proto.sensors_pb2 import ImuMsgList
 
 # ============================================================================
-# ⚙️  配置参数 - 修改此处来调整程序行为
+# [CONFIG]  配置参数 - 修改此处来调整程序行为
 # ============================================================================
 
 # ========== 显示设置 ==========
@@ -312,8 +312,8 @@ def find_coarse_alignment(
         )
     )
 
-    print(f"  ⏱️  粗对齐延迟: {optimal_delay*1000:.3f} ms")
-    print(f"  📈 最大互相关系数: {max_correlation:.6f}")
+    print(f"  [TIME]  粗对齐延迟: {optimal_delay*1000:.3f} ms")
+    print(f"  [CORR] 最大互相关系数: {max_correlation:.6f}")
 
     return optimal_delay, max_correlation, time_delays, correlation
 
@@ -518,7 +518,7 @@ def print_time_sync_results(time_delay: float) -> None:
     print("\n" + "=" * 60)
     print("[结果] 时间同步结果")
     print("=" * 60)
-    print(f"  ⏱️  时间延迟: {time_delay*1000:.3f} ms ({time_delay:.6f} s)")
+    print(f"  [TIME]  时间延迟: {time_delay*1000:.3f} ms ({time_delay:.6f} s)")
     print("  [说明] Insta 的时间戳应加上此延迟与 Device 对齐")
 
 

@@ -2,6 +2,7 @@
 运行它之前通过以下命令生成 protobuf 文件：
 ```powershell
 python -m grpc_tools.protoc -I. --python_out=. proto/sensors.proto
+python -m grpc_tools.protoc -I. --python_out=. proto/calib.proto
 ```
 
 ---

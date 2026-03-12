@@ -189,23 +189,23 @@ def process_poses(poses_file, calib_file, image_folder, output_file, image_list=
     imu_poses = load_poses_from_txt(poses_file)
 
     if not imu_poses:
-        print(f"❌ No IMU poses found in {poses_file}")
+        print(f"[ERROR] No IMU poses found in {poses_file}")
         return False
 
-    print(f"✓ Loaded {len(imu_poses)} IMU poses from {poses_file}")
+    print(f"[OK] Loaded {len(imu_poses)} IMU poses from {poses_file}")
 
     # Load calibration
     calib = load_calibration_from_pb(calib_file)
 
-    print(f"✓ Loaded calibration from {calib_file}")
+    print(f"[OK] Loaded calibration from {calib_file}")
 
     # Get camera-IMU extrinsic parameters
     if not hasattr(calib, "camera_param") or len(calib.camera_param) == 0:
-        print("❌ No camera_param extrinsic found in calibration file")
+        print("[ERROR] No camera_param extrinsic found in calibration file")
         return False
 
     num_cameras = len(calib.camera_param)
-    print(f"✓ Found {num_cameras} camera(s) in calibration")
+    print(f"[OK] Found {num_cameras} camera(s) in calibration")
 
     # Find all camera folders (cam0, cam1, ...)
     image_folder = Path(image_folder)
@@ -217,11 +217,11 @@ def process_poses(poses_file, calib_file, image_folder, output_file, image_list=
             camera_folders[cam_idx] = cam_folder
 
     if not camera_folders:
-        print(f"❌ No camera folders (cam0, cam1, ...) found in {image_folder}")
+        print(f"[ERROR] No camera folders (cam0, cam1, ...) found in {image_folder}")
         return False
 
     print(
-        f"✓ Found {len(camera_folders)} camera folder(s): {sorted(camera_folders.keys())}"
+        f"[OK] Found {len(camera_folders)} camera folder(s): {sorted(camera_folders.keys())}"
     )
 
     # Write output
@@ -321,9 +321,9 @@ def process_poses(poses_file, calib_file, image_folder, output_file, image_list=
                 cam_valid_count += 1
                 valid_count += 1
 
-            print(f"  ✓ Processed {cam_valid_count} images in cam{cam_idx}")
+            print(f"  [OK] Processed {cam_valid_count} images in cam{cam_idx}")
 
-    print(f"\n✓ Successfully written {valid_count} total poses to {output_file}")
+    print(f"\n[OK] Successfully written {valid_count} total poses to {output_file}")
     return True
 
 
