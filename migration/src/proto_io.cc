@@ -155,6 +155,10 @@ bool ReadEncoderFile(const std::string &filename, proto::EncoderMsgList &motor) 
 
 bool WriteEncoderFile(const std::string &filename, const proto::EncoderMsgList &motor) { return WriteSingleMsgFile(filename, motor); }
 
+bool ReadGnssFile(const std::string &filename, proto::GpsMsgList &gnss) { return ReadSingleMsgFile(filename, gnss); }
+
+bool WriteGnssFile(const std::string &filename, const proto::GpsMsgList &gnss) { return WriteSingleMsgFile(filename, gnss); }
+
 bool ReadPoseFile(const std::string &filename, proto::PoseMsgList &pose) { return ReadSingleMsgFile(filename, pose); }
 
 bool WritePoseFile(const std::string &filename, const proto::PoseMsgList &pose) { return WriteSingleMsgFile(filename, pose); }

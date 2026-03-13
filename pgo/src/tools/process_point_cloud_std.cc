@@ -9,6 +9,8 @@
 #include <pcl/point_types.h>
 #include <pcl/search/kdtree.h>
 #include <Eigen/Eigen>
+#include <gflags/gflags.h>
+#include <spdlog/spdlog.h>
 #include <pcl/filters/impl/fast_bilateral.hpp>
 #include <pcl/filters/impl/fast_bilateral_omp.hpp>
 #include <thread>

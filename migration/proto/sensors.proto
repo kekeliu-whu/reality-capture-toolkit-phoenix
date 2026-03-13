@@ -41,6 +41,20 @@ message EncoderMsgList {
   repeated EncoderMsg encoder_msgs = 1;
 }
 
+message GpsMsg {
+  double timestamp = 1;
+  double latitude = 2; // degrees
+  double longitude = 3; // degrees
+  double altitude = 4; // meters
+  double lat_std = 5; // latitude standard deviation (meters)
+  double lon_std = 6; // longitude standard deviation (meters)
+  double alt_std = 7; // altitude standard deviation (meters)
+}
+
+message GpsMsgList {
+  repeated GpsMsg gps_msgs = 1;
+}
+
 // LIO result
 message UndistoredLidarMsg {
   message Point {

@@ -4,6 +4,9 @@
 #include <pcl/point_types.h>
 #include <Eigen/Eigen>
 #include <iostream>
+#include <sstream>
+#include <spdlog/spdlog.h>
+#include <spdlog/fmt/ostr.h>
 #include <opencv2/calib3d.hpp>
 #include <opencv2/core.hpp>
 #include <opencv2/core/eigen.hpp>
@@ -64,8 +67,8 @@ int main() {
   }
 
   // Output results
-  spdlog::info("Rotation Vector:\n{}", rvec);
-  spdlog::info("Translation Vector:\n{}", tvec);
+  spdlog::info("Rotation Vector: [{}, {}, {}]", rvec.at<double>(0), rvec.at<double>(1), rvec.at<double>(2));
+  spdlog::info("Translation Vector: [{}, {}, {}]", tvec.at<double>(0), tvec.at<double>(1), tvec.at<double>(2));
 
   cv::Mat rotationMatrix;
   cv::Rodrigues(rvec, rotationMatrix);
@@ -76,8 +79,8 @@ int main() {
   cv::cv2eigen(rotationMatrix, eigenRotationMatrix);
   cv::cv2eigen(tvec, eigenTranslationVector);
 
-  spdlog::info("Eigen Rotation Matrix:\n{}", eigenRotationMatrix);
-  spdlog::info("Eigen Translation Vector:\n{}", eigenTranslationVector.transpose());
+  spdlog::info("Eigen Rotation Matrix computed");
+  spdlog::info("Eigen Translation Vector: [{}, {}, {}]", eigenTranslationVector(0), eigenTranslationVector(1), eigenTranslationVector(2));
 
   pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
   int ok = pcl::io::loadPLYFile(ply_filename, *cloud);
@@ -124,9 +127,21 @@ int main() {
   eigenTranslationVector = -(eigenRotationMatrix.transpose() * eigenTranslationVector);
   eigenRotationMatrix.transposeInPlace();
 
-  spd << eigenRotationMatrix << std::endl;
-  spdlog::info("{}", Eigen::Quaterniond(eigenRotationMatrix).coeffs().transpose());
-  spdlog::info("{}", eigenTranslationVector.transpose());
+  // Convert Eigen objects to string for logging
+  std::stringstream ss;
+  ss << "Rotation matrix:\n" << eigenRotationMatrix;
+  spdlog::info(ss.str());
+  
+  spdlog::info("Quaternion: {} {} {} {}", 
+      Eigen::Quaterniond(eigenRotationMatrix).coeffs()(0),
+      Eigen::Quaterniond(eigenRotationMatrix).coeffs()(1),
+      Eigen::Quaterniond(eigenRotationMatrix).coeffs()(2),
+      Eigen::Quaterniond(eigenRotationMatrix).coeffs()(3));
+      
+  spdlog::info("Translation: {} {} {}", 
+      eigenTranslationVector(0),
+      eigenTranslationVector(1),
+      eigenTranslationVector(2));
 
   return 0;
 }

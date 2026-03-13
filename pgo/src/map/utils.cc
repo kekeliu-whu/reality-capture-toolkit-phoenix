@@ -5,6 +5,7 @@
 #include <pcl/point_types.h>
 #include <pcl/search/kdtree.h>
 #include <Eigen/Eigen>
+#include <spdlog/spdlog.h>
 #include <thread>
 #include <vector>
 

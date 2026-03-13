@@ -24,6 +24,9 @@ bool WriteImuFile(const std::string &filename, const proto::ImuMsgList &imu);
 bool ReadEncoderFile(const std::string &filename, proto::EncoderMsgList &motor);
 bool WriteEncoderFile(const std::string &filename, const proto::EncoderMsgList &motor);
 
+bool ReadGnssFile(const std::string &filename, proto::GpsMsgList &gnss);
+bool WriteGnssFile(const std::string &filename, const proto::GpsMsgList &gnss);
+
 bool ReadPoseFile(const std::string &filename, proto::PoseMsgList &pose);
 bool WritePoseFile(const std::string &filename, const proto::PoseMsgList &pose);
 
