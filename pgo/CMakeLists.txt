@@ -51,6 +51,7 @@ set(
   src/factor/gravity_factor.h
   src/factor/local_parameterization_se3.h
   src/factor/pose_graph_edge_factor.h
+  src/factor/rtk_factor.h
   src/io/read_write.h
   src/map/optimizer.h
   src/map/pgo_runner.h
