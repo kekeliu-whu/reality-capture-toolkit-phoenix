@@ -4,18 +4,18 @@
 #include <nav_msgs/Odometry.h>
 #include <rosbag/bag.h>
 #include <rosbag/view.h>
+#include <rtk_agent/PVTSLNMsg.h>
 #include <sensor_msgs/Imu.h>
 #include <sensor_msgs/NavSatFix.h>
 #include <yaml-cpp/yaml.h>
 #include <Eigen/Eigen>
-
 #include <filesystem>
+
 #include "migration/proto_io.h"
 #include "proto/calib.pb.h"
 #include "proto/sensors.pb.h"
 
-DEFINE_string(bag_filename,
-              "\\\\wsl.localhost\\Ubuntu-24.04\\home\\rick\\iKalibr\\src\\iKalibr\\2026-02-06_11-34-29-s20\\all_2026-02-06-11-34-35.bag",
+DEFINE_string(bag_filename, "D:\\ProjectX\\project-3d\\data\\sfm-old\\2025-07-15_10-23-09-outdoor\\2025-07-15_10-23-09\\all_2025-07-15-10-23-30.bag",
               "Point cloud filename");
 DEFINE_string(calib_filename,
               "\\\\wsl.localhost\\Ubuntu-24.04\\home\\rick\\iKalibr\\src\\iKalibr\\2026-02-06_11-34-29-s20\\ikalibr_output\\ikalibr_param.yaml",
@@ -91,21 +91,21 @@ int main(int argc, char** argv) {
       std::shared_ptr<proto::LidarMsg> lidar_msg{new proto::LidarMsg};
       PointCloudCallback(msg, lidar_msg);
       lidar_writer.Write(lidar_msg);
-    } else if (m.getTopic() == "/rtk_agent/navsatfix_sync") {
-      auto msg = m.instantiate<sensor_msgs::NavSatFix>();
+    } else if (m.getTopic() == "/rtk_agent/pvtsln_sync") {
+      auto msg = m.instantiate<rtk_agent::PVTSLNMsg>();
 
       auto new_msg = gnss_msg_list.add_gps_msgs();
       new_msg->set_timestamp(msg->header.stamp.toSec());
-      new_msg->set_latitude(msg->latitude);
-      new_msg->set_longitude(msg->longitude);
-      new_msg->set_altitude(msg->altitude);
+      new_msg->set_latitude(msg->bestpos_lat);
+      new_msg->set_longitude(msg->bestpos_lon);
+      new_msg->set_altitude(msg->bestpos_hgt);
 
       new_msg->set_lat_std(0.03);  // latitude variance -> std
       new_msg->set_lon_std(0.03);  // longitude variance -> std
       new_msg->set_alt_std(0.1);   // altitude variance -> std
 
       spdlog::info("Processed GNSS message at time: {:.6f} lat={:.8f}, lon={:.8f}, alt={:.3f}, lat_std={:.3f}, lon_std={:.3f}, alt_std={:.3f}",
-                   msg->header.stamp.toSec(), msg->latitude, msg->longitude, msg->altitude, new_msg->lat_std(), new_msg->lon_std(),
+                   msg->header.stamp.toSec(), msg->bestpos_lat, msg->bestpos_lon, msg->bestpos_hgt, new_msg->lat_std(), new_msg->lon_std(),
                    new_msg->alt_std());
     }
   }

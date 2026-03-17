@@ -50,18 +50,24 @@ class SequentialLidarFileReader {
       spdlog::warn("Failed to open lidar file: {}", filename);
       return false;
     }
-    
+
     // Get file size
     infile_.seekg(0, std::ios::end);
     file_size_ = infile_.tellg();
     infile_.seekg(0, std::ios::beg);
-    
+
     spdlog::info("Opened lidar file: {} (size: {} bytes)", filename, file_size_);
     return true;
   }
 
   bool ReadNext(Ptr<T> &msg) {
-    if (file_ended_ || !infile_.is_open()) {
+    if (file_ended_) {
+      spdlog::warn("End of lidar file reached: {}", filename_);
+      return false;
+    }
+
+    if (!infile_.is_open()) {
+      spdlog::warn("Lidar file is not open: {}", filename_);
       return false;
     }
 
