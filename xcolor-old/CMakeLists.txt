@@ -99,7 +99,7 @@ function(add_private_tool name)
   target_link_libraries(${name} ${PGO_PRIVATE_LIBS})
 endfunction()
 
-add_private_tool(xcolor_main src/xcolor_main.cc)
+add_private_tool(xcolor src/xcolor.cc)
 add_private_tool(xsfm src/xsfm_main.cc)
 add_private_tool(xsfm_reset_s20_cameras src/tools/xsfm_reset_s20_cameras.cc)
 add_private_tool(process_point_cloud_s20 src/tools/process_point_cloud_s20.cc)

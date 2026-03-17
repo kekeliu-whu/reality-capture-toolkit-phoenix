@@ -66,7 +66,7 @@ $convert_s20_exe = Join-Path $BUILD_PACK "convert_s20.exe"
 $insta_extraction_exe = Join-Path $PYTHON_TOOLS "insta_data_extraction.exe"
 $insta_sync_exe = Join-Path $PYTHON_TOOLS "insta_time_sync.exe"
 $insta_poses_exe = Join-Path $PYTHON_TOOLS "insta_compute_poses.exe"
-$lasermapping_exe = Join-Path $NATIVE_TOOLS "slam_core_main.exe"
+$lasermapping_exe = Join-Path $NATIVE_TOOLS "slam.exe"
 
 # Check if EXEs exist
 if (!(Test-Path $insta_extraction_exe)) {
@@ -211,13 +211,13 @@ if ($LASTEXITCODE -ne 0) {
 if (!$skip_lasermapping) {
     Write-Host "`n=== Step 5: Computing trajectory from lidar data ===" -ForegroundColor Yellow
     Write-Host "[WARN] This step requires pre-processed lidar data from S20 conversion" -ForegroundColor Yellow
-    Write-Host "  Note: slam_core_main needs pre-processed .dat files in $outputdir" -ForegroundColor Yellow
+    Write-Host "  Note: slam needs pre-processed .dat files in $outputdir" -ForegroundColor Yellow
     Write-Host "  - calibration.dat" -ForegroundColor Gray
     Write-Host "  - imu.dat" -ForegroundColor Gray
     Write-Host "  - encoder.dat" -ForegroundColor Gray
     Write-Host "  - lidar.dat" -ForegroundColor Gray
     
-    # If these files already exist, slam_core_main can process them
+    # If these files already exist, slam can process them
     $has_dat_files = (Test-Path (Join-Path $outputdir "imu.dat")) -and `
                      (Test-Path (Join-Path $outputdir "calibration.dat"))
     
@@ -235,7 +235,7 @@ if (!$skip_lasermapping) {
                 Write-Host "[WARN] Trajectory computation failed (may need ROS environment)" -ForegroundColor Yellow
             }
         } else {
-            Write-Host "[WARN] slam_core_main.exe not found" -ForegroundColor Yellow
+            Write-Host "[WARN] slam.exe not found" -ForegroundColor Yellow
         }
     } else {
         Write-Host "  Data files not found, skipping trajectory computation" -ForegroundColor Yellow

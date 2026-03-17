@@ -66,7 +66,7 @@ $xsfm_pre_exe = Join-Path $BUILD_PACK "xsfm_pre.exe"
   --image_path "$dataDir\camera" `
   --database_path "$dataDir\xsfm\xsfm.db" `
   --ImageReader.camera_model OPENCV_FISHEYE `
-  --ImageReader.camera_params "1029.5272863732237,1032.9740976263085,1920,1920,0.037416683931696879,-0.0051502247212099643,0.0064400644003639101,-0.002301772325582836" `
+  --ImageReader.camera_params "772.145464779917775,772.145464779917775,1440,1440,0.037416683931696879,-0.0051502247212099643,0.0064400644003639101,-0.002301772325582836" `
   --ImageReader.single_camera_per_folder 1 `
   --SiftExtraction.max_num_features 8000
 
@@ -108,9 +108,9 @@ if ($LASTEXITCODE -ne 0) {
   exit 1
 }
 
-# Step 5: Colorize point cloud with xcolor_main.exe
+# Step 5: Colorize point cloud with xcolor.exe
 Write-Host "Step 5: Colorizing point cloud..." -ForegroundColor Green
-$xcolor_main_exe = Join-Path $BUILD_PACK "xcolor_main.exe"
+$xcolor_main_exe = Join-Path $BUILD_PACK "xcolor.exe"
 
 # Determine the correct camera path (try multiple possible locations)
 $images_path = $null

@@ -99,6 +99,6 @@ function(add_private_tool name)
   target_link_libraries(${name} ${PGO_PRIVATE_LIBS})
 endfunction()
 
-add_private_tool(slam_core_main
+add_private_tool(slam
   src/main.cpp
 )

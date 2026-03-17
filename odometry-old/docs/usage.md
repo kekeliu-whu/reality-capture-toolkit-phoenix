@@ -14,10 +14,10 @@ convert_s20 \
 
 ---
 
-## slam_core_main - LiDAR SLAM 处理
+## slam - LiDAR SLAM 处理
 
 ```bash
-slam_core_main \
+slam \
   --project_dirname="D:/slam_data" \
   --output_dir="D:/slam_output" \
   --indoor=true

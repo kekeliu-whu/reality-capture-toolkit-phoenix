@@ -1,5 +1,5 @@
-#include <custom_msgs/LixelAnyData.h>
 #include <gflags/gflags.h>
+#include <lixel_msgs/AnyData.h>
 #include <nav_msgs/Odometry.h>
 #include <rosbag/bag.h>
 #include <rosbag/view.h>
@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
 
   for (const auto& m : rosbag::View(bag)) {
     if (m.getTopic().find("_yaml") != std::string::npos) {
-      auto msg = m.instantiate<custom_msg_pkg::LixelAnyData>();
+      auto msg = m.instantiate<lixel_msgs::AnyData>();
       if (!msg) {
         spdlog::error("msg failed");
         exit(1);
@@ -122,7 +122,7 @@ int main(int argc, char** argv) {
         sc.mutable_lidar_to_encoder()->set_ty(pos.y());
         sc.mutable_lidar_to_encoder()->set_tz(pos.z());
       } else if (m.getTopic() == "/config/imu_yaml") {
-        YAML::Node config   = YAML::Load(msg->data);
+        YAML::Node config  = YAML::Load(msg->data);
         auto imu_intrinsic = new proto::ImuIntrinsicTpmIcra2014;
         ReadMatrixToProto<3, 3>(config["Ta"], sc.mutable_imu_intrinsic()->mutable_tpm()->mutable_ta()->mutable_data());
         ReadMatrixToProto<3, 3>(config["Ka"], sc.mutable_imu_intrinsic()->mutable_tpm()->mutable_ka()->mutable_data());
@@ -131,7 +131,7 @@ int main(int argc, char** argv) {
         ReadMatrixToProto<3, 3>(config["Kg"], sc.mutable_imu_intrinsic()->mutable_tpm()->mutable_kg()->mutable_data());
         ReadMatrixToProto<3, 1>(config["Bg"], sc.mutable_imu_intrinsic()->mutable_tpm()->mutable_bg()->mutable_data());
       } else if (m.getTopic() == "/config/lidar_yaml") {
-        YAML::Node config     = YAML::Load(msg->data);
+        YAML::Node config    = YAML::Load(msg->data);
         auto lidar_intrinsic = new proto::LidarIntrinsicSimple;
         sc.mutable_lidar_intrinsic()->mutable_simple()->set_e(config["e"].as<double>());
         ReadMatrixToProto<2, 1>(config["s"], sc.mutable_lidar_intrinsic()->mutable_simple()->mutable_s());

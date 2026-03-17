@@ -184,8 +184,7 @@ void livox_pcl_cbk(const std::shared_ptr<proto::LidarMsg> &msg) {
 void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in) {
   sensor_msgs::Imu::Ptr msg(new sensor_msgs::Imu(*msg_in));
 
-  msg->header.stamp =
-      ros::Time().fromSec(msg_in->header.stamp.toSec() + g_lidar_to_imu_offset);
+  msg->header.stamp = ros::Time().fromSec(msg_in->header.stamp.toSec() + g_lidar_to_imu_offset);
 
   double timestamp = msg->header.stamp.toSec();
 
@@ -510,6 +509,11 @@ int main(int argc, char **argv) {
   std::unique_ptr<migration::IncrementalLasWriter> las_writer = std::make_unique<migration::IncrementalLasWriter>();
   las_writer->initialize(FLAGS_output_dir + "/map.las", table);
 
+  SequentialLidarFileWriter<proto::LidarMsg> lidar_undist_writer;
+  lidar_undist_writer.Open(FLAGS_output_dir + "/lidar_undist.dat");
+
+  proto::PoseMsgList traj_dat;
+
   //------------------------------------------------------------------------------------------------------
   signal(SIGINT, SigHandle);
 
@@ -630,6 +634,34 @@ int main(int argc, char **argv) {
           las_writer->writeView(view);
         }
 
+        // Write undistorted lidar scan (body frame, motion-distortion corrected)
+        {
+          auto undist_msg = std::make_shared<proto::LidarMsg>();
+          for (int i = 0; i < (int)feats_undistort->points.size(); i++) {
+            auto pt = undist_msg->add_points();
+            pt->set_x(feats_undistort->points[i].x);
+            pt->set_y(feats_undistort->points[i].y);
+            pt->set_z(feats_undistort->points[i].z);
+            pt->set_intensity(feats_undistort->points[i].intensity);
+            pt->set_timestamp(Measures.lidar_end_time);
+          }
+          lidar_undist_writer.Write(undist_msg);
+        }
+
+        // Write low-frequency pose (one per LiDAR scan)
+        {
+          auto pose_msg = traj_dat.add_pose_msgs();
+          pose_msg->set_timestamp(Measures.lidar_end_time);
+          Eigen::Quaterniond q(g_state_point.rot.toRotationMatrix());
+          pose_msg->set_tx(g_state_point.pos.x());
+          pose_msg->set_ty(g_state_point.pos.y());
+          pose_msg->set_tz(g_state_point.pos.z());
+          pose_msg->set_rx(q.x());
+          pose_msg->set_ry(q.y());
+          pose_msg->set_rz(q.z());
+          pose_msg->set_rw(q.w());
+        }
+
         auto imu_poses = p_imu->IMUpose;
         if (!imu_poses.empty()) {
           CorrectImuPoses(Measures.lidar_end_time - last_timestamp, state_predict, g_state_point, imu_poses);
@@ -662,6 +694,12 @@ int main(int argc, char **argv) {
 
   las_writer->finalize(table);
   spdlog::info("Finished writing map to LAS file: {}", FLAGS_output_dir + "/map.las");
+
+  lidar_undist_writer.Close();
+  spdlog::info("Finished writing undistorted lidar to: {}", FLAGS_output_dir + "/lidar_undist.dat");
+
+  WritePoseFile(FLAGS_output_dir + "/traj.dat", traj_dat);
+  spdlog::info("Finished writing trajectory to: {}", FLAGS_output_dir + "/traj.dat");
 
   /**************** save map ****************/
   // Clean up LAS writer (unique_ptr auto cleanup)

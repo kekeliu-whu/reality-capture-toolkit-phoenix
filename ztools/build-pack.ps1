@@ -61,7 +61,7 @@ function Test-PrerequisitesAndBuild {
 
     # Verify specific executable files from XColor
     Write-Status "Checking XColor executables..."
-    $xcolorExes = @("xcolor_main.exe", "xsfm.exe", "xsfm_pre.exe", "xsfm_process_point_cloud.exe")
+    $xcolorExes = @("xcolor.exe", "xsfm.exe", "xsfm_pre.exe", "xsfm_process_point_cloud.exe")
     $xcolorExeCount = 0
     foreach ($exe in $xcolorExes) {
         if (Test-Path (Join-Path $XCOLOR_BUILD_DIR $exe)) {
@@ -76,10 +76,10 @@ function Test-PrerequisitesAndBuild {
 
     # Verify specific executable from Odometry-Old
     Write-Status "Checking Odometry-Old executables..."
-    if (-not (Test-Path (Join-Path $ODOMETRY_OLD_BUILD_DIR "slam_core_main.exe"))) {
-        $missing += "slam_core_main.exe not found"
+    if (-not (Test-Path (Join-Path $ODOMETRY_OLD_BUILD_DIR "slam.exe"))) {
+        $missing += "slam.exe not found"
     } else {
-        Write-Status "slam_core_main.exe found"
+        Write-Status "slam.exe found"
     }
 
     # Verify Python Tools
@@ -169,7 +169,7 @@ function Copy-ExecutableFiles {
     # List of executable files to copy (as documented in README)
     $exeFiles = @(
         # XColor Component
-        "xcolor_main.exe",
+        "xcolor.exe",
         "xsfm.exe",
         "xsfm_image_sampler.exe",
         "xsfm_pre.exe",
@@ -179,7 +179,7 @@ function Copy-ExecutableFiles {
         # XColor Migration Build
         "convert_s20.exe",
         # Odometry-Old Component
-        "slam_core_main.exe",
+        "slam.exe",
         # Python Tools
         "insta_compute_poses.exe",
         "insta_data_extraction.exe",
