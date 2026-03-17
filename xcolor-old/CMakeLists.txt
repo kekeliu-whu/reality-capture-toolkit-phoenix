@@ -13,7 +13,7 @@ endif()
 
 if(MSVC)
   add_compile_options(/MP)
-  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/MD /Zi /O2 /Ob3 /MD")
+  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/O2 /Ob3 /MD /Zi")
 endif()
 
 add_definitions(-D_USE_MATH_DEFINES)

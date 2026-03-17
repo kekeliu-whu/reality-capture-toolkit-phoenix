@@ -20,102 +20,89 @@
 
 namespace {
 
-// Load traj.txt written by laser_mapping
-// Format per line: timestamp tx ty tz qx qy qz qw [grav_x grav_y grav_z]
-std::map<double, Sophus::SE3d> LoadTrajectory(const std::string &traj_filename) {
-  std::map<double, Sophus::SE3d> traj;
-  std::ifstream file(traj_filename);
-  if (!file.is_open()) {
-    spdlog::error("Failed to open trajectory file: {}", traj_filename);
-    exit(1);
-  }
-  std::string line;
-  while (std::getline(file, line)) {
-    if (line.empty() || line[0] == '#') continue;
-    std::istringstream iss(line);
-    double ts, tx, ty, tz, qx, qy, qz, qw;
-    if (!(iss >> ts >> tx >> ty >> tz >> qx >> qy >> qz >> qw)) continue;
-    Eigen::Quaterniond q(qw, qx, qy, qz);
-    traj[ts] = Sophus::SE3d(q.normalized().toRotationMatrix(), Eigen::Vector3d(tx, ty, tz));
-  }
-  spdlog::info("Loaded {} poses from {}", traj.size(), traj_filename);
-  return traj;
-}
-
 void LoadRawScans(
     const std::string &project_path,
     std::vector<TimestampedPointCloud> &scans) {
-  const std::string traj_filename = project_path + "/traj.txt";
-  const std::string las_filename  = project_path + "/map.las";
+  const std::string traj_dat_filename = project_path + "/traj.dat";
+  const std::string lidar_undist_filename = project_path + "/lidar_undist.dat";
 
-  // Load trajectory from traj.txt
-  auto traj = LoadTrajectory(traj_filename);
+  // Load trajectory from traj.dat (low-frequency, one pose per LiDAR frame)
+  proto::PoseMsgList traj_msg_list;
+  if (!ReadPoseFile(traj_dat_filename, traj_msg_list)) {
+    spdlog::error("Failed to read trajectory from: {}", traj_dat_filename);
+    exit(1);
+  }
+
+  std::map<double, Sophus::SE3d> traj;
+  for (const auto &pose_msg : traj_msg_list.pose_msgs()) {
+    Eigen::Quaterniond q(pose_msg.rw(), pose_msg.rx(), pose_msg.ry(), pose_msg.rz());
+    Eigen::Vector3d pos(pose_msg.tx(), pose_msg.ty(), pose_msg.tz());
+    traj[pose_msg.timestamp()] = Sophus::SE3d(q.normalized().toRotationMatrix(), pos);
+  }
+  spdlog::info("Loaded {} poses from {}", traj.size(), traj_dat_filename);
+
   if (traj.empty()) {
-    spdlog::error("No poses loaded from {}", traj_filename);
+    spdlog::error("No poses loaded from {}", traj_dat_filename);
     exit(1);
   }
 
-  // Read map.las with pdal
-  pdal::Options las_opts;
-  las_opts.add("filename", las_filename);
-  pdal::LasReader reader;
-  reader.setOptions(las_opts);
-  pdal::PointTable table;
-  reader.prepare(table);
-  pdal::PointViewSet views = reader.execute(table);
-  if (views.empty()) {
-    spdlog::error("Failed to read LAS file: {}", las_filename);
+  // Read lidar_undist.dat (proto::LidarMsg stream, body frame, undistorted)
+  SequentialLidarFileReader<proto::LidarMsg> lidar_reader;
+  if (!lidar_reader.Open(lidar_undist_filename)) {
+    spdlog::error("Failed to open: {}", lidar_undist_filename);
     exit(1);
   }
-  pdal::PointViewPtr view = *views.begin();
-  spdlog::info("Loaded {} points from {}", view->size(), las_filename);
 
-  // Group points by GpsTime (all points of one scan share the same GpsTime)
-  std::map<double, PointCloud::Ptr> scans_by_time;
-  for (pdal::point_count_t i = 0; i < view->size(); ++i) {
-    double gps_time = view->getFieldAs<double>(pdal::Dimension::Id::GpsTime, i);
-    auto &cloud = scans_by_time[gps_time];
-    if (!cloud) cloud = std::make_shared<PointCloud>();
-    PointType pt;
-    pt.x         = view->getFieldAs<float>(pdal::Dimension::Id::X, i);
-    pt.y         = view->getFieldAs<float>(pdal::Dimension::Id::Y, i);
-    pt.z         = view->getFieldAs<float>(pdal::Dimension::Id::Z, i);
-    pt.intensity = view->getFieldAs<float>(pdal::Dimension::Id::Intensity, i);
-    cloud->push_back(pt);
-  }
-  spdlog::info("Grouped into {} scan frames", scans_by_time.size());
+  std::shared_ptr<proto::LidarMsg> lidar_msg;
+  size_t scan_count = 0;
+  while (lidar_reader.ReadNext(lidar_msg)) {
+    if (!lidar_msg || lidar_msg->points().empty()) {
+      continue;
+    }
 
-  // For each scan, find closest pose and transform world-frame points to body frame
-  for (auto &[ts, world_cloud] : scans_by_time) {
-    auto it = traj.lower_bound(ts);
+    double scan_timestamp = 0.0;
+    if (lidar_msg->points().size() > 0) {
+      scan_timestamp = lidar_msg->points(0).timestamp();
+    }
+
+    // Find closest pose
+    auto it = traj.lower_bound(scan_timestamp);
     if (it != traj.begin() && it != traj.end()) {
       auto prev = std::prev(it);
-      if (std::abs(prev->first - ts) < std::abs(it->first - ts)) it = prev;
+      if (std::abs(prev->first - scan_timestamp) < std::abs(it->first - scan_timestamp)) {
+        it = prev;
+      }
     } else if (it == traj.end()) {
       --it;
     }
 
-    double time_diff = std::abs(it->first - ts);
+    double time_diff = std::abs(it->first - scan_timestamp);
     if (time_diff > 1.0) {
-      spdlog::warn("No matching pose for scan at t={:.6f} (closest diff={:.3f}s), skipping", ts, time_diff);
+      spdlog::warn("No matching pose for scan at t={:.6f} (closest diff={:.3f}s), skipping", scan_timestamp, time_diff);
       continue;
     }
 
     const Sophus::SE3d &pose_w = it->second;
     TimestampedPointCloud scan;
-    scan.timestamp = ts;
+    scan.timestamp = scan_timestamp;
     scan.pose      = pose_w;
-    for (const auto &p : world_cloud->points) {
-      Eigen::Vector3d p_body = pose_w.inverse() * Eigen::Vector3d(p.x, p.y, p.z);
+
+    // Points in lidar_undist.dat are in body frame, transform to world frame
+    for (const auto &pt_proto : lidar_msg->points()) {
+      Eigen::Vector3d p_body(pt_proto.x(), pt_proto.y(), pt_proto.z());
+      Eigen::Vector3d p_world = pose_w * p_body;
       PointType pt;
-      pt.getVector3fMap() = p_body.cast<float>();
-      pt.intensity        = p.intensity;
+      pt.getVector3fMap() = p_world.cast<float>();
+      pt.intensity        = pt_proto.intensity();
       scan.cloud->push_back(pt);
     }
+
     scans.push_back(std::move(scan));
+    scan_count++;
   }
 
-  spdlog::info("Loaded {} scans from laser_mapping output", scans.size());
+  lidar_reader.Close();
+  spdlog::info("Loaded {} scans from {}", scan_count, lidar_undist_filename);
 }
 
 void BuildSubMapFromRawScans(const std::vector<TimestampedPointCloud> &scans,
@@ -237,7 +224,7 @@ LocalENUTransformer::LocalENUTransformer(double origin_lat_deg,
     spdlog::error("LocalENUTransformer: failed to create PROJ transformer to {}", target_proj_str);
     exit(1);
   }
-  spdlog::info("LocalENUTransformer initialized: origin lat={:.6f}°, lon={:.6f}°, alt={:.2f}m",
+  spdlog::info("LocalENUTransformer initialized: origin lat={:.6f}deg, lon={:.6f}deg, alt={:.2f}m",
                origin_lat_deg, origin_lon_deg, origin_alt_m);
 }
 

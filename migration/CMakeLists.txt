@@ -29,7 +29,7 @@ add_subdirectory(thirdparty/ros)
 
 if(MSVC)
   add_compile_options(/MP)
-  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/O2 /Ob3 /MD")
+  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/O2 /Ob3 /MD /Zi")
   add_compile_options($<$<CONFIG:Release>:/Zi>)
   add_link_options($<$<CONFIG:Release>:/DEBUG>)
 endif()
@@ -113,8 +113,6 @@ add_executable(convert_l2pro src/tools/convert_l2pro.cc)
 target_link_libraries(convert_l2pro ${TEST_LIB})
 add_executable(convert_s20 src/tools/convert_s20.cc)
 target_link_libraries(convert_s20 ${TEST_LIB})
-add_executable(convert_spv src/tools/convert_spv.cc)
-target_link_libraries(convert_spv ${TEST_LIB})
 
 target_include_directories(
     ${PROJECT_NAME}

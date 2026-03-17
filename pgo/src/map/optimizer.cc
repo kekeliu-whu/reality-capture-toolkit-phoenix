@@ -228,30 +228,6 @@ void RemoveNonPriorConstraints(
 
 }  // namespace
 
-void Optimize(std::vector<TimestampedPointCloud> &submaps,
-              const proto::PgoConfig &config) {
-  ceres::Problem problem;
-
-  std::set<ceres::ResidualBlockId> prior_residual_blocks;
-  AddParameters(problem, submaps);
-  AddAdjacentConstraints(problem, submaps, prior_residual_blocks, config);
-  AddGravityConstraits(problem, submaps, prior_residual_blocks, config);
-
-  for (int iter = 0; iter < config.outer_iteration_num(); ++iter) {
-    AddLoopClosureConstraints(problem, submaps, config);
-
-    ceres::Solver::Options options;
-    options.minimizer_progress_to_stdout = true;
-    options.max_num_iterations           = config.inner_iteration_num();
-    ceres::Solver::Summary summary;
-    ceres::Solve(options, &problem, &summary);
-    spdlog::info("{}", summary.FullReport());
-
-    // clean up non-prior constraints for the next iteration
-    RemoveNonPriorConstraints(problem, prior_residual_blocks);
-  }
-}
-
 namespace {
 
 void AddGnssConstraints(

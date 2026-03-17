@@ -13,7 +13,7 @@ endif()
 
 if(MSVC)
   add_compile_options(/MP /bigobj /utf-8)
-  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/O2 /Ob3 /MD")
+  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/O2 /Ob3 /MD /Zi")
   add_compile_options($<$<CONFIG:Release>:/Zi>)
   add_link_options($<$<CONFIG:Release>:/DEBUG>)
 endif()
