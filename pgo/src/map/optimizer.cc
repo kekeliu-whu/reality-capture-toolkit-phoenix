@@ -4,6 +4,7 @@
 #include <pcl/kdtree/kdtree.h>
 #include <pcl/registration/gicp.h>
 #include <spdlog/spdlog.h>
+#include <fstream>
 
 #include "factor/gravity_factor.h"
 #include "factor/local_parameterization_se3.h"
@@ -60,8 +61,14 @@ bool MatchGICP(pcl::PointCloud<pcl::PointXYZI>::Ptr &target,
                int gicp_max_iterations,
                double gicp_transform_epsilon) {
   pcl::GeneralizedIterativeClosestPoint<pcl::PointXYZI, pcl::PointXYZI> gicp;
-  if (!source.get()) { spdlog::error("Check failed"); exit(1); }
-  if (!target.get()) { spdlog::error("Check failed"); exit(1); }
+  if (!source.get()) {
+    spdlog::error("Check failed");
+    exit(1);
+  }
+  if (!target.get()) {
+    spdlog::error("Check failed");
+    exit(1);
+  }
   gicp.setInputSource(source);
   gicp.setInputTarget(target);
 
@@ -234,8 +241,8 @@ void AddGnssConstraints(
     ceres::Problem &problem,
     std::vector<TimestampedPointCloud> &submaps,
     const std::vector<GpsData> &gnss_data,
-    std::set<ceres::ResidualBlockId> &prior_residual_blocks) {
-  
+    std::set<ceres::ResidualBlockId> &prior_residual_blocks,
+    std::string &proj4_string) {
   if (gnss_data.empty()) {
     spdlog::warn("No GNSS data provided, skipping GNSS constraints");
     return;
@@ -243,47 +250,92 @@ void AddGnssConstraints(
 
   // Create transformer with first GNSS point as LocalENU origin
   LocalENUTransformer transformer(gnss_data[0].latitude,
-                                   gnss_data[0].longitude,
-                                   gnss_data[0].altitude);
-  
+                                  gnss_data[0].longitude);
+
   int gnss_constraints_added = 0;
 
-  // Match each GNSS measurement to nearest submap
-  for (const auto &gps : gnss_data) {
-    // Find nearest submap by timestamp
-    int nearest_idx = -1;
-    double min_time_diff = 1e9;
+  // Generate proj4 string
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(9)
+      << "+proj=tmerc +lat_0=" << gnss_data[0].latitude
+      << " +lon_0=" << gnss_data[0].longitude
+      << " +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs";
+  proj4_string = oss.str();
 
-    for (size_t i = 0; i < submaps.size(); ++i) {
-      double time_diff = std::abs(submaps[i].timestamp - gps.timestamp);
-      if (time_diff < min_time_diff) {
-        min_time_diff = time_diff;
-        nearest_idx = i;
-      }
+  // Open CSV file for writing interpolated GNSS coordinates
+  std::ofstream gnss_csv("gnss.csv");
+  if (gnss_csv) {
+    gnss_csv << "timestamp,east,north,up,lat_std,lon_std,alt_std\n";
+  }
+
+  // For each submap, find GNSS data points that bracket its timestamp and interpolate
+  for (size_t submap_idx = 0; submap_idx < submaps.size(); ++submap_idx) {
+    double submap_timestamp = submaps[submap_idx].timestamp;
+
+    // Use lower_bound to find the first GNSS point >= submap_timestamp
+    auto next_it = std::lower_bound(
+        gnss_data.begin(), gnss_data.end(), submap_timestamp,
+        [](const GpsData &gps, double timestamp) { return gps.timestamp < timestamp; });
+
+    int next_idx = std::distance(gnss_data.begin(), next_it);
+    int prev_idx = next_idx - 1;
+
+    // Check if we have valid bracketing points
+    if (prev_idx < 0 || next_idx >= gnss_data.size()) {
+      continue;  // No bracketing points available
     }
 
-    if (nearest_idx < 0 || min_time_diff > 1.0) {  // 1 second tolerance
-      continue;
+    // Interpolation case: check time gap constraint (must be ≤ 0.3s)
+    double time_gap = gnss_data[next_idx].timestamp - gnss_data[prev_idx].timestamp;
+    if (time_gap > 0.3) {
+      continue;  // Time gap too large for reliable interpolation
     }
 
-    // Convert GNSS lat/lon/alt to ENU coordinates using transformer
-    Eigen::Vector3d enu_gps = transformer.Convert(gps.latitude, gps.longitude, gps.altitude);
+    // Linear interpolation between two GNSS points
+    double t_prev = gnss_data[prev_idx].timestamp;
+    double t_next = gnss_data[next_idx].timestamp;
+    double alpha  = (submap_timestamp - t_prev) / (t_next - t_prev);
 
-    // Create position standard deviation vector
-    Eigen::Vector3d position_std(gps.lat_std, gps.lon_std, gps.alt_std);
-    
-    // Ensure minimum std to avoid numerical issues
-    position_std = position_std.cwiseMax(0.01);  // At least 1cm std
+    // Interpolate latitude, longitude, altitude
+    double interp_lat = gnss_data[prev_idx].latitude +
+                        alpha * (gnss_data[next_idx].latitude - gnss_data[prev_idx].latitude);
+    double interp_lon = gnss_data[prev_idx].longitude +
+                        alpha * (gnss_data[next_idx].longitude - gnss_data[prev_idx].longitude);
+    double interp_alt = gnss_data[prev_idx].altitude +
+                        alpha * (gnss_data[next_idx].altitude - gnss_data[prev_idx].altitude);
 
-    // Add position constraint
+    // Interpolate uncertainty (use first GNSS point's std)
+    double interp_lat_std = gnss_data[prev_idx].lat_std;
+    double interp_lon_std = gnss_data[prev_idx].lon_std;
+    double interp_alt_std = gnss_data[prev_idx].alt_std;
+
+    // Convert interpolated GNSS to ENU
+    Eigen::Vector3d enu_gps = transformer.Convert(interp_lat, interp_lon, interp_alt);
+
+    Eigen::Vector3d position_std(interp_lat_std, interp_lon_std, interp_alt_std);
+
+    // Write to CSV file
+    if (gnss_csv) {
+      gnss_csv << fmt::format("{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f}\n",
+                              submap_timestamp, enu_gps.x(), enu_gps.y(), enu_gps.z(),
+                              interp_lat_std, interp_lon_std, interp_alt_std);
+    }
+
+    spdlog::info("enu {} {} {} {} {} {}", enu_gps[0], enu_gps[1], enu_gps[2], submaps[submap_idx].pose.translation().x(),
+                 submaps[submap_idx].pose.translation().y(), submaps[submap_idx].pose.translation().z());
     auto position_factor = RtkPositionFactor::Create(enu_gps, position_std);
-    auto residual_id = problem.AddResidualBlock(
-        position_factor, nullptr, submaps[nearest_idx].pose.data());
+    auto residual_id     = problem.AddResidualBlock(
+        position_factor, nullptr, submaps[submap_idx].pose.data());
     prior_residual_blocks.insert(residual_id);
     gnss_constraints_added++;
   }
 
-  spdlog::info("Added {} GNSS constraints to {} submaps", 
+  if (gnss_csv) {
+    gnss_csv.close();
+    spdlog::info("GNSS coordinates written to gnss.csv");
+  }
+
+  spdlog::info("Added {} GNSS constraints to {} submaps",
                gnss_constraints_added, submaps.size());
 }
 
@@ -292,11 +344,17 @@ void AddGnssConstraints(
 void OptimizeWithGnss(std::vector<TimestampedPointCloud> &submaps,
                       const std::vector<GpsData> &gnss_data,
                       const proto::PgoConfig &config,
-                      bool use_rtk) {
-  
+                      bool use_rtk,
+                      std::string &proj4_string) {
   if (submaps.empty()) {
     spdlog::error("No submaps to optimize");
     return;
+  }
+
+  if (use_rtk) {
+    spdlog::info("GNSS data found ({}), using RTK fusion optimization", gnss_data.size());
+  } else {
+    spdlog::info("No GNSS data or RTK disabled, using standard PGO optimization");
   }
 
   ceres::Problem problem;
@@ -305,28 +363,28 @@ void OptimizeWithGnss(std::vector<TimestampedPointCloud> &submaps,
   // Setup optimization
   AddParameters(problem, submaps);
   AddAdjacentConstraints(problem, submaps, prior_residual_blocks, config);
-  AddGravityConstraits(problem, submaps, prior_residual_blocks, config);
-  
+  // AddGravityConstraits(problem, submaps, prior_residual_blocks, config);
+
   // Add GNSS constraints only if enabled
   if (use_rtk && !gnss_data.empty()) {
-    AddGnssConstraints(problem, submaps, gnss_data, prior_residual_blocks);
+    AddGnssConstraints(problem, submaps, gnss_data, prior_residual_blocks, proj4_string);
   }
 
   // Iterative optimization with loop closure and GNSS updates
   for (int iter = 0; iter < config.outer_iteration_num(); ++iter) {
-    AddLoopClosureConstraints(problem, submaps, config);
+    // AddLoopClosureConstraints(problem, submaps, config);
 
     ceres::Solver::Options options;
     options.minimizer_progress_to_stdout = true;
-    options.max_num_iterations = config.inner_iteration_num();
+    options.max_num_iterations           = config.inner_iteration_num();
     ceres::Solver::Summary summary;
-    
+
     spdlog::info("Optimization iteration {} (with GNSS fusion)...", iter + 1);
     ceres::Solve(options, &problem, &summary);
     spdlog::info("{}", summary.FullReport());
 
     // Clean up non-prior constraints for the next iteration
-    RemoveNonPriorConstraints(problem, prior_residual_blocks);
+    // RemoveNonPriorConstraints(problem, prior_residual_blocks);
   }
 
   spdlog::info("GNSS-fused optimization completed successfully");

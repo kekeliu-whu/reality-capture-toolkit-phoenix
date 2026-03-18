@@ -9,12 +9,13 @@
 #include <yaml-cpp/yaml.h>
 #include <Eigen/Eigen>
 #include <filesystem>
+#include <fstream>
 
 #include "migration/proto_io.h"
 #include "proto/calib.pb.h"
 #include "proto/sensors.pb.h"
 
-DEFINE_string(bag_filename, "D:\\ProjectX\\project-3d\\data\\sfm-old\\2025-07-15_10-23-09-outdoor\\2025-07-15_10-23-09\\all_2025-07-15-10-23-30.bag",
+DEFINE_string(bag_filename, "D:\\Users\\rick\\Desktop\\2026-03-16_09-34-40-with-rtk\\all_2026-03-16-09-34-52.bag",
               "Point cloud filename");
 DEFINE_string(calib_filename,
               "\\\\wsl.localhost\\Ubuntu-24.04\\home\\rick\\iKalibr\\src\\iKalibr\\2026-02-06_11-34-29-s20\\ikalibr_output\\ikalibr_param.yaml",
@@ -68,6 +69,19 @@ int main(int argc, char** argv) {
   SequentialLidarFileWriter<proto::LidarMsg> lidar_writer;
   lidar_writer.Open(FLAGS_output_dir + "/lidar.dat");
 
+  // Open GNSS CSV file for writing all fields
+  std::ofstream gnss_csv(FLAGS_output_dir + "/gnss.full.csv");
+  gnss_csv << "timestamp,"
+           << "bestpos_type,"
+           << "bestpos_lat,bestpos_lon,bestpos_hgt,"
+           << "bestpos_latstd,bestpos_lonstd,bestpos_hgtstd,"
+           << "bestpos_diffage,bestpos_svs,bestpos_solnsvs,"
+           << "psrpos_type,psrpos_lat,psrpos_lon,psrpos_hgt,psrpos_svs,psrpos_solnsvs,"
+           << "undulation,psrvel_east,psrvel_north,psrvel_ground,"
+           << "heading_type,heading_length,heading_degree,heading_pitch,"
+           << "heading_trackedsvs,heading_solnsvs,heading_ggl1,heading_ggl1l2,"
+           << "gdop,pdop,hdop,htdop,tdop,cutoff,num_sat\n";
+
   for (const auto& m : rosbag::View(bag)) {
     if (m.getTopic() == "/livox/imu") {
       auto msg = m.instantiate<sensor_msgs::Imu>();
@@ -93,21 +107,49 @@ int main(int argc, char** argv) {
     } else if (m.getTopic() == "/rtk_agent/pvtsln_sync") {
       auto msg = m.instantiate<rtk_agent::PVTSLNMsg>();
 
+      double timestamp = msg->header.stamp.toSec();
+      
+      // Write all fields to CSV
+      gnss_csv << std::fixed << std::setprecision(6) << timestamp << ","
+               << (int)msg->bestpos_type.type << ","
+               << std::setprecision(8) << msg->bestpos_lat << "," << msg->bestpos_lon << "," 
+               << std::setprecision(6) << msg->bestpos_hgt << ","
+               << msg->bestpos_latstd << "," << msg->bestpos_lonstd << "," << msg->bestpos_hgtstd << ","
+               << msg->bestpos_diffage << "," << (int)msg->bestpos_svs << "," << (int)msg->bestpos_solnsvs << ","
+               << (int)msg->psrpos_type.type << ","
+               << std::setprecision(8) << msg->psrpos_lat << "," << msg->psrpos_lon << "," 
+               << std::setprecision(6) << msg->psrpos_hgt << "," << (int)msg->psrpos_svs << "," << (int)msg->psrpos_solnsvs << ","
+               << msg->undulation << "," << msg->psrvel_east << "," << msg->psrvel_north << "," << msg->psrvel_ground << ","
+               << (int)msg->heading_type.type << "," << msg->heading_length << "," << msg->heading_degree << "," << msg->heading_pitch << ","
+               << (int)msg->heading_trackedsvs << "," << (int)msg->heading_solnsvs << "," 
+               << (int)msg->heading_ggl1 << "," << (int)msg->heading_ggl1l2 << ","
+               << msg->gdop << "," << msg->pdop << "," << msg->hdop << "," << msg->htdop << "," << msg->tdop << ","
+               << msg->cutoff << "," << (int)msg->num_sat << "\n";
+
+      // Only use RTK NARROW_INT fixed solutions
+      if (msg->bestpos_type.type != rtk_agent::PosType::NARROW_INT) {
+        continue;
+      }
+
       auto new_msg = gnss_msg_list.add_gps_msgs();
-      new_msg->set_timestamp(msg->header.stamp.toSec());
+      new_msg->set_timestamp(timestamp);
       new_msg->set_latitude(msg->bestpos_lat);
       new_msg->set_longitude(msg->bestpos_lon);
       new_msg->set_altitude(msg->bestpos_hgt);
 
-      new_msg->set_lat_std(0.03);  // latitude variance -> std
-      new_msg->set_lon_std(0.03);  // longitude variance -> std
-      new_msg->set_alt_std(0.1);   // altitude variance -> std
+      // Standard deviations
+      new_msg->set_lat_std(msg->bestpos_latstd);
+      new_msg->set_lon_std(msg->bestpos_lonstd);
+      new_msg->set_alt_std(msg->bestpos_hgtstd);
 
-      spdlog::info("Processed GNSS message at time: {:.6f} lat={:.8f}, lon={:.8f}, alt={:.3f}, lat_std={:.3f}, lon_std={:.3f}, alt_std={:.3f}",
-                   msg->header.stamp.toSec(), msg->bestpos_lat, msg->bestpos_lon, msg->bestpos_hgt, new_msg->lat_std(), new_msg->lon_std(),
-                   new_msg->alt_std());
+      //spdlog::info("Processed GNSS message at time: {:.6f} lat={:.8f}, lon={:.8f}, alt={:.3f}",
+      //             timestamp, msg->bestpos_lat, msg->bestpos_lon, msg->bestpos_hgt);
     }
   }
+
+  // Close GNSS CSV file
+  gnss_csv.close();
+  spdlog::info("GNSS raw data CSV written to: {}/gnss_raw.csv", FLAGS_output_dir);
 
   {
     // Read calibration from YAML file

@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "common/types.h"
+#include "io/local_enu_transformer.h"
 
 /**
  * @brief Load the submaps from a las file.
@@ -27,9 +28,11 @@ void LoadSubmapList(const std::string &project,
  *
  * @param submaps
  * @param output_filename
+ * @param proj4_string Optional PROJ4 coordinate system string (e.g. LocalENU)
  */
 void SaveLasFile(const std::vector<TimestampedPointCloud> &submaps,
-                 const std::string &output_filename);
+                 const std::string &output_filename,
+                 const std::string &proj4_string = "");
 
 /**
  * @brief Load GNSS/RTK data from gnss.dat file
@@ -54,40 +57,3 @@ bool LoadGnssData(const std::string &gnss_filename,
  */
 bool LoadGnssDataFromProject(const std::string &project_path,
                              std::vector<GpsData> &gnss_data);
-
-#include <proj.h>
-
-/**
- * @brief LocalENU coordinate transformer using PROJ library
- *
- * Converts from WGS84 (latitude/longitude/altitude) to local ENU
- * (East-North-Up) coordinates. The origin is the first GNSS measurement.
- */
-class LocalENUTransformer {
- public:
-  /**
-   * @brief Initialize transformer with WGS84 origin (lat/lon in degrees)
-   */
-  LocalENUTransformer(double origin_lat_deg, double origin_lon_deg,
-                      double origin_alt_m);
-  ~LocalENUTransformer();
-
-  // Non-copyable due to PROJ resource ownership
-  LocalENUTransformer(const LocalENUTransformer &) = delete;
-  LocalENUTransformer &operator=(const LocalENUTransformer &) = delete;
-
-  /**
-   * @brief Convert WGS84 coordinates to local ENU (meters)
-   */
-  Eigen::Vector3d Convert(double lat_deg, double lon_deg, double alt_m) const;
-
-  double GetOriginLat() const { return origin_lat_; }
-  double GetOriginLon() const { return origin_lon_; }
-
- private:
-  double origin_lat_;
-  double origin_lon_;
-  double origin_alt_;
-  PJ_CONTEXT *ctx_ = nullptr;
-  PJ *transformer_ = nullptr;
-};

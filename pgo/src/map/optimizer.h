@@ -16,8 +16,10 @@ void Optimize(std::vector<TimestampedPointCloud> &submaps,
  * @param gnss_data Vector of GNSS/RTK measurements
  * @param config PGO configuration
  * @param use_rtk Whether to enable RTK constraints
+ * @param proj4_string Output reference to receive PROJ4 coordinate system string
  */
 void OptimizeWithGnss(std::vector<TimestampedPointCloud> &submaps,
                       const std::vector<GpsData> &gnss_data,
                       const proto::PgoConfig &config,
-                      bool use_rtk = false);
+                      bool use_rtk,
+                      std::string &proj4_string);

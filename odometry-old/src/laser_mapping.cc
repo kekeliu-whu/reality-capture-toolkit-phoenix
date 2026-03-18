@@ -50,7 +50,6 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
-#include <nlohmann/json.hpp>
 #include <thread>
 
 #include "imu_processing.h"

@@ -45,6 +45,7 @@ set(
   src/map/pgo_runner.cc
   src/map/utils.cc
   src/io/read_write.cc
+  src/io/local_enu_transformer.cc
   src/common/msg_conversions.h
   src/common/types.h
   src/factor/gps_factor.h
@@ -53,6 +54,7 @@ set(
   src/factor/pose_graph_edge_factor.h
   src/factor/rtk_factor.h
   src/io/read_write.h
+  src/io/local_enu_transformer.h
   src/map/optimizer.h
   src/map/pgo_runner.h
   src/map/utils.h

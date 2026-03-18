@@ -26,27 +26,28 @@ void LoadRawScans(
   const std::string traj_dat_filename = project_path + "/traj.dat";
   const std::string lidar_undist_filename = project_path + "/lidar_undist.dat";
 
-  // Load trajectory from traj.dat (low-frequency, one pose per LiDAR frame)
+  // Load trajectory from traj.dat (low-frequency, one pose per LiDAR frame, in order)
   proto::PoseMsgList traj_msg_list;
   if (!ReadPoseFile(traj_dat_filename, traj_msg_list)) {
     spdlog::error("Failed to read trajectory from: {}", traj_dat_filename);
     exit(1);
   }
 
-  std::map<double, Sophus::SE3d> traj;
+  std::vector<Sophus::SE3d> poses;
   for (const auto &pose_msg : traj_msg_list.pose_msgs()) {
     Eigen::Quaterniond q(pose_msg.rw(), pose_msg.rx(), pose_msg.ry(), pose_msg.rz());
     Eigen::Vector3d pos(pose_msg.tx(), pose_msg.ty(), pose_msg.tz());
-    traj[pose_msg.timestamp()] = Sophus::SE3d(q.normalized().toRotationMatrix(), pos);
+    poses.push_back(Sophus::SE3d(q.normalized().toRotationMatrix(), pos));
   }
-  spdlog::info("Loaded {} poses from {}", traj.size(), traj_dat_filename);
+  spdlog::info("Loaded {} poses from {}", poses.size(), traj_dat_filename);
 
-  if (traj.empty()) {
+  if (poses.empty()) {
     spdlog::error("No poses loaded from {}", traj_dat_filename);
     exit(1);
   }
 
   // Read lidar_undist.dat (proto::LidarMsg stream, body frame, undistorted)
+  // Scans and poses have 1:1 correspondence
   SequentialLidarFileReader<proto::LidarMsg> lidar_reader;
   if (!lidar_reader.Open(lidar_undist_filename)) {
     spdlog::error("Failed to open: {}", lidar_undist_filename);
@@ -60,39 +61,28 @@ void LoadRawScans(
       continue;
     }
 
+    // Check if scan index is within bounds
+    if (scan_count >= poses.size()) {
+      spdlog::warn("More scans than poses, stopping at scan {}", scan_count);
+      break;
+    }
+
     double scan_timestamp = 0.0;
     if (lidar_msg->points().size() > 0) {
       scan_timestamp = lidar_msg->points(0).timestamp();
     }
 
-    // Find closest pose
-    auto it = traj.lower_bound(scan_timestamp);
-    if (it != traj.begin() && it != traj.end()) {
-      auto prev = std::prev(it);
-      if (std::abs(prev->first - scan_timestamp) < std::abs(it->first - scan_timestamp)) {
-        it = prev;
-      }
-    } else if (it == traj.end()) {
-      --it;
-    }
-
-    double time_diff = std::abs(it->first - scan_timestamp);
-    if (time_diff > 1.0) {
-      spdlog::warn("No matching pose for scan at t={:.6f} (closest diff={:.3f}s), skipping", scan_timestamp, time_diff);
-      continue;
-    }
-
-    const Sophus::SE3d &pose_w = it->second;
+    // Use corresponding pose directly (1:1 correspondence)
+    const Sophus::SE3d &pose_w = poses[scan_count];
     TimestampedPointCloud scan;
     scan.timestamp = scan_timestamp;
     scan.pose      = pose_w;
 
-    // Points in lidar_undist.dat are in body frame, transform to world frame
+    // Points in lidar_undist.dat are in body frame, keep them in body frame (no coordinate transform)
     for (const auto &pt_proto : lidar_msg->points()) {
       Eigen::Vector3d p_body(pt_proto.x(), pt_proto.y(), pt_proto.z());
-      Eigen::Vector3d p_world = pose_w * p_body;
       PointType pt;
-      pt.getVector3fMap() = p_world.cast<float>();
+      pt.getVector3fMap() = p_body.cast<float>();
       pt.intensity        = pt_proto.intensity();
       scan.cloud->push_back(pt);
     }
@@ -102,6 +92,11 @@ void LoadRawScans(
   }
 
   lidar_reader.Close();
+  
+  if (scan_count != poses.size()) {
+    spdlog::warn("Loaded {} scans but have {} poses", scan_count, poses.size());
+    exit(1);
+  }
   spdlog::info("Loaded {} scans from {}", scan_count, lidar_undist_filename);
 }
 
@@ -124,12 +119,14 @@ void BuildSubMapFromRawScans(const std::vector<TimestampedPointCloud> &scans,
       current_submap.pose      = scan.pose;
       current_submap.timestamp = scan.timestamp;
     }
-    Sophus::SE3d pose_scan_to_cur_submap =
+
+    Sophus::SE3d pose_scan_body_to_submap_body = 
         current_submap.pose.inverse() * scan.pose;
-    for (auto &p : scan.cloud->points) {
+    
+    for (const auto &p : scan.cloud->points) {
       auto np = p;
       np.getVector3fMap() =
-          (pose_scan_to_cur_submap * np.getVector3fMap().cast<double>())
+          (pose_scan_body_to_submap_body * np.getVector3fMap().cast<double>())
               .cast<float>();
       current_submap.cloud->push_back(np);
     }
@@ -151,7 +148,8 @@ void LoadSubmapList(const std::string &project_path,
 
 // todo kk to be tested
 void SaveLasFile(const std::vector<TimestampedPointCloud> &submaps,
-                 const std::string &output_filename) {
+                 const std::string &output_filename,
+                 const std::string &proj4_string) {
   pdal::PointTable table;
   pdal::PointLayoutPtr layout = table.layout();
 
@@ -189,6 +187,11 @@ void SaveLasFile(const std::vector<TimestampedPointCloud> &submaps,
   options.add("offset_z", "auto");
   options.add("minor_version", 2);
   options.add("dataformat_id", 1);  // PointFormat = 1
+  
+  // Add coordinate system if provided
+  if (!proj4_string.empty()) {
+    options.add("a_srs", proj4_string);
+  }
 
   pdal::LasWriter writer;
   writer.setOptions(options);
@@ -200,59 +203,6 @@ void SaveLasFile(const std::vector<TimestampedPointCloud> &submaps,
 namespace {
 }  // namespace
 
-// LocalENUTransformer implementation
-
-LocalENUTransformer::LocalENUTransformer(double origin_lat_deg,
-                                         double origin_lon_deg,
-                                         double origin_alt_m)
-    : origin_lat_(origin_lat_deg),
-      origin_lon_(origin_lon_deg),
-      origin_alt_(origin_alt_m) {
-  ctx_ = proj_context_create();
-
-  // Build target local ENU projection (tmerc centered at origin)
-  std::ostringstream oss;
-  oss << std::fixed << std::setprecision(9)
-      << "+proj=tmerc +lat_0=" << origin_lat_deg
-      << " +lon_0=" << origin_lon_deg
-      << " +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs";
-  std::string target_proj_str = oss.str();
-
-  // Source CRS: WGS84 geographic (EPSG:4326)
-  transformer_ = proj_create_crs_to_crs(ctx_, "EPSG:4326", target_proj_str.c_str(), nullptr);
-  if (!transformer_) {
-    spdlog::error("LocalENUTransformer: failed to create PROJ transformer to {}", target_proj_str);
-    exit(1);
-  }
-  spdlog::info("LocalENUTransformer initialized: origin lat={:.6f}deg, lon={:.6f}deg, alt={:.2f}m",
-               origin_lat_deg, origin_lon_deg, origin_alt_m);
-}
-
-LocalENUTransformer::~LocalENUTransformer() {
-  if (transformer_) {
-    proj_destroy(transformer_);
-    transformer_ = nullptr;
-  }
-  if (ctx_) {
-    proj_context_destroy(ctx_);
-    ctx_ = nullptr;
-  }
-}
-
-Eigen::Vector3d LocalENUTransformer::Convert(double lat_deg, double lon_deg,
-                                              double alt_m) const {
-  // EPSG:4326 expects (latitude, longitude) order
-  PJ_COORD coord_in = proj_coord(lat_deg, lon_deg, alt_m, 0);
-  PJ_COORD coord_out = proj_trans(transformer_, PJ_FWD, coord_in);
-
-  if (coord_out.xyz.x == HUGE_VAL || coord_out.xyz.y == HUGE_VAL) {
-    spdlog::warn("LocalENUTransformer::Convert failed for lat={:.6f}, lon={:.6f}", lat_deg, lon_deg);
-    return Eigen::Vector3d::Zero();
-  }
-  // tmerc output: x=East, y=North; altitude delta as Up
-  return Eigen::Vector3d(coord_out.xyz.x, coord_out.xyz.y, alt_m - origin_alt_);
-}
-
 bool LoadGnssData(const std::string &gnss_filename,
                   std::vector<GpsData> &gnss_data) {
   proto::GpsMsgList gnss_msg_list;
@@ -261,7 +211,17 @@ bool LoadGnssData(const std::string &gnss_filename,
     return false;
   }
 
+  if (gnss_msg_list.gps_msgs().empty()) {
+    spdlog::warn("No GNSS measurements in file: {}", gnss_filename);
+    return false;
+  }
+
+  // Create transformer using first GNSS point as origin
+  const auto &first_msg = gnss_msg_list.gps_msgs(0);
+  LocalENUTransformer transformer(first_msg.latitude(), first_msg.longitude());
+
   gnss_data.clear();
+  
   for (const auto &msg : gnss_msg_list.gps_msgs()) {
     GpsData gps;
     gps.timestamp = msg.timestamp();
@@ -271,10 +231,12 @@ bool LoadGnssData(const std::string &gnss_filename,
     gps.lat_std   = msg.lat_std();
     gps.lon_std   = msg.lon_std();
     gps.alt_std   = msg.alt_std();
+    
     gnss_data.push_back(gps);
   }
 
-  spdlog::info("Loaded {} GNSS measurements from {}", gnss_data.size(), gnss_filename);
+  spdlog::info("Loaded {} GNSS measurements from {}", 
+               gnss_data.size(), gnss_filename);
   return !gnss_data.empty();
 }
 

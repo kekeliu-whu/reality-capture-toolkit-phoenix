@@ -24,17 +24,12 @@ void PgoRunner::Run(const std::string &input_path,
   // Try to load GNSS data for fusion
   std::vector<GpsData> gnss_data;
   bool has_gnss_data = LoadGnssDataFromProject(input_path, gnss_data);
-  
+
   // Use RTK constraints if both GNSS data is available and user enabled it
   bool use_rtk = has_gnss_data && use_rtk_constraint_;
-  
-  if (use_rtk) {
-    spdlog::info("GNSS data found ({}), using RTK fusion optimization", gnss_data.size());
-  } else {
-    spdlog::info("No GNSS data or RTK disabled, using standard PGO optimization");
-  }
-  
-  OptimizeWithGnss(submaps, gnss_data, config_, use_rtk);
+
+  std::string proj4_string;
+  OptimizeWithGnss(submaps, gnss_data, config_, use_rtk, proj4_string);
 
   // reload and save optimized submaps
   std::vector<TimestampedPointCloud> submaps_reload;
@@ -43,5 +38,6 @@ void PgoRunner::Run(const std::string &input_path,
   for (size_t i = 0; i < submaps_reload.size(); ++i) {
     submaps_reload[i].pose = submaps[i].pose;
   }
-  SaveLasFile(submaps_reload, output_path + "/map_optimized.las");
+  spdlog::info("Saving optimized map to {}", output_path + "/map_opt.las");
+  SaveLasFile(submaps_reload, output_path + "/map_opt.las", proj4_string);
 }
