@@ -35,20 +35,6 @@ void SaveLasFile(const std::vector<TimestampedPointCloud> &submaps,
                  const std::string &proj4_string = "");
 
 /**
- * @brief Load GNSS/RTK data from gnss.dat file
- *
- * The gnss.dat file should contain GNSS measurements with format:
- * timestamp latitude longitude altitude lat_std lon_std alt_std
- * [optional RTK fields: fix_type num_satellites gdop hdop vdop baseline heading pitch roll heading_std]
- *
- * @param gnss_filename Path to gnss.dat file
- * @param gnss_data Vector to store loaded GNSS data
- * @return true if successfully loaded, false otherwise
- */
-bool LoadGnssData(const std::string &gnss_filename,
-                  std::vector<GpsData> &gnss_data);
-
-/**
  * @brief Load GNSS/RTK data from protobuf format
  *
  * @param project_path Path to project directory

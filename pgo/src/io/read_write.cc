@@ -1,17 +1,17 @@
 
+#include <proj.h>
+#include <spdlog/spdlog.h>
 #include <Eigen/Dense>
 #include <algorithm>
 #include <fstream>
 #include <map>
-#include <proj.h>
-#include <sstream>
 #include <pdal/Options.hpp>
 #include <pdal/PointTable.hpp>
 #include <pdal/PointView.hpp>
 #include <pdal/io/BufferReader.hpp>
 #include <pdal/io/LasReader.hpp>
 #include <pdal/io/LasWriter.hpp>
-#include <spdlog/spdlog.h>
+#include <sstream>
 #include <vector>
 
 #include "map/utils.h"
@@ -23,7 +23,7 @@ namespace {
 void LoadRawScans(
     const std::string &project_path,
     std::vector<TimestampedPointCloud> &scans) {
-  const std::string traj_dat_filename = project_path + "/traj.dat";
+  const std::string traj_dat_filename     = project_path + "/traj.dat";
   const std::string lidar_undist_filename = project_path + "/lidar_undist.dat";
 
   // Load trajectory from traj.dat (low-frequency, one pose per LiDAR frame, in order)
@@ -92,7 +92,7 @@ void LoadRawScans(
   }
 
   lidar_reader.Close();
-  
+
   if (scan_count != poses.size()) {
     spdlog::warn("Loaded {} scans but have {} poses", scan_count, poses.size());
     exit(1);
@@ -120,9 +120,9 @@ void BuildSubMapFromRawScans(const std::vector<TimestampedPointCloud> &scans,
       current_submap.timestamp = scan.timestamp;
     }
 
-    Sophus::SE3d pose_scan_body_to_submap_body = 
+    Sophus::SE3d pose_scan_body_to_submap_body =
         current_submap.pose.inverse() * scan.pose;
-    
+
     for (const auto &p : scan.cloud->points) {
       auto np = p;
       np.getVector3fMap() =
@@ -187,7 +187,7 @@ void SaveLasFile(const std::vector<TimestampedPointCloud> &submaps,
   options.add("offset_z", "auto");
   options.add("minor_version", 2);
   options.add("dataformat_id", 1);  // PointFormat = 1
-  
+
   // Add coordinate system if provided
   if (!proj4_string.empty()) {
     options.add("a_srs", proj4_string);
@@ -203,8 +203,8 @@ void SaveLasFile(const std::vector<TimestampedPointCloud> &submaps,
 namespace {
 }  // namespace
 
-bool LoadGnssData(const std::string &gnss_filename,
-                  std::vector<GpsData> &gnss_data) {
+bool LoadGnssDataFromProject(const std::string &gnss_filename,
+                             std::vector<GpsData> &gnss_data) {
   proto::GpsMsgList gnss_msg_list;
   if (!ReadGnssFile(gnss_filename, gnss_msg_list)) {
     spdlog::error("Failed to read GNSS file: {}", gnss_filename);
@@ -221,7 +221,23 @@ bool LoadGnssData(const std::string &gnss_filename,
   LocalENUTransformer transformer(first_msg.latitude(), first_msg.longitude());
 
   gnss_data.clear();
-  
+
+  // Open output txt file for writing
+  std::string output_txt = gnss_filename;
+  size_t dot_pos         = output_txt.rfind('.');
+  if (dot_pos != std::string::npos) {
+    output_txt = output_txt.substr(0, dot_pos);
+  }
+  output_txt += ".csv";
+
+  std::ofstream txt_file(output_txt);
+  if (!txt_file) {
+    spdlog::error("Failed to open GNSS output file: {}", output_txt);
+    return false;
+  }
+
+  txt_file << "east_m north_m up_m lat_std lon_std alt_std timestamp_s\n";
+
   for (const auto &msg : gnss_msg_list.gps_msgs()) {
     GpsData gps;
     gps.timestamp = msg.timestamp();
@@ -231,16 +247,20 @@ bool LoadGnssData(const std::string &gnss_filename,
     gps.lat_std   = msg.lat_std();
     gps.lon_std   = msg.lon_std();
     gps.alt_std   = msg.alt_std();
-    
+
+    // Transform to ENU coordinates
+    Eigen::Vector3d enu = transformer.Convert(msg.latitude(), msg.longitude(), msg.altitude());
+
+    // Write to txt file: timestamp east north up lat_std lon_std alt_std
+    txt_file << fmt::format("{:.6f} {:.6f} {:.6f} {:.6f} {:.6f} {:.6f} {:.6f}\n", enu.x(), enu.y(), enu.z(),
+                            gps.lat_std, gps.lon_std, gps.alt_std,
+                            gps.timestamp);
+
     gnss_data.push_back(gps);
   }
 
-  spdlog::info("Loaded {} GNSS measurements from {}", 
-               gnss_data.size(), gnss_filename);
+  txt_file.close();
+  spdlog::info("Loaded {} GNSS measurements from {}, wrote to {}",
+               gnss_data.size(), gnss_filename, output_txt);
   return !gnss_data.empty();
-}
-
-bool LoadGnssDataFromProject(const std::string &project_path,
-                             std::vector<GpsData> &gnss_data) {
-  return LoadGnssData(project_path + "/gnss.dat", gnss_data);
 }

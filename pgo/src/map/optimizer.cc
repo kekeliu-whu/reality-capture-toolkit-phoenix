@@ -4,12 +4,12 @@
 #include <pcl/kdtree/kdtree.h>
 #include <pcl/registration/gicp.h>
 #include <spdlog/spdlog.h>
-#include <fstream>
 
 #include "factor/gravity_factor.h"
 #include "factor/local_parameterization_se3.h"
 #include "factor/pose_graph_edge_factor.h"
 #include "factor/rtk_factor.h"
+#include "io/local_enu_transformer.h"
 #include "io/read_write.h"
 #include "optimizer.h"
 
@@ -240,33 +240,15 @@ namespace {
 void AddGnssConstraints(
     ceres::Problem &problem,
     std::vector<TimestampedPointCloud> &submaps,
+    const LocalENUTransformer &transformer,
     const std::vector<GpsData> &gnss_data,
-    std::set<ceres::ResidualBlockId> &prior_residual_blocks,
-    std::string &proj4_string) {
+    std::set<ceres::ResidualBlockId> &prior_residual_blocks) {
   if (gnss_data.empty()) {
     spdlog::warn("No GNSS data provided, skipping GNSS constraints");
     return;
   }
 
-  // Create transformer with first GNSS point as LocalENU origin
-  LocalENUTransformer transformer(gnss_data[0].latitude,
-                                  gnss_data[0].longitude);
-
   int gnss_constraints_added = 0;
-
-  // Generate proj4 string
-  std::ostringstream oss;
-  oss << std::fixed << std::setprecision(9)
-      << "+proj=tmerc +lat_0=" << gnss_data[0].latitude
-      << " +lon_0=" << gnss_data[0].longitude
-      << " +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs";
-  proj4_string = oss.str();
-
-  // Open CSV file for writing interpolated GNSS coordinates
-  std::ofstream gnss_csv("gnss.csv");
-  if (gnss_csv) {
-    gnss_csv << "timestamp,east,north,up,lat_std,lon_std,alt_std\n";
-  }
 
   // For each submap, find GNSS data points that bracket its timestamp and interpolate
   for (size_t submap_idx = 0; submap_idx < submaps.size(); ++submap_idx) {
@@ -314,12 +296,6 @@ void AddGnssConstraints(
 
     Eigen::Vector3d position_std(interp_lat_std, interp_lon_std, interp_alt_std);
 
-    // Write to CSV file
-    if (gnss_csv) {
-      gnss_csv << fmt::format("{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f}\n",
-                              submap_timestamp, enu_gps.x(), enu_gps.y(), enu_gps.z(),
-                              interp_lat_std, interp_lon_std, interp_alt_std);
-    }
 
     spdlog::info("enu {} {} {} {} {} {}", enu_gps[0], enu_gps[1], enu_gps[2], submaps[submap_idx].pose.translation().x(),
                  submaps[submap_idx].pose.translation().y(), submaps[submap_idx].pose.translation().z());
@@ -328,11 +304,6 @@ void AddGnssConstraints(
         position_factor, nullptr, submaps[submap_idx].pose.data());
     prior_residual_blocks.insert(residual_id);
     gnss_constraints_added++;
-  }
-
-  if (gnss_csv) {
-    gnss_csv.close();
-    spdlog::info("GNSS coordinates written to gnss.csv");
   }
 
   spdlog::info("Added {} GNSS constraints to {} submaps",
@@ -367,7 +338,9 @@ void OptimizeWithGnss(std::vector<TimestampedPointCloud> &submaps,
 
   // Add GNSS constraints only if enabled
   if (use_rtk && !gnss_data.empty()) {
-    AddGnssConstraints(problem, submaps, gnss_data, prior_residual_blocks, proj4_string);
+    LocalENUTransformer transformer(gnss_data[0].latitude, gnss_data[0].longitude);
+    proj4_string = transformer.GetProj4String();
+    AddGnssConstraints(problem, submaps, transformer, gnss_data, prior_residual_blocks);
   }
 
   // Iterative optimization with loop closure and GNSS updates

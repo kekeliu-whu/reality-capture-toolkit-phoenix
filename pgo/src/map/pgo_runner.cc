@@ -23,7 +23,7 @@ void PgoRunner::Run(const std::string &input_path,
 
   // Try to load GNSS data for fusion
   std::vector<GpsData> gnss_data;
-  bool has_gnss_data = LoadGnssDataFromProject(input_path, gnss_data);
+  bool has_gnss_data = LoadGnssDataFromProject(input_path + "/gnss.dat", gnss_data);
 
   // Use RTK constraints if both GNSS data is available and user enabled it
   bool use_rtk = has_gnss_data && use_rtk_constraint_;

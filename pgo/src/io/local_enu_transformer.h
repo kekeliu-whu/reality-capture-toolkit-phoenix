@@ -2,6 +2,7 @@
 
 #include <Eigen/Core>
 #include <proj.h>
+#include <string>
 
 /**
  * @brief LocalENU coordinate transformer using PROJ library
@@ -28,10 +29,12 @@ class LocalENUTransformer {
 
   double GetOriginLat() const { return origin_lat_; }
   double GetOriginLon() const { return origin_lon_; }
+  const std::string &GetProj4String() const { return proj4_string_; }
 
  private:
   double origin_lat_;
   double origin_lon_;
+  std::string proj4_string_;
   PJ_CONTEXT *ctx_ = nullptr;
   PJ *transformer_ = nullptr;
 };

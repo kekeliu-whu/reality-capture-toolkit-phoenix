@@ -18,6 +18,7 @@ LocalENUTransformer::LocalENUTransformer(double origin_lat_deg,
       << " +lon_0=" << origin_lon_deg
       << " +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs";
   std::string target_proj_str = oss.str();
+  proj4_string_ = target_proj_str;
 
   // Source CRS: WGS84 geographic (EPSG:4326)
   transformer_ = proj_create_crs_to_crs(ctx_, "EPSG:4326", target_proj_str.c_str(), nullptr);
