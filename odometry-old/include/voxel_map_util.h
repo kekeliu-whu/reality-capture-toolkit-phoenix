@@ -169,16 +169,6 @@ void CalcQuation(const Eigen::Vector3d &vec, const int axis,
 void CalcBodyCov(Eigen::Vector3d &pb, const float range_inc,
                  const float degree_inc, Eigen::Matrix3d &cov);
 
-template <typename T>
-void DownSamplingVoxel(const pcl::PointCloud<PointType> &cloud_in,
-                       pcl::PointCloud<PointType> &cloud_out,
-                       double voxel_size);
-
-template <typename T>
-void DownSamplingVoxelRandom(const pcl::PointCloud<PointType> &cloud_in,
-                             pcl::PointCloud<PointType> &cloud_out,
-                             double voxel_size);
-
 void InitVoxelMapParams(double min_plane_likeness);
 
 #endif

@@ -55,13 +55,13 @@
 #include "imu_processing.h"
 #include "migration/inc_las_writer.h"
 #include "migration/logging.h"
+#include "point_cloud_utils.h"
 #include "preprocess.h"
 #include "sophus/se3.hpp"
 #include "voxel_map_util.h"
 
 DEFINE_string(project_dirname, "D:\\slam", "Path to the IMU data file");
-DEFINE_string(output_dir, "D:\\slam\\output", "Directory to save output trajectory");
-DEFINE_bool(indoor, true, "Set to true for indoor environments");
+DEFINE_string(output_dir, "D:\\slam", "Directory to save output trajectory");
 
 /*** Time Log Variables ***/
 bool runtime_pos_log = false, extrinsic_est_en = true;
@@ -69,8 +69,7 @@ bool runtime_pos_log = false, extrinsic_est_en = true;
 
 double last_timestamp_lidar = 0, last_timestamp_imu = -1.0;
 double gyr_cov = 0.1, acc_cov = 0.1, b_gyr_cov = 0.0001, b_acc_cov = 0.0001;
-double filter_size_surf_min = 0;
-double lidar_end_time       = 0;
+double lidar_end_time  = 0;
 int    feats_down_size = 0, NUM_MAX_ITERATIONS = 0;
 bool   lidar_pushed, flg_first_scan = true, flg_exit = false;
 
@@ -421,16 +420,15 @@ int main(int argc, char **argv) {
 
   bool init_map = false;
 
-  NUM_MAX_ITERATIONS   = 4;
-  filter_size_surf_min = 0.5;
-  gyr_cov              = 0.1;
-  acc_cov              = 0.1;
-  b_gyr_cov            = 0.0001;
-  b_acc_cov            = 0.0001;
-  p_pre->blind         = 0.2;
-  p_pre->SCAN_RATE     = 10;
-  runtime_pos_log      = true;
-  extrinsic_est_en     = false;
+  NUM_MAX_ITERATIONS = 4;
+  gyr_cov            = 0.1;
+  acc_cov            = 0.1;
+  b_gyr_cov          = 0.0001;
+  b_acc_cov          = 0.0001;
+  p_pre->blind       = 0.2;
+  p_pre->SCAN_RATE   = 10;
+  runtime_pos_log    = true;
+  extrinsic_est_en   = false;
 
   // Load calibration parameters from JSON file
   load_calibration_from_file(FLAGS_project_dirname + "/calibration.dat", Lidar_R_wrt_IMU, Lidar_T_wrt_IMU,
@@ -439,21 +437,23 @@ int main(int argc, char **argv) {
   ranging_cov = 0.05;
   angle_cov   = 0.2;
 
-  if (FLAGS_indoor) {
-    spdlog::info("Indoor mode enabled.");
-    max_points_size      = 200;
-    max_voxel_size       = 0.5;
-    max_layer            = 2;
-    layer_size           = std::vector<int>({5, 5, 5, 5, 5});
-    filter_size_surf_min = 0.25;
-  } else {
-    spdlog::info("Outdoor mode enabled.");
-    max_points_size      = 200;
-    max_voxel_size       = 1.0;
-    max_layer            = 2;
-    layer_size           = std::vector<int>({5, 5, 5, 5, 5});
-    filter_size_surf_min = 0.5;
-  }
+  // if (FLAGS_indoor) {
+  //   spdlog::info("Indoor mode enabled.");
+  //   max_points_size      = 200;
+  //   max_voxel_size       = 0.5;
+  //   max_layer            = 2;
+  //   layer_size           = std::vector<int>({5, 5, 5, 5, 5});
+  // } else {
+  //   spdlog::info("Outdoor mode enabled.");
+  //   max_points_size      = 200;
+  //   max_voxel_size       = 1.0;
+  //   max_layer            = 2;
+  //   layer_size           = std::vector<int>({5, 5, 5, 5, 5});
+  // }
+  max_points_size = 200;
+  max_voxel_size  = 0.8;
+  max_layer       = 2;
+  layer_size      = std::vector<int>({5, 5, 5, 5, 5});
 
   min_eigen_value                = 0.01;
   min_plane_likeness             = 0.2;
@@ -554,9 +554,9 @@ int main(int argc, char **argv) {
       }
 
       /*** downsample the feature points in a scan ***/
-      DownSamplingVoxelRandom<PointType>(*feats_undistort, *feats_down_body, filter_size_surf_min);
-      spdlog::info("Downsampled from {} to {} points with voxel size {}.", feats_undistort->points.size(),
-                   feats_down_body->points.size(), filter_size_surf_min);
+
+      DownsamplePoints(*feats_undistort, *feats_down_body, 4000);
+      spdlog::info("Downsampled from {} to {} points.", feats_undistort->points.size(), feats_down_body->points.size());
       t1              = omp_get_wtime();
       feats_down_size = feats_down_body->points.size();
 

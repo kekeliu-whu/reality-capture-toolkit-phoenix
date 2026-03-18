@@ -6,8 +6,7 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <migration/proto_io.h>
 
-typedef pcl::PointXYZINormal       PointType;
-typedef pcl::PointCloud<PointType> PointCloudXYZI;
+#include "point_cloud_utils.h"
 
 namespace velodyne_ros {
 struct EIGEN_ALIGN16 Point {

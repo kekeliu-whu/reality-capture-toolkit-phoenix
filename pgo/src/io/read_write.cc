@@ -1,15 +1,11 @@
 
-#include <proj.h>
 #include <spdlog/spdlog.h>
 #include <Eigen/Dense>
-#include <algorithm>
 #include <fstream>
-#include <map>
 #include <pdal/Options.hpp>
 #include <pdal/PointTable.hpp>
 #include <pdal/PointView.hpp>
 #include <pdal/io/BufferReader.hpp>
-#include <pdal/io/LasReader.hpp>
 #include <pdal/io/LasWriter.hpp>
 #include <sstream>
 #include <vector>

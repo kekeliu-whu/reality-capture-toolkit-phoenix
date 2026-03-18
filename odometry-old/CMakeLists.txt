@@ -85,7 +85,7 @@ function(add_private_tool name)
   target_link_libraries(${name} ${PGO_PRIVATE_LIBS})
 endfunction()
 
-add_private_tool(slam src/laser_mapping.cc)
+add_private_tool(slam src/laser_mapping.cc src/point_cloud_utils.cc)
 add_private_tool(smooth_cloud src/smooth_cloud.cc)
 add_private_tool(colorize_cloud_general src/colorize_cloud_general.cc)
 add_private_tool(gravity_align src/gravity_align.cc)
