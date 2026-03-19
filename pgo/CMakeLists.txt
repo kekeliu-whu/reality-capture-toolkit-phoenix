@@ -48,6 +48,7 @@ set(
   src/io/local_enu_transformer.cc
   src/common/msg_conversions.h
   src/common/types.h
+  src/factor/btc_factor.h
   src/factor/gps_factor.h
   src/factor/gravity_factor.h
   src/factor/local_parameterization_se3.h
@@ -79,6 +80,6 @@ function(add_private_tool name)
   target_link_libraries(${name} ${PGO_PRIVATE_LIBS})
 endfunction()
 
-add_private_tool(pgo_main src/pgo_main.cc)
+add_private_tool(slam_post src/pgo_main.cc)
 add_private_tool(process_point_cloud_std src/tools/process_point_cloud_std.cc)
 add_private_tool(calib_camera_pose src/tools/calib_camera_pose.cc)

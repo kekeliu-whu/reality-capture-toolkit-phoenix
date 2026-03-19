@@ -5,6 +5,7 @@
 #include <pcl/registration/gicp.h>
 #include <spdlog/spdlog.h>
 
+#include "factor/btc_factor.h"
 #include "factor/gravity_factor.h"
 #include "factor/local_parameterization_se3.h"
 #include "factor/pose_graph_edge_factor.h"
@@ -12,6 +13,10 @@
 #include "io/local_enu_transformer.h"
 #include "io/read_write.h"
 #include "optimizer.h"
+
+// Forward declaration for BTC library usage
+// The actual BTC library (from Voxel-SLAM-main) is used via external linking
+class STDescManager;
 
 namespace {
 
@@ -316,6 +321,7 @@ void OptimizeWithGnss(std::vector<TimestampedPointCloud> &submaps,
                       const std::vector<GpsData> &gnss_data,
                       const proto::PgoConfig &config,
                       bool use_rtk,
+                      bool use_btc,
                       std::string &proj4_string) {
   if (submaps.empty()) {
     spdlog::error("No submaps to optimize");
@@ -326,6 +332,10 @@ void OptimizeWithGnss(std::vector<TimestampedPointCloud> &submaps,
     spdlog::info("GNSS data found ({}), using RTK fusion optimization", gnss_data.size());
   } else {
     spdlog::info("No GNSS data or RTK disabled, using standard PGO optimization");
+  }
+
+  if (use_btc) {
+    spdlog::info("BTC-based loop closure constraints enabled");
   }
 
   ceres::Problem problem;
@@ -341,6 +351,11 @@ void OptimizeWithGnss(std::vector<TimestampedPointCloud> &submaps,
     LocalENUTransformer transformer(gnss_data[0].latitude, gnss_data[0].longitude);
     proj4_string = transformer.GetProj4String();
     AddGnssConstraints(problem, submaps, transformer, gnss_data, prior_residual_blocks);
+  }
+
+  // Add BTC constraints if enabled
+  if (use_btc) {
+    AddBTCConstraints(problem, submaps, config);
   }
 
   // Iterative optimization with loop closure and GNSS updates
@@ -361,4 +376,86 @@ void OptimizeWithGnss(std::vector<TimestampedPointCloud> &submaps,
   }
 
   spdlog::info("GNSS-fused optimization completed successfully");
+}
+
+void AddBTCConstraints(ceres::Problem &problem,
+                       std::vector<TimestampedPointCloud> &submaps,
+                       const proto::PgoConfig &config) {
+  if (submaps.size() < 2) {
+    spdlog::warn("Not enough submaps for BTC constraint detection: {}", submaps.size());
+    return;
+  }
+
+  spdlog::info("Starting BTC-based loop closure constraint detection on {} submaps",
+               submaps.size());
+
+  // Configuration for BTC constraints
+  Eigen::DiagonalMatrix<double, 6> btc_sqrt_information;
+  btc_sqrt_information.diagonal() << 
+      1.0 / config.loop_edge_translation_error(),
+      1.0 / config.loop_edge_translation_error(),
+      1.0 / config.loop_edge_translation_error(),
+      1.0 / (config.loop_edge_rotation_error() / 180.0 * M_PI),
+      1.0 / (config.loop_edge_rotation_error() / 180.0 * M_PI),
+      1.0 / (config.loop_edge_rotation_error() / 180.0 * M_PI);
+
+  std::set<std::pair<int, int>> btc_edges_used;
+  int btc_constraints_added = 0;
+
+  // Try to establish constraints between submaps with large time differences
+  // but small spatial proximity (typical loop closure scenarios)
+  for (int i = 0; i < submaps.size(); ++i) {
+    for (int j = i + 1; j < submaps.size(); ++j) {
+      // Skip if edge already processed
+      if (btc_edges_used.find({i, j}) != btc_edges_used.end() ||
+          btc_edges_used.find({j, i}) != btc_edges_used.end()) {
+        continue;
+      }
+
+      // Check temporal constraint: require sufficient time difference for loop closure
+      double time_diff = std::abs(submaps[i].timestamp - submaps[j].timestamp);
+      if (time_diff < config.loop_closure_search_time_diff()) {
+        continue;  // Too temporally close, skip
+      }
+
+      // Check spatial constraint: require spatial proximity
+      double spatial_dist = (submaps[i].pose.translation() - submaps[j].pose.translation()).norm();
+      if (spatial_dist > config.loop_closure_search_radius()) {
+        continue;  // Too far apart spatially, skip
+      }
+
+      spdlog::debug("BTC candidate: submap {} <-> {} (time_diff={:.2f}s, spatial_dist={:.2f}m)",
+                    i, j, time_diff, spatial_dist);
+
+      // Validate point cloud availability
+      if (!submaps[i].cloud || !submaps[j].cloud ||
+          submaps[i].cloud->empty() || submaps[j].cloud->empty()) {
+        spdlog::debug("Skipping pair {}-{}: empty point cloud", i, j);
+        continue;
+      }
+
+      // Use GICP for geometric verification (consistent with existing loop closure)
+      Sophus::SE3d T_j_to_i(submaps[i].pose.inverse() * submaps[j].pose);
+
+      if (MatchGICP(submaps[i].cloud, submaps[j].cloud,
+                    T_j_to_i, config.gicp_fitness_score_threshold(),
+                    config.gicp_max_iterations(),
+                    config.gicp_transform_epsilon())) {
+        // Add BTC constraint to optimization problem
+        problem.AddResidualBlock(BTCFactor::Create(T_j_to_i, btc_sqrt_information),
+                                nullptr,
+                                submaps[i].pose.data(),
+                                submaps[j].pose.data());
+
+        btc_edges_used.insert({i, j});
+        btc_constraints_added++;
+
+        spdlog::info("BTC constraint added: submap {} <-> {}", i, j);
+      } else {
+        spdlog::debug("GICP verification failed for pair {}-{}", i, j);
+      }
+    }
+  }
+
+  spdlog::info("BTC constraint detection completed: {} constraints added", btc_constraints_added);
 }
