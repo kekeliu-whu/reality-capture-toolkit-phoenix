@@ -5,6 +5,11 @@
 #include <pcl/registration/gicp.h>
 #include <spdlog/spdlog.h>
 
+// BTC library files are located directly in pgo/src/.
+// Use btc_compat/ stubs to satisfy ros/ros.h and visualization_msgs headers.
+#include "btc_compat/msvc_chrono_compat.h"
+#include "BTC.h"
+
 #include "factor/btc_factor.h"
 #include "factor/gravity_factor.h"
 #include "factor/local_parameterization_se3.h"
@@ -13,10 +18,6 @@
 #include "io/local_enu_transformer.h"
 #include "io/read_write.h"
 #include "optimizer.h"
-
-// Forward declaration for BTC library usage
-// The actual BTC library (from Voxel-SLAM-main) is used via external linking
-class STDescManager;
 
 namespace {
 
@@ -386,12 +387,46 @@ void AddBTCConstraints(ceres::Problem &problem,
     return;
   }
 
-  spdlog::info("Starting BTC-based loop closure constraint detection on {} submaps",
-               submaps.size());
+  spdlog::info("Starting BTC-based loop closure detection on {} submaps", submaps.size());
 
-  // Configuration for BTC constraints
+  // ---------- 1. Configure STDescManager ----------
+  // Use indoor-friendly defaults. skip_near_num controls how many
+  // temporally-adjacent frames are excluded during retrieval; it is set
+  // proportionally to loop_closure_search_time_diff / submap spacing.
+  ConfigSetting btc_cfg;
+  btc_cfg.voxel_size_                 = 1.0f;
+  btc_cfg.voxel_init_num_             = 10;
+  btc_cfg.plane_merge_normal_thre_    = 0.1f;
+  btc_cfg.plane_merge_dis_thre_       = 0.3f;
+  btc_cfg.plane_detection_thre_       = 0.01f;
+  btc_cfg.proj_plane_num_             = 2;
+  btc_cfg.proj_image_resolution_      = 0.5f;
+  btc_cfg.proj_image_high_inc_        = 0.1f;
+  btc_cfg.proj_dis_min_               = 0.0f;
+  btc_cfg.proj_dis_max_               = 5.0f;
+  btc_cfg.summary_min_thre_           = 10.0f;
+  btc_cfg.line_filter_enable_         = 1;
+  btc_cfg.useful_corner_num_          = 100;
+  btc_cfg.descriptor_near_num_        = 15.0f;
+  btc_cfg.descriptor_min_len_         = 2.0f;
+  btc_cfg.descriptor_max_len_         = 50.0f;
+  btc_cfg.non_max_suppression_radius_ = 2.0f;
+  btc_cfg.std_side_resolution_        = 0.2f;
+  // skip_near_num: skip this many *frames* during candidate retrieval.
+  // Each submap is ~1 s; loop_closure_search_time_diff is given in seconds.
+  btc_cfg.skip_near_num_              = static_cast<int>(config.loop_closure_search_time_diff());
+  btc_cfg.candidate_num_              = 20;
+  btc_cfg.rough_dis_threshold_        = 0.01f;
+  btc_cfg.similarity_threshold_       = 0.7f;
+  btc_cfg.icp_threshold_              = 0.15f;
+  btc_cfg.normal_threshold_           = 0.2f;
+  btc_cfg.dis_threshold_              = 0.5f;
+
+  STDescManager desc_manager(btc_cfg);
+
+  // Information matrix for BTC loop-closure constraints
   Eigen::DiagonalMatrix<double, 6> btc_sqrt_information;
-  btc_sqrt_information.diagonal() << 
+  btc_sqrt_information.diagonal() <<
       1.0 / config.loop_edge_translation_error(),
       1.0 / config.loop_edge_translation_error(),
       1.0 / config.loop_edge_translation_error(),
@@ -399,63 +434,73 @@ void AddBTCConstraints(ceres::Problem &problem,
       1.0 / (config.loop_edge_rotation_error() / 180.0 * M_PI),
       1.0 / (config.loop_edge_rotation_error() / 180.0 * M_PI);
 
-  std::set<std::pair<int, int>> btc_edges_used;
   int btc_constraints_added = 0;
 
-  // Try to establish constraints between submaps with large time differences
-  // but small spatial proximity (typical loop closure scenarios)
-  for (int i = 0; i < submaps.size(); ++i) {
-    for (int j = i + 1; j < submaps.size(); ++j) {
-      // Skip if edge already processed
-      if (btc_edges_used.find({i, j}) != btc_edges_used.end() ||
-          btc_edges_used.find({j, i}) != btc_edges_used.end()) {
-        continue;
-      }
+  // ---------- 2. Online build+search loop ----------
+  // Process submaps in chronological order.
+  // For each frame i:
+  //   a) Generate STDescs from its point cloud.
+  //   b) SearchLoop against the database built so far (frames 0..i-1).
+  //      The library skips frames whose frame_number is within skip_near_num of
+  //      the current frame, so only temporally distant matches are returned.
+  //   c) If a candidate is found and passes spatial filter, add constraint.
+  //   d) AddSTDescs to register this frame in the database.
+  for (int i = 0; i < static_cast<int>(submaps.size()); ++i) {
+    if (!submaps[i].cloud || submaps[i].cloud->empty()) {
+      // Still need to advance the database frame counter
+      std::vector<STD> empty_stds;
+      desc_manager.AddSTDescs(empty_stds);
+      continue;
+    }
 
-      // Check temporal constraint: require sufficient time difference for loop closure
-      double time_diff = std::abs(submaps[i].timestamp - submaps[j].timestamp);
-      if (time_diff < config.loop_closure_search_time_diff()) {
-        continue;  // Too temporally close, skip
-      }
+    // a) Generate descriptors for this submap
+    std::vector<STD> stds;
+    desc_manager.GenerateSTDescs(submaps[i].cloud, stds, i);
 
-      // Check spatial constraint: require spatial proximity
-      double spatial_dist = (submaps[i].pose.translation() - submaps[j].pose.translation()).norm();
-      if (spatial_dist > config.loop_closure_search_radius()) {
-        continue;  // Too far apart spatially, skip
-      }
+    // b) Search for a loop closure candidate among already-registered frames.
+    //    SearchLoop internally respects skip_near_num so only frames that are
+    //    at least skip_near_num frames away are considered.
+    if (i > btc_cfg.skip_near_num_) {
+      std::pair<int, double>                              loop_result;
+      std::pair<Eigen::Vector3d, Eigen::Matrix3d>         loop_transform;
+      std::vector<std::pair<STD, STD>>                    loop_std_pair;
+      // plane cloud of the current scan (needed by SearchLoop's icp verify)
+      pcl::PointCloud<pcl::PointXYZINormal>::Ptr pl_cur(new pcl::PointCloud<pcl::PointXYZINormal>());
 
-      spdlog::debug("BTC candidate: submap {} <-> {} (time_diff={:.2f}s, spatial_dist={:.2f}m)",
-                    i, j, time_diff, spatial_dist);
+      desc_manager.SearchLoop(stds, loop_result, loop_transform, loop_std_pair, pl_cur);
 
-      // Validate point cloud availability
-      if (!submaps[i].cloud || !submaps[j].cloud ||
-          submaps[i].cloud->empty() || submaps[j].cloud->empty()) {
-        spdlog::debug("Skipping pair {}-{}: empty point cloud", i, j);
-        continue;
-      }
+      int matched_id = loop_result.first;  // -1 means no match
+      if (matched_id >= 0 && matched_id < i) {
+        // c) Verify with additional spatial distance filter
+        double spatial_dist =
+            (submaps[i].pose.translation() - submaps[matched_id].pose.translation()).norm();
+        if (spatial_dist <= config.loop_closure_search_radius()) {
+          // Build the relative pose SE3 from the BTC transform
+          // loop_transform: (translation, rotation_matrix) that maps
+          // the matched frame to the current frame.
+          const Eigen::Vector3d &t_btc = loop_transform.first;
+          const Eigen::Matrix3d &R_btc = loop_transform.second;
+          Sophus::SE3d T_matched_to_cur(R_btc, t_btc);
 
-      // Use GICP for geometric verification (consistent with existing loop closure)
-      Sophus::SE3d T_j_to_i(submaps[i].pose.inverse() * submaps[j].pose);
+          problem.AddResidualBlock(
+              BTCFactor::Create(T_matched_to_cur, btc_sqrt_information),
+              nullptr,
+              submaps[i].pose.data(),
+              submaps[matched_id].pose.data());
 
-      if (MatchGICP(submaps[i].cloud, submaps[j].cloud,
-                    T_j_to_i, config.gicp_fitness_score_threshold(),
-                    config.gicp_max_iterations(),
-                    config.gicp_transform_epsilon())) {
-        // Add BTC constraint to optimization problem
-        problem.AddResidualBlock(BTCFactor::Create(T_j_to_i, btc_sqrt_information),
-                                nullptr,
-                                submaps[i].pose.data(),
-                                submaps[j].pose.data());
-
-        btc_edges_used.insert({i, j});
-        btc_constraints_added++;
-
-        spdlog::info("BTC constraint added: submap {} <-> {}", i, j);
-      } else {
-        spdlog::debug("GICP verification failed for pair {}-{}", i, j);
+          btc_constraints_added++;
+          spdlog::info("BTC constraint: submap {} <-> {} (score={:.3f}, dist={:.2f}m)",
+                       i, matched_id, loop_result.second, spatial_dist);
+        } else {
+          spdlog::debug("BTC match {}<->{} rejected: spatial dist {:.2f} > {:.2f}",
+                        i, matched_id, spatial_dist, config.loop_closure_search_radius());
+        }
       }
     }
+
+    // d) Register this frame's descriptors in the database
+    desc_manager.AddSTDescs(stds);
   }
 
-  spdlog::info("BTC constraint detection completed: {} constraints added", btc_constraints_added);
+  spdlog::info("BTC constraint detection finished: {} constraints added", btc_constraints_added);
 }
