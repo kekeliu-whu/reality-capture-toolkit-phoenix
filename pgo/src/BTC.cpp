@@ -1,6 +1,6 @@
 #include "BTC.h"
 
-void read_parameters(ros::NodeHandle &nh, ConfigSetting &config_setting, int isHighFly)
+void read_parameters(ConfigSetting &config_setting, int isHighFly)
 {
   if(!isHighFly)
   {
@@ -280,8 +280,8 @@ void STDescManager::init_voxel_map(
     const pcl::PointCloud<pcl::PointXYZI>::Ptr &input_cloud,
     std::unordered_map<BTCVOXEL_LOC, BTCOctoTree *> &voxel_map) 
 {
-  uint plsize = input_cloud->size();
-  for (uint i = 0; i < plsize; i++) {
+  unsigned int plsize = input_cloud->size();
+  for (unsigned int i = 0; i < plsize; i++) {
     Eigen::Vector3d p_c(input_cloud->points[i].x, input_cloud->points[i].y,
                         input_cloud->points[i].z);
     double loc_xyz[3];
@@ -1406,8 +1406,8 @@ void STDescManager::triangle_solver(std::pair<STD, STD> &std_pair,
   ref.col(1) = std_pair.second.binary_B_.location_ - std_pair.second.center_;
   ref.col(2) = std_pair.second.binary_C_.location_ - std_pair.second.center_;
   Eigen::Matrix3d covariance = src * ref.transpose();
-  Eigen::JacobiSVD<Eigen::Matrix3d> svd(covariance, Eigen::ComputeThinU |
-                                                        Eigen::ComputeThinV);
+  Eigen::JacobiSVD<Eigen::Matrix3d> svd(covariance, Eigen::ComputeFullU |
+                                                        Eigen::ComputeFullV);
   Eigen::Matrix3d V = svd.matrixV();
   Eigen::Matrix3d U = svd.matrixU();
   rot = V * U.transpose();
@@ -1476,4 +1476,79 @@ double STDescManager::plane_geometric_verify(
     }
   }
   return useful_match / source_cloud->size();
+}
+
+void STDescManager::VisualizeSTDescs(
+    const pcl::PointCloud<pcl::PointXYZI>::Ptr &input_cloud,
+    const std::vector<STD> &stds_vec) {
+  // 静态 viewer：跨调用复用，不关闭窗口
+  static std::shared_ptr<pcl::visualization::PCLVisualizer> viewer;
+  static bool next_pressed = false;
+
+  if (!viewer || viewer->wasStopped()) {
+    viewer = std::make_shared<pcl::visualization::PCLVisualizer>("STDesc Viewer");
+    viewer->setBackgroundColor(0.1, 0.1, 0.1);
+    // 注册键盘回调：按 N 跳到下一帧
+    viewer->registerKeyboardCallback(
+        [](const pcl::visualization::KeyboardEvent &ev, void *data) {
+          if ((ev.getKeySym() == "n" || ev.getKeySym() == "N") && ev.keyDown())
+            *static_cast<bool *>(data) = true;
+        },
+        static_cast<void *>(&next_pressed));
+  } else {
+    viewer->removeAllPointClouds();
+    viewer->removeAllShapes();
+    viewer->removeCoordinateSystem();
+  }
+  next_pressed = false;
+
+  // 显示原始点云（白色，较小点）
+  pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZI> cloud_color(
+      input_cloud, 180, 180, 180);
+  viewer->addPointCloud<pcl::PointXYZI>(input_cloud, cloud_color, "input_cloud");
+  viewer->setPointCloudRenderingProperties(
+      pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 1, "input_cloud");
+
+  // 收集所有关键点用于显示
+  pcl::PointCloud<pcl::PointXYZ>::Ptr key_pts(new pcl::PointCloud<pcl::PointXYZ>);
+  for (const auto &s : stds_vec) {
+    pcl::PointXYZ p;
+    p.x = s.binary_A_.location_[0]; p.y = s.binary_A_.location_[1]; p.z = s.binary_A_.location_[2];
+    key_pts->push_back(p);
+    p.x = s.binary_B_.location_[0]; p.y = s.binary_B_.location_[1]; p.z = s.binary_B_.location_[2];
+    key_pts->push_back(p);
+    p.x = s.binary_C_.location_[0]; p.y = s.binary_C_.location_[1]; p.z = s.binary_C_.location_[2];
+    key_pts->push_back(p);
+  }
+  pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> key_color(
+      key_pts, 255, 50, 50);
+  viewer->addPointCloud<pcl::PointXYZ>(key_pts, key_color, "key_points");
+  viewer->setPointCloudRenderingProperties(
+      pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 6, "key_points");
+
+  // 绘制每个三角形的三条边（绿色）
+  for (size_t i = 0; i < stds_vec.size(); i++) {
+    const STD &s = stds_vec[i];
+    pcl::PointXYZ A(s.binary_A_.location_[0], s.binary_A_.location_[1], s.binary_A_.location_[2]);
+    pcl::PointXYZ B(s.binary_B_.location_[0], s.binary_B_.location_[1], s.binary_B_.location_[2]);
+    pcl::PointXYZ C(s.binary_C_.location_[0], s.binary_C_.location_[1], s.binary_C_.location_[2]);
+    std::string prefix = "tri_" + std::to_string(i);
+    viewer->addLine(A, B, 0.0, 1.0, 0.2, prefix + "_ab");
+    viewer->addLine(B, C, 0.0, 1.0, 0.2, prefix + "_bc");
+    viewer->addLine(C, A, 0.0, 1.0, 0.2, prefix + "_ca");
+    // 中心点（蓝色球）
+    pcl::PointXYZ ctr(s.center_[0], s.center_[1], s.center_[2]);
+    viewer->addSphere(ctr, 0.08, 0.2, 0.4, 1.0, prefix + "_ctr");
+  }
+
+  viewer->addCoordinateSystem(1.0);
+  viewer->resetCamera(); // 自动缩放到全局视野
+
+  printf("[VisualizeSTDescs] cloud=%zu pts, triangles=%zu. Press N for next, Q to quit.\n",
+         input_cloud->size(), stds_vec.size());
+
+  // 阻塞直到按下 N（继续下一帧）或窗口被关闭（Q）
+  while (!viewer->wasStopped() && !next_pressed) {
+    viewer->spinOnce(50);
+  }
 }

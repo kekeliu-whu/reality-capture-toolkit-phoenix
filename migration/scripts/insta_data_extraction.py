@@ -38,7 +38,7 @@ parser = argparse.ArgumentParser(description="科研相机数据提取工具")
 parser.add_argument(
     "--input-video-filename",
     type=str,
-    default="\\\\wsl.localhost\\Ubuntu-24.04\\home\\rick\\iKalibr\\src\\iKalibr\\2026-02-06_11-34-29-s20\\VID_20260206_033425_00_011.insv",
+    default="D:\\ProjectX\\project-3d\\data\\custom-device-dataset\\VID_20260206_033425_00_011.insv",
     help="输入视频文件路径",
 )
 
@@ -46,7 +46,7 @@ parser.add_argument(
 parser.add_argument(
     "--output-dir",
     type=str,
-    default="D:/slam/camera/",
+    default="D:/slam/",
     help="输出目录",
 )
 
@@ -62,7 +62,7 @@ parser.add_argument(
 parser.add_argument(
     "--export-frames",
     action=argparse.BooleanOptionalAction,
-    default=True,
+    default=False,
     help="是否导出相机帧（默认: 导出；可用 --no-export-frames 关闭）",
 )
 

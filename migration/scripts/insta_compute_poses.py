@@ -334,26 +334,26 @@ def main():
     parser.add_argument(
         "--poses-file",
         "-p",
-        default=r"D:/slam/output/traj.txt",
-        help="Path to IMU trajectory file (text format) (default: D:\\slam\\output\\traj.txt)",
+        default=r"D:/output/traj.txt",
+        help="Path to IMU trajectory file (text format) (default: D:\\output\\traj.txt)",
     )
     parser.add_argument(
         "--calib-file",
         "-c",
-        default=r"D:/slam/calibration.dat",
-        help="Path to calibration file with camera extrinsics (protobuf) (default: D:\\slam\\calibration.dat)",
+        default=r"D:/output/calibration.dat",
+        help="Path to calibration file with camera extrinsics (protobuf) (default: D:\\output\\calibration.dat)",
     )
     parser.add_argument(
         "--image-folder",
         "-i",
-        default=r"D:/slam/camera",
-        help="Path to parent folder containing cam0, cam1, ... subdirectories (default: D:\\slam\\camera)",
+        default=r"D:/output/camera",
+        help="Path to parent folder containing cam0, cam1, ... subdirectories (default: D:\\output\\camera)",
     )
     parser.add_argument(
         "--output",
         "-o",
-        default=r"D:/slam/camera/ImgPose.txt",
-        help="Output file path (default: D:\\slam\\camera\\ImgPose.txt)",
+        default=r"D:/output/camera/ImgPose.txt",
+        help="Output file path (default: D:\\output\\camera\\ImgPose.txt)",
     )
     parser.add_argument(
         "--image-list",

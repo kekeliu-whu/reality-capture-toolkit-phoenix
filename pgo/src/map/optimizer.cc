@@ -7,7 +7,6 @@
 
 // BTC library files are located directly in pgo/src/.
 // Use btc_compat/ stubs to satisfy ros/ros.h and visualization_msgs headers.
-#include "btc_compat/msvc_chrono_compat.h"
 #include "BTC.h"
 
 #include "factor/btc_factor.h"
@@ -302,7 +301,6 @@ void AddGnssConstraints(
 
     Eigen::Vector3d position_std(interp_lat_std, interp_lon_std, interp_alt_std);
 
-
     spdlog::info("enu {} {} {} {} {} {}", enu_gps[0], enu_gps[1], enu_gps[2], submaps[submap_idx].pose.translation().x(),
                  submaps[submap_idx].pose.translation().y(), submaps[submap_idx].pose.translation().z());
     auto position_factor = RtkPositionFactor::Create(enu_gps, position_std);
@@ -322,7 +320,6 @@ void OptimizeWithGnss(std::vector<TimestampedPointCloud> &submaps,
                       const std::vector<GpsData> &gnss_data,
                       const proto::PgoConfig &config,
                       bool use_rtk,
-                      bool use_btc,
                       std::string &proj4_string) {
   if (submaps.empty()) {
     spdlog::error("No submaps to optimize");
@@ -333,10 +330,6 @@ void OptimizeWithGnss(std::vector<TimestampedPointCloud> &submaps,
     spdlog::info("GNSS data found ({}), using RTK fusion optimization", gnss_data.size());
   } else {
     spdlog::info("No GNSS data or RTK disabled, using standard PGO optimization");
-  }
-
-  if (use_btc) {
-    spdlog::info("BTC-based loop closure constraints enabled");
   }
 
   ceres::Problem problem;
@@ -354,10 +347,8 @@ void OptimizeWithGnss(std::vector<TimestampedPointCloud> &submaps,
     AddGnssConstraints(problem, submaps, transformer, gnss_data, prior_residual_blocks);
   }
 
-  // Add BTC constraints if enabled
-  if (use_btc) {
-    AddBTCConstraints(problem, submaps, config);
-  }
+  // Add BTC loop closure constraints
+  //AddBTCConstraints(problem, submaps, config);
 
   // Iterative optimization with loop closure and GNSS updates
   for (int iter = 0; iter < config.outer_iteration_num(); ++iter) {
@@ -407,6 +398,7 @@ void AddBTCConstraints(ceres::Problem &problem,
   btc_cfg.summary_min_thre_           = 10.0f;
   btc_cfg.line_filter_enable_         = 1;
   btc_cfg.useful_corner_num_          = 100;
+  btc_cfg.touch_filter_enable_        = 0;
   btc_cfg.descriptor_near_num_        = 15.0f;
   btc_cfg.descriptor_min_len_         = 2.0f;
   btc_cfg.descriptor_max_len_         = 50.0f;
@@ -414,20 +406,19 @@ void AddBTCConstraints(ceres::Problem &problem,
   btc_cfg.std_side_resolution_        = 0.2f;
   // skip_near_num: skip this many *frames* during candidate retrieval.
   // Each submap is ~1 s; loop_closure_search_time_diff is given in seconds.
-  btc_cfg.skip_near_num_              = static_cast<int>(config.loop_closure_search_time_diff());
-  btc_cfg.candidate_num_              = 20;
-  btc_cfg.rough_dis_threshold_        = 0.01f;
-  btc_cfg.similarity_threshold_       = 0.7f;
-  btc_cfg.icp_threshold_              = 0.15f;
-  btc_cfg.normal_threshold_           = 0.2f;
-  btc_cfg.dis_threshold_              = 0.5f;
+  btc_cfg.skip_near_num_        = 0;
+  btc_cfg.candidate_num_        = 20;
+  btc_cfg.rough_dis_threshold_  = 0.01f;
+  btc_cfg.similarity_threshold_ = 0.7f;
+  btc_cfg.icp_threshold_        = 0.15f;
+  btc_cfg.normal_threshold_     = 0.2f;
+  btc_cfg.dis_threshold_        = 0.5f;
 
   STDescManager desc_manager(btc_cfg);
 
   // Information matrix for BTC loop-closure constraints
   Eigen::DiagonalMatrix<double, 6> btc_sqrt_information;
-  btc_sqrt_information.diagonal() <<
-      1.0 / config.loop_edge_translation_error(),
+  btc_sqrt_information.diagonal() << 1.0 / config.loop_edge_translation_error(),
       1.0 / config.loop_edge_translation_error(),
       1.0 / config.loop_edge_translation_error(),
       1.0 / (config.loop_edge_rotation_error() / 180.0 * M_PI),
@@ -457,13 +448,15 @@ void AddBTCConstraints(ceres::Problem &problem,
     std::vector<STD> stds;
     desc_manager.GenerateSTDescs(submaps[i].cloud, stds, i);
 
+    desc_manager.VisualizeSTDescs(submaps[i].cloud, stds);
+
     // b) Search for a loop closure candidate among already-registered frames.
     //    SearchLoop internally respects skip_near_num so only frames that are
     //    at least skip_near_num frames away are considered.
     if (i > btc_cfg.skip_near_num_) {
-      std::pair<int, double>                              loop_result;
-      std::pair<Eigen::Vector3d, Eigen::Matrix3d>         loop_transform;
-      std::vector<std::pair<STD, STD>>                    loop_std_pair;
+      std::pair<int, double> loop_result;
+      std::pair<Eigen::Vector3d, Eigen::Matrix3d> loop_transform;
+      std::vector<std::pair<STD, STD>> loop_std_pair;
       // plane cloud of the current scan (needed by SearchLoop's icp verify)
       pcl::PointCloud<pcl::PointXYZINormal>::Ptr pl_cur(new pcl::PointCloud<pcl::PointXYZINormal>());
 

@@ -8,13 +8,12 @@
 #include <mutex>
 #include <pcl/common/io.h>
 #include <pcl/kdtree/kdtree_flann.h>
-#include <ros/ros.h>
+#include <pcl/visualization/pcl_visualizer.h>
 #include <sstream>
 #include <stdio.h>
 #include <string>
 #include <unordered_map>
-#include <visualization_msgs/Marker.h>
-#include <visualization_msgs/MarkerArray.h>
+#include <chrono>
 
 #define HASH_P 116101
 #define MAX_N 10000000000
@@ -212,7 +211,7 @@ bool plane_greater_sort(BTCPlane *plane1, BTCPlane *plane2);
 // double
 // calc_triangle_dis(const std::vector<std::pair<STD, STD>> &match_std_list);
 
-void read_parameters(ros::NodeHandle &nh, ConfigSetting &config_setting, int isHighFly);
+void read_parameters(ConfigSetting &config_setting, int isHighFly);
 
 Eigen::Vector3d normal2vec(const pcl::PointXYZINormal &pi);
 
@@ -221,8 +220,8 @@ template <typename T> Eigen::Vector3d point2vec(const T &pi) {
   return vec;
 }
 
-double time_inc(std::chrono::_V2::system_clock::time_point &t_end,
-                std::chrono::_V2::system_clock::time_point &t_begin);
+double time_inc(std::chrono::system_clock::time_point &t_end,
+                std::chrono::system_clock::time_point &t_begin);
 
 
 class STDescManager {
@@ -266,6 +265,10 @@ public:
 
   // add descriptors to database
   void AddSTDescs(const std::vector<STD> &stds_vec);
+
+  // visualize STDesc triangles and key points over input cloud
+  void VisualizeSTDescs(const pcl::PointCloud<pcl::PointXYZI>::Ptr &input_cloud,
+                        const std::vector<STD> &stds_vec);
 
   // Geometrical optimization by plane-to-plane ico
   void PlaneGeomrtricIcp(

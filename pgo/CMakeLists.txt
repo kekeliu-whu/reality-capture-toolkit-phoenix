@@ -21,7 +21,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Eigen3 REQUIRED)
 find_package(Ceres REQUIRED)
 find_package(gflags REQUIRED)
-find_package(PCL REQUIRED COMPONENTS common io filters registration)
+find_package(VTK CONFIG QUIET)
+find_package(PCL REQUIRED COMPONENTS common io filters registration visualization)
 find_package(Boost CONFIG COMPONENTS program_options)
 find_package(OpenCV REQUIRED)
 find_package(OpenMP REQUIRED)
@@ -41,6 +42,7 @@ add_subdirectory(../migration migration_build)
 
 set(
   PGO_PRIVATE_SRCS
+  src/BTC.cpp
   src/map/optimizer.cc
   src/map/pgo_runner.cc
   src/map/utils.cc
@@ -56,6 +58,7 @@ set(
   src/factor/rtk_factor.h
   src/io/read_write.h
   src/io/local_enu_transformer.h
+  src/BTC.h
   src/map/optimizer.h
   src/map/pgo_runner.h
   src/map/utils.h
@@ -65,6 +68,7 @@ set(PGO_PRIVATE_LIBS
   migration_core
   glog::glog
   ${PCL_LIBRARIES}
+  pcl_visualization
   ${GFLAGS_LIBRARIES}
   ${CERES_LIBRARIES}
   OpenMP::OpenMP_CXX
@@ -74,6 +78,9 @@ set(PGO_PRIVATE_LIBS
   opencv_calib3d
   PROJ::proj
 )
+if(VTK_FOUND)
+  list(APPEND PGO_PRIVATE_LIBS ${VTK_LIBRARIES})
+endif()
 
 function(add_private_tool name)
   add_executable(${name} ${ARGN} ${PGO_PRIVATE_SRCS})

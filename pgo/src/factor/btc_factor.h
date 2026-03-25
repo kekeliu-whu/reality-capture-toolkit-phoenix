@@ -33,6 +33,7 @@ class BTCFactor {
       : T_source_to_target_(T_source_to_target),
         sqrt_information_(information) {}
 
+ public:
   template <typename T>
   bool operator()(const T *const pose_target_ptr, const T *const pose_source_ptr,
                   T *residuals_ptr) const {

@@ -11,6 +11,8 @@ void PgoRunner::Run(const std::string &input_path,
                     const std::string &output_path) {
   std::vector<TimestampedPointCloud> submaps;
   LoadSubmapList(input_path, submaps, config_.submap_duration_secs());
+
+  spdlog::info("Saving raw map to {}", output_path + "/map_raw.las");
   SaveLasFile(submaps, output_path + "/map_raw.las");
 
   // release raw scans to save memory
@@ -29,7 +31,7 @@ void PgoRunner::Run(const std::string &input_path,
   bool use_rtk = has_gnss_data && use_rtk_constraint_;
 
   std::string proj4_string;
-  OptimizeWithGnss(submaps, gnss_data, config_, use_rtk, use_btc_constraint_, proj4_string);
+  OptimizeWithGnss(submaps, gnss_data, config_, use_rtk, proj4_string);
 
   // reload and save optimized submaps
   std::vector<TimestampedPointCloud> submaps_reload;

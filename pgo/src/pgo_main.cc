@@ -17,7 +17,6 @@ int main(int argc, char **argv) {
 
   PgoRunner runner(pgo_config);
   runner.SetUseRtkConstraint(true);  // Enable RTK constraints for better accuracy if GNSS data is available
-  runner.SetUseBtcConstraint(true);  // Enable BTC-based loop closure constraints
   runner.Run(FLAGS_project_input_path, FLAGS_project_output_path);
 
   spdlog::info("done.");

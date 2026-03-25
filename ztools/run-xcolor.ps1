@@ -26,7 +26,7 @@ New-Item "$dataDir\xsfm" -Type Directory -Force | Out-Null
 # Verify required files exist
 Write-Host "Checking required files..." -ForegroundColor Cyan
 $lasFile = "$dataDir\map.las"
-$poseFile = "$dataDir\camera\ImgPose.txt"
+$poseFile = "$dataDir\images\ImgPose.txt"
 
 Write-Host "Looking for: $lasFile" -ForegroundColor Yellow
 Write-Host "Looking for: $poseFile" -ForegroundColor Yellow
@@ -50,7 +50,7 @@ Write-Host "Step 1: Processing point cloud..." -ForegroundColor Green
 $xsfm_pc_exe = Join-Path $BUILD_PACK "xsfm_process_point_cloud.exe"
 & $xsfm_pc_exe `
   --las_filename "$dataDir\map.las" `
-  --initial_pose_filename "$dataDir\camera\ImgPose.txt" `
+  --initial_pose_filename "$dataDir\images\ImgPose.txt" `
   --output_dir "$dataDir\xsfm" `
   --nooutput_full
 
@@ -63,7 +63,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "Step 2: Extracting features..." -ForegroundColor Green
 $xsfm_pre_exe = Join-Path $BUILD_PACK "xsfm_pre.exe"
 & $xsfm_pre_exe feature_extractor `
-  --image_path "$dataDir\camera" `
+  --image_path "$dataDir\images" `
   --database_path "$dataDir\xsfm\xsfm.db" `
   --ImageReader.camera_model OPENCV_FISHEYE `
   --ImageReader.camera_params "772.145464779917775,772.145464779917775,1440,1440,0.037416683931696879,-0.0051502247212099643,0.0064400644003639101,-0.002301772325582836" `
@@ -99,7 +99,7 @@ $xsfm_exe = Join-Path $BUILD_PACK "xsfm.exe"
   -point_cloud_offset_filename "$dataDir\xsfm\localenu.json" `
   -database_filename "$dataDir\xsfm\xsfm.db" `
   -initial_pose_filename "$dataDir\xsfm\localenu_pose.txt" `
-  -images_path "$dataDir\0\camera" `
+  -images_path "$dataDir\0\images" `
   -output_path "$dataDir\xsfm\sparse" `
   --use_point_cloud
 
@@ -115,8 +115,7 @@ $xcolor_main_exe = Join-Path $BUILD_PACK "xcolor.exe"
 # Determine the correct camera path (try multiple possible locations)
 $images_path = $null
 $possible_paths = @(
-  "$dataDir\camera",
-  "$dataDir\0\camera"
+  "$dataDir\images"
 )
 
 foreach ($path in $possible_paths) {
@@ -127,7 +126,7 @@ foreach ($path in $possible_paths) {
 }
 
 if (-not $images_path) {
-  Write-Host "ERROR: Could not find camera images directory" -ForegroundColor Red
+  Write-Host "ERROR: Could not find images directory" -ForegroundColor Red
   Write-Host "Searched in: $($possible_paths -join ', ')" -ForegroundColor Yellow
   exit 1
 }

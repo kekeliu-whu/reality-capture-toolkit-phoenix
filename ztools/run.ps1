@@ -108,7 +108,7 @@ if (!$skip_convert_s20) {
 
 # Step 2: Extract camera data from INSV
 Write-Host "`n=== Step 2: Extracting camera data ===" -ForegroundColor Cyan
-$camera_dir = Join-Path $outputdir "camera"
+$camera_dir = Join-Path $outputdir "images"
 
 & $insta_extraction_exe `
     --input-video-filename $insvpath `
