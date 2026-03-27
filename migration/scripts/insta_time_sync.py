@@ -21,15 +21,15 @@ from proto.sensors_pb2 import ImuMsgList
 
 # ========== 显示设置 ==========
 SHOW_PLOTS = False  # 是否弹出显示图形（False=仅保存，True=显示）
-SAVE_PLOTS = False   # 是否保存图形到文件（coarse_alignment_correlation.png, fine_alignment_gyro_comparison.png）
+SAVE_PLOTS = False  # 是否保存图形到文件（coarse_alignment_correlation.png, fine_alignment_gyro_comparison.png）
 
 # ========== 文件路径（以下通过命令行参数传入，此处为默认值）==========
 DEFAULT_IMU_DEVICE_FILE = R"D:/output/imu.dat"
-DEFAULT_IMU_INSTA_FILE = R"D:/output/camera/insv.dat"
+DEFAULT_IMU_INSTA_FILE = R"D:/output/images/insv.dat"
 
 # ========== B-spline 插值参数 ==========
-SPLINE_KNOTS = 3              # B-spline 的阶数（次数）
-SPLINE_SMOOTHING = 0          # 平滑因子 (0=精确插值，>0=平滑)
+SPLINE_KNOTS = 3  # B-spline 的阶数（次数）
+SPLINE_SMOOTHING = 0  # 平滑因子 (0=精确插值，>0=平滑)
 
 # ========== 时间对齐优化参数 ==========
 OPTIMIZATION_SEARCH_RANGE = 1.0  # 精细对齐的搜索范围 (±秒)
@@ -93,12 +93,18 @@ def load_imu_data(imu_device_path: str, imu_insta_path: str) -> tuple:
     gyro_mag_insta = np.sqrt(gx_insta**2 + gy_insta**2 + gz_insta**2)
 
     offset = t_insta[0] - t_device[0]
-    print(f"  [时间偏移] Insta相对于Device的初始时间偏移: {offset:.3f} s, t_device[0]: {t_device[0]:.3f} t_device[end]: {t_device[-1]:.3f}, t_insta[0]: {t_insta[0]:.3f}, t_insta[end]: {t_insta[-1]:.3f}")
+    print(
+        f"  [时间偏移] Insta相对于Device的初始时间偏移: {offset:.3f} s, t_device[0]: {t_device[0]:.3f} t_device[end]: {t_device[-1]:.3f}, t_insta[0]: {t_insta[0]:.3f}, t_insta[end]: {t_insta[-1]:.3f}"
+    )
     t_device -= t_device[0]
     t_insta -= t_insta[0]
 
-    print(f"  [Device] {len(imu_device_msgs.imu_msgs)} 条记录 ({t_device[0]:.3f}s - {t_device[-1]:.3f}s)")
-    print(f"  [Insta] {len(imu_insta_msgs.imu_msgs)} 条记录 ({t_insta[0]:.3f}s - {t_insta[-1]:.3f}s)")
+    print(
+        f"  [Device] {len(imu_device_msgs.imu_msgs)} 条记录 ({t_device[0]:.3f}s - {t_device[-1]:.3f}s)"
+    )
+    print(
+        f"  [Insta] {len(imu_insta_msgs.imu_msgs)} 条记录 ({t_insta[0]:.3f}s - {t_insta[-1]:.3f}s)"
+    )
 
     # 保存原始数据用于后续导出
     return {
@@ -148,7 +154,7 @@ def remove_duplicate_times(
     """
     if len(t) == 0:
         return t, y
-    
+
     # 使用更严格的条件：确保严格递增，处理浮点数精度问题
     diffs = np.diff(t)
     unique_mask = np.concatenate(([True], diffs > time_tolerance))
@@ -157,7 +163,7 @@ def remove_duplicate_times(
     y_unique = y[unique_mask]
 
     n_removed = len(t) - len(t_unique)
-    
+
     # 再次检查：确保没有任何非递增的对
     if len(t_unique) > 1:
         final_diffs = np.diff(t_unique)
@@ -174,7 +180,9 @@ def remove_duplicate_times(
             n_removed = len(t) - len(t_unique)
 
     if n_removed > 0:
-        print(f"  [清理] 移除了 {n_removed} 个重复或乱序的时间点 (保留 {len(t_unique)} 个)")
+        print(
+            f"  [清理] 移除了 {n_removed} 个重复或乱序的时间点 (保留 {len(t_unique)} 个)"
+        )
 
     return t_unique, y_unique
 
@@ -205,7 +213,7 @@ def create_bspline_models(
         print(f"  [警告] 数据点不足 ({len(t_clean)} < {k+2})，使用较低的阶数")
         k_adjusted = max(1, len(t_clean) - 2)
         return UnivariateSpline(t_clean, gyro_clean, k=k_adjusted, s=0.01)
-    
+
     # 尝试使用指定的平滑因子
     try:
         return UnivariateSpline(t_clean, gyro_clean, k=k, s=s)
@@ -318,18 +326,61 @@ def find_coarse_alignment(
     return optimal_delay, max_correlation, time_delays, correlation
 
 
+def find_top_peaks(
+    time_delays: np.ndarray,
+    correlation: np.ndarray,
+    num_peaks: int = 3,
+    min_distance: float = 0.05,
+) -> list:
+    """
+    找到前N个最高的互相关系数峰值
+
+    Args:
+        time_delays: 时间延迟数组
+        correlation: 互相关系数数组
+        num_peaks: 要找的峰值数量
+        min_distance: 峰值之间的最小距离（秒）
+
+    Returns:
+        [(delay, corr), ...] 峰值列表，按相关系数从高到低排序
+    """
+    # 使用signal.find_peaks找到所有峰值
+    min_distance_samples = int(min_distance / np.mean(np.diff(time_delays)))
+    peaks, properties = signal.find_peaks(
+        correlation,
+        distance=max(1, min_distance_samples),
+        prominence=np.max(correlation) * 0.05,  # 峰值需要有显著的高度差
+    )
+
+    # 获取峰值的延迟和相关系数
+    peak_data = [(time_delays[p], correlation[p]) for p in peaks]
+    # 按相关系数从高到低排序
+    peak_data.sort(key=lambda x: x[1], reverse=True)
+    # 返回前N个
+    top_peaks = peak_data[:num_peaks]
+
+    print(f"  [峰值] 找到了 {len(peak_data)} 个峰值，前 {len(top_peaks)} 个为：")
+    for i, (delay, corr) in enumerate(top_peaks):
+        print(f"    [{i+1}] 延迟: {delay*1000:8.3f} ms, 相关系数: {corr:.6f}")
+
+    return top_peaks
+
+
 def plot_coarse_alignment(
     time_delays: np.ndarray,
     correlation: np.ndarray,
     optimal_delay: float,
     max_correlation: float,
+    top_peaks: list = None,
 ) -> None:
-    """绘制互相关系数图"""
+    """绘制互相关系数图，包含前N个峰值"""
     fig, ax = plt.subplots(figsize=(12, 6))
 
     ax.plot(
         time_delays * 1000, correlation, linewidth=2, color="blue", label="互相关系数"
     )
+
+    # 绘制主要峰值（红色）
     ax.axvline(
         optimal_delay * 1000,
         color="red",
@@ -347,9 +398,25 @@ def plot_coarse_alignment(
         label=f"最大值: {max_correlation:.6f}",
     )
 
+    # 绘制其他候选峰值（如果有）
+    if top_peaks and len(top_peaks) > 1:
+        for i, (delay, corr) in enumerate(top_peaks[1:]):
+            ax.scatter(
+                [delay * 1000],
+                [corr],
+                color="orange",
+                s=80,
+                marker="s",
+                alpha=0.7,
+                zorder=4,
+            )
+            ax.axvline(delay * 1000, color="orange", linestyle=":", alpha=0.5)
+
     ax.set_xlabel("时间延迟 (ms)", fontsize=12)
     ax.set_ylabel("互相关系数", fontsize=12)
-    ax.set_title("粗对齐：互相关系数分析", fontsize=14, fontweight="bold")
+    ax.set_title(
+        "粗对齐：互相关系数分析（显示前3个峰值）", fontsize=14, fontweight="bold"
+    )
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
 
@@ -406,7 +473,8 @@ def optimize_time_delay(
     t_common: np.ndarray,
     t_insta_bounds: tuple,
     initial_guess: float = None,
-) -> float:
+    verbose: bool = True,
+) -> tuple:
     """
     通过优化找到最优时间延迟
 
@@ -416,11 +484,13 @@ def optimize_time_delay(
         t_common: 公共时间轴
         t_insta_bounds: Insta时间范围
         initial_guess: 初始猜测值（来自粗对齐）
+        verbose: 是否打印详细信息
 
     Returns:
-        最优时间延迟（秒）
+        (最优时间延迟, 对齐误差) 元组
     """
-    print("[精细对齐] 正在进行精细对齐（基于B-spline优化）...")
+    if verbose:
+        print("[精细对齐] 正在进行精细对齐（基于B-spline优化）...")
 
     spl_device = create_bspline_models(t_device, gyro_mag_device)
     spl_insta = create_bspline_models(t_insta, gyro_mag_insta)
@@ -429,7 +499,9 @@ def optimize_time_delay(
     bracket_upper = initial_guess + OPTIMIZATION_SEARCH_RANGE
 
     result = minimize_scalar(
-        lambda tau: compute_time_alignment_error(tau, t_common, spl_device, spl_insta, t_insta_bounds),
+        lambda tau: compute_time_alignment_error(
+            tau, t_common, spl_device, spl_insta, t_insta_bounds
+        ),
         method="bounded",
         bounds=(bracket_lower, bracket_upper),
     )
@@ -437,10 +509,11 @@ def optimize_time_delay(
     time_delay = result.x
     error = result.fun
 
-    print(f"  [延迟] 精细对齐延迟: {time_delay*1000:.3f} ms")
-    print(f"  [误差] 对齐误差 (MSE): {error:.6f}")
+    if verbose:
+        print(f"  [延迟] 精细对齐延迟: {time_delay*1000:.3f} ms")
+        print(f"  [误差] 对齐误差 (MSE): {error:.6f}")
 
-    return time_delay
+    return time_delay, error
 
 
 # ============================================================================
@@ -565,46 +638,95 @@ def main():
     coarse_delay, max_corr, time_delays, correlation = find_coarse_alignment(
         t_device, t_insta, gyro_mag_device, gyro_mag_insta
     )
-    plot_coarse_alignment(time_delays, correlation, coarse_delay, max_corr)
-    # 粗对齐对比图已移除，精细对齐结果包含粗对齐信息
-    # plot_coarse_alignment_gyro_comparison(t_device, t_insta, gyro_mag_device, gyro_mag_insta, coarse_delay)
 
-    # ===== 第2.5步: 计算粗对齐后的公共时间轴 =====
-    # 粗对齐后，Insta的时间轴变为 t_insta + coarse_delay
-    t_insta_aligned = t_insta + coarse_delay
-    t_common_start = max(t_device[0], t_insta_aligned[0])
-    t_common_end = min(t_device[-1], t_insta_aligned[-1])
+    # ===== 找到前3个峰值 =====
+    top_peaks = find_top_peaks(time_delays, correlation, num_peaks=3)
+    plot_coarse_alignment(time_delays, correlation, coarse_delay, max_corr, top_peaks)
 
-    # 确保交集有效
-    if t_common_start >= t_common_end:
-        print("[错误] 粗对齐后时间轴无交集，无法继续处理！")
+    # ===== 第2.5步: 对每个峰值进行粗对齐和精细对齐 =====
+    results = []  # 存储 (peak_idx, coarse_delay, fine_delay, error)
+
+    for peak_idx, (coarse_delay_candidate, peak_corr) in enumerate(top_peaks):
+        print("\n" + "=" * 60)
+        print(
+            f"[试验 {peak_idx+1}/3] 使用峰值 {peak_idx+1}: {coarse_delay_candidate*1000:.3f}ms"
+        )
+        print("=" * 60)
+
+        # 计算粗对齐后的公共时间轴
+        t_insta_aligned = t_insta + coarse_delay_candidate
+        t_common_start = max(t_device[0], t_insta_aligned[0])
+        t_common_end = min(t_device[-1], t_insta_aligned[-1])
+
+        # 确保交集有效
+        if t_common_start >= t_common_end:
+            print(f"  [错误] 粗对齐后时间轴无交集，跳过此峰值")
+            continue
+
+        # 使用较密集的采样率
+        dt_device = np.mean(np.diff(t_device))
+        dt_insta = np.mean(np.diff(t_insta))
+        dt_common = min(dt_device, dt_insta)
+        num_samples = int((t_common_end - t_common_start) / dt_common) + 1
+        t_common = np.linspace(t_common_start, t_common_end, num_samples)
+
+        print(
+            f"  [时间轴] 公共时间范围: [{t_common_start:.3f}, {t_common_end:.3f}] ({num_samples} 个采样点)"
+        )
+
+        # 精细对齐
+        fine_delay, error = optimize_time_delay(
+            t_device,
+            t_insta,
+            gyro_mag_device,
+            gyro_mag_insta,
+            t_common,
+            (t_insta[0], t_insta[-1]),
+            initial_guess=coarse_delay_candidate,
+            verbose=True,
+        )
+
+        results.append(
+            {
+                "peak_idx": peak_idx,
+                "coarse_delay": coarse_delay_candidate,
+                "fine_delay": fine_delay,
+                "error": error,
+                "peak_corr": peak_corr,
+                "t_common": t_common,
+            }
+        )
+
+    # ===== 第3步: 选择最好的结果（误差最小）=====
+    if not results:
+        print("[错误] 没有有效的结果，无法继续处理！")
         return
 
-    # 使用较密集的采样率
-    dt_device = np.mean(np.diff(t_device))
-    dt_insta = np.mean(np.diff(t_insta))
-    dt_common = min(dt_device, dt_insta)
-    num_samples = int((t_common_end - t_common_start) / dt_common) + 1
-    t_common = np.linspace(t_common_start, t_common_end, num_samples)
+    best_result = min(results, key=lambda x: x["error"])
+    best_idx = best_result["peak_idx"]
 
-    print(
-        f"[时间轴] 公共时间范围: [{t_common_start:.3f}, {t_common_end:.3f}] ({num_samples} 个采样点)"
-    )
+    print("\n" + "=" * 60)
+    print("[结果对比] 三个峰值的优化结果")
+    print("=" * 60)
+    for r in results:
+        marker = " ✓ [最佳]" if r["peak_idx"] == best_idx else ""
+        print(
+            f"  峰值 {r['peak_idx']+1}: 粗延迟 {r['coarse_delay']*1000:8.3f}ms, "
+            f"精延迟 {r['fine_delay']*1000:8.3f}ms, "
+            f"误差 {r['error']:.6f}{marker}"
+        )
 
-    # ===== 第4步: 精细对齐（基于B-spline优化）=====
-    time_delay = optimize_time_delay(
+    time_delay = best_result["fine_delay"]
+    t_common = best_result["t_common"]
+
+    # 绘制精细对齐后的IMU波形对比
+    plot_fine_alignment_gyro_comparison(
         t_device,
         t_insta,
         gyro_mag_device,
         gyro_mag_insta,
-        t_common,
-        (t_insta[0], t_insta[-1]),
-        initial_guess=coarse_delay,
-    )
-
-    # 绘制精细对齐后的IMU波形对比
-    plot_fine_alignment_gyro_comparison(
-        t_device, t_insta, gyro_mag_device, gyro_mag_insta, time_delay, coarse_delay
+        time_delay,
+        best_result["coarse_delay"],
     )
 
     # ===== 打印时间同步结果 =====

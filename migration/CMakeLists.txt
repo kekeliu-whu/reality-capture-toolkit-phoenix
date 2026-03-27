@@ -113,6 +113,8 @@ add_executable(convert_l2pro src/tools/convert_l2pro.cc)
 target_link_libraries(convert_l2pro ${TEST_LIB})
 add_executable(convert_s20 src/tools/convert_s20.cc)
 target_link_libraries(convert_s20 ${TEST_LIB})
+add_executable(convert_manifold src/tools/convert_manifold.cc)
+target_link_libraries(convert_manifold ${TEST_LIB})
 
 target_include_directories(
     ${PROJECT_NAME}
