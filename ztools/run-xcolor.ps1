@@ -25,7 +25,7 @@ New-Item "$dataDir\xsfm" -Type Directory -Force | Out-Null
 
 # Verify required files exist
 Write-Host "Checking required files..." -ForegroundColor Cyan
-$lasFile = "$dataDir\map.las"
+$lasFile = "$dataDir\map_opt.las"
 $poseFile = "$dataDir\images\ImgPose.txt"
 
 Write-Host "Looking for: $lasFile" -ForegroundColor Yellow
@@ -49,7 +49,7 @@ Write-Host "Files verified successfully!" -ForegroundColor Green
 Write-Host "Step 1: Processing point cloud..." -ForegroundColor Green
 $xsfm_pc_exe = Join-Path $BUILD_PACK "xsfm_process_point_cloud.exe"
 & $xsfm_pc_exe `
-  --las_filename "$dataDir\map.las" `
+  --las_filename "$dataDir\map_opt.las" `
   --initial_pose_filename "$dataDir\images\ImgPose.txt" `
   --output_dir "$dataDir\xsfm" `
   --nooutput_full
@@ -134,7 +134,7 @@ if (-not $images_path) {
 & $xcolor_main_exe `
   --images_path "$images_path" `
   --sfm_result_path "$dataDir\xsfm\sparse\0" `
-  --point_cloud_filename "$dataDir\map.las" `
+  --point_cloud_filename "$dataDir\map_opt.las" `
   --output_path "$dataDir"
 
 if ($LASTEXITCODE -ne 0) {

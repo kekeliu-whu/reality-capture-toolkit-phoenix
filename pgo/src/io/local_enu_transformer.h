@@ -34,6 +34,7 @@ class LocalENUTransformer {
  private:
   double origin_lat_;
   double origin_lon_;
+  std::string proj_path_;  // used for proj_ functions
   std::string proj4_string_;
   PJ_CONTEXT *ctx_ = nullptr;
   PJ *transformer_ = nullptr;

@@ -68,8 +68,8 @@ double GetVoxelSizeForTargetSize(const PointCloudXYZI &points, int target_size) 
     iteration++;
   }
 
-  LOG(INFO) << "Voxel size for target size " << target_size << " found after " << iteration
-            << " iterations: " << 0.5 * (voxel_size_lower + voxel_size_upper);
+  spdlog::info("Voxel size for target size {} found after {} iterations: {}", target_size, iteration,
+               0.5 * (voxel_size_lower + voxel_size_upper));
 
   return 0.5 * (voxel_size_lower + voxel_size_upper);
 }
@@ -116,6 +116,6 @@ void DownsamplePoints(const PointCloudXYZI &sweep, PointCloudXYZI &sweep_downsam
     sweep_downsampled.push_back(center_point);
   }
 
-  spdlog::info("Downsampled by voxel from {} to {} points with voxel size {}", sweep.size(),
-               sweep_downsampled.size(), voxel_size);
+  spdlog::info("Downsampled by voxel from {} to {} points with voxel size {}", sweep.size(), sweep_downsampled.size(),
+               voxel_size);
 }

@@ -5,11 +5,24 @@
 
 #include <spdlog/spdlog.h>
 
+std::string GetExeDirectory() {
+  char path[MAX_PATH];
+  GetModuleFileNameA(NULL, path, MAX_PATH);
+
+  std::string fullPath(path);
+  size_t pos = fullPath.find_last_of("\\/");
+  return (pos == std::string::npos) ? "" : fullPath.substr(0, pos);
+}
+
 LocalENUTransformer::LocalENUTransformer(double origin_lat_deg,
                                          double origin_lon_deg)
     : origin_lat_(origin_lat_deg),
       origin_lon_(origin_lon_deg) {
   ctx_ = proj_context_create();
+
+  proj_path_          = GetExeDirectory();
+  const char* paths[] = {proj_path_.c_str()};
+  proj_context_set_search_paths(ctx_, 1, paths);
 
   // Build target local ENU projection (tmerc centered at origin)
   std::ostringstream oss;
@@ -18,7 +31,7 @@ LocalENUTransformer::LocalENUTransformer(double origin_lat_deg,
       << " +lon_0=" << origin_lon_deg
       << " +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs";
   std::string target_proj_str = oss.str();
-  proj4_string_ = target_proj_str;
+  proj4_string_               = target_proj_str;
 
   // Source CRS: WGS84 geographic (EPSG:4326)
   transformer_ = proj_create_crs_to_crs(ctx_, "EPSG:4326", target_proj_str.c_str(), nullptr);
@@ -42,9 +55,9 @@ LocalENUTransformer::~LocalENUTransformer() {
 }
 
 Eigen::Vector3d LocalENUTransformer::Convert(double lat_deg, double lon_deg,
-                                              double alt_m) const {
+                                             double alt_m) const {
   // EPSG:4326 expects (latitude, longitude) order
-  PJ_COORD coord_in = proj_coord(lat_deg, lon_deg, alt_m, 0);
+  PJ_COORD coord_in  = proj_coord(lat_deg, lon_deg, alt_m, 0);
   PJ_COORD coord_out = proj_trans(transformer_, PJ_FWD, coord_in);
 
   if (coord_out.xyz.x == HUGE_VAL || coord_out.xyz.y == HUGE_VAL) {
