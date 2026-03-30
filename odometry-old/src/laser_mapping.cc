@@ -60,8 +60,8 @@
 #include "sophus/se3.hpp"
 #include "voxel_map_util.h"
 
-DEFINE_string(project_dirname, "D:\\slam", "Path to the IMU data file");
-DEFINE_string(output_dir, "D:\\slam", "Directory to save output trajectory");
+DEFINE_string(project_dirname, "D:\\output", "Path to the IMU data file");
+DEFINE_string(output_dir, "D:\\output", "Directory to save output trajectory");
 
 /*** Time Log Variables ***/
 bool runtime_pos_log = false, extrinsic_est_en = true;

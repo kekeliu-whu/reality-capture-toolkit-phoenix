@@ -20,6 +20,7 @@ $BUILD_ALL_DIR = Join-Path $PROJECT_ROOT "build-all"
 $XCOLOR_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-xcolor\Release"
 $XCOLOR_MIGRATION_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-xcolor\migration_build\Release"
 $ODOMETRY_OLD_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-odometry-old\Release"
+$PGO_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-pgo\Release"
 $PYTHON_TOOLS_DIR = Join-Path $BUILD_ALL_DIR "build-python-tools"
 
 # CUDA paths
@@ -97,12 +98,12 @@ function Test-PrerequisitesAndBuild {
         Write-Status "Python Tools executables found: $pythonExeCount"
     }
 
-    # Verify convert_s20.exe from migration_build
+    # Verify convert_manifold.exe from migration_build
     Write-Status "Checking XColor migration_build executables..."
-    if (-not (Test-Path (Join-Path $XCOLOR_MIGRATION_BUILD_DIR "convert_s20.exe"))) {
-        $missing += "convert_s20.exe not found in migration_build"
+    if (-not (Test-Path (Join-Path $XCOLOR_MIGRATION_BUILD_DIR "convert_manifold.exe"))) {
+        $missing += "convert_manifold.exe not found in migration_build"
     } else {
-        Write-Status "convert_s20.exe found"
+        Write-Status "convert_manifold.exe found"
     }
 
     # Check build-all Release directories for DLL dependencies
@@ -177,9 +178,11 @@ function Copy-ExecutableFiles {
         "xsfm_reset_cameras.exe",
         "crashpad_handler.exe",
         # XColor Migration Build
-        "convert_s20.exe",
+        "convert_manifold.exe",
         # Odometry-Old Component
         "slam.exe",
+        # PGO Component
+        "slam_post.exe",
         # Python Tools
         "insta_compute_poses.exe",
         "insta_data_extraction.exe",
@@ -193,6 +196,7 @@ function Copy-ExecutableFiles {
     $allExeFiles = Get-ChildItem $XCOLOR_BUILD_DIR -Filter "*.exe" -ErrorAction SilentlyContinue
     $allExeFiles += Get-ChildItem $XCOLOR_MIGRATION_BUILD_DIR -Filter "*.exe" -ErrorAction SilentlyContinue
     $allExeFiles += Get-ChildItem $ODOMETRY_OLD_BUILD_DIR -Filter "*.exe" -ErrorAction SilentlyContinue
+    $allExeFiles += Get-ChildItem $PGO_BUILD_DIR -Filter "*.exe" -ErrorAction SilentlyContinue
     $allExeFiles += Get-ChildItem $PYTHON_TOOLS_DIR -Filter "*.exe" -ErrorAction SilentlyContinue
 
     foreach ($exeName in $exeFiles) {
@@ -232,6 +236,17 @@ function Copy-Dependencies {
     }
     $count = @(Get-ChildItem $ODOMETRY_OLD_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue).Count
     Write-Host "    Copied $count files"
+
+    Write-Status "Copying PGO Release DLL files..."
+    if (Test-Path $PGO_BUILD_DIR) {
+        Get-ChildItem $PGO_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination $PACK_DIR -Force
+        }
+        $count = @(Get-ChildItem $PGO_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue).Count
+        Write-Host "    Copied $count files"
+    } else {
+        Write-Host "    WARNING: PGO build directory not found at $PGO_BUILD_DIR" -ForegroundColor Yellow
+    }
 
     Write-Status "Copying CUDA DLL files..."
     if (Test-Path $CUDA_BIN_DIR) {
@@ -287,6 +302,15 @@ function Copy-DataFiles {
         Write-Host "    Copied proj.db"
     } else {
         Write-Host "    WARNING: proj.db not found at $PROJ_DB_SOURCE" -ForegroundColor Yellow
+    }
+
+    $pgoJsonSource = Join-Path $PROJECT_ROOT "migration\config\pgo\pgo.json"
+    Write-Status "Copying pgo.json..."
+    if (Test-Path $pgoJsonSource) {
+        Copy-Item -LiteralPath $pgoJsonSource -Destination $PACK_DIR -Force
+        Write-Host "    Copied pgo.json"
+    } else {
+        Write-Host "    WARNING: pgo.json not found at $pgoJsonSource" -ForegroundColor Yellow
     }
 }
 

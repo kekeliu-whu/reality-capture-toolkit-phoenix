@@ -9,7 +9,7 @@ param(
 
 # CMake executable path
 $CMAKE_EXE = "D:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
-$CMAKE_TOOLCHAIN_FILE = "F:/Library/vcpkg/scripts/buildsystems/vcpkg.cmake"
+$VCPKG_TOOLCHAIN_FILE = "F:/Library/vcpkg/scripts/buildsystems/vcpkg.cmake"
 
 # Project paths
 $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -19,6 +19,8 @@ $XCOLOR_SOURCE_DIR = Join-Path $PROJECT_ROOT "xcolor"
 $XCOLOR_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-xcolor"
 $ODOMETRY_OLD_SOURCE_DIR = Join-Path $PROJECT_ROOT "odometry-old"
 $ODOMETRY_OLD_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-odometry-old"
+$PGO_SOURCE_DIR = Join-Path $PROJECT_ROOT "pgo"
+$PGO_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-pgo"
 $SCRIPTS_DIR = Join-Path $PROJECT_ROOT "migration\scripts"
 $PYTHON_TOOLS_DIR = Join-Path $BUILD_ALL_DIR "build-python-tools"
 
@@ -58,6 +60,11 @@ if (!(Test-Path $SCRIPTS_DIR)) {
     exit 1
 }
 
+if (!(Test-Path $PGO_SOURCE_DIR)) {
+    Write-Host "ERROR: PGO source not found at $PGO_SOURCE_DIR" -ForegroundColor Red
+    exit 1
+}
+
 # Check Python files
 $PYTHON_FILES = @(
     "insta_data_extraction.py",
@@ -94,6 +101,7 @@ Write-Host ""
 Write-Host "Project Root: $PROJECT_ROOT" -ForegroundColor Gray
 Write-Host "XColor Build: $XCOLOR_BUILD_DIR" -ForegroundColor Gray
 Write-Host "Odometry-Old Build: $ODOMETRY_OLD_BUILD_DIR" -ForegroundColor Gray
+Write-Host "PGO Build: $PGO_BUILD_DIR" -ForegroundColor Gray
 Write-Host "Python Tools: $PYTHON_TOOLS_DIR" -ForegroundColor Gray
 Write-Host ""
 
@@ -128,7 +136,7 @@ Write-Host "Configuring with CMake..." -ForegroundColor Yellow
 
 & $CMAKE_EXE `
     -DCMAKE_EXPORT_COMPILE_COMMANDS:BOOL=TRUE `
-    -DCMAKE_TOOLCHAIN_FILE=F:/Library/vcpkg/scripts/buildsystems/vcpkg.cmake `
+    "-DCMAKE_TOOLCHAIN_FILE=$VCPKG_TOOLCHAIN_FILE" `
     --no-warn-unused-cli `
     -S $XCOLOR_SOURCE_DIR `
     -B $XCOLOR_BUILD_DIR `
@@ -177,7 +185,7 @@ Write-Host "Configuring with CMake..." -ForegroundColor Yellow
 
 & $CMAKE_EXE `
     -DCMAKE_EXPORT_COMPILE_COMMANDS:BOOL=TRUE `
-    -DCMAKE_TOOLCHAIN_FILE=F:/Library/vcpkg/scripts/buildsystems/vcpkg.cmake `
+    "-DCMAKE_TOOLCHAIN_FILE=$VCPKG_TOOLCHAIN_FILE" `
     --no-warn-unused-cli `
     -S $ODOMETRY_OLD_SOURCE_DIR `
     -B $ODOMETRY_OLD_BUILD_DIR `
@@ -204,6 +212,55 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "[OK] Odometry-Old build completed" -ForegroundColor Green
+Write-Host ""
+
+# ============================================================
+# Stage 2.5: Build PGO
+# ============================================================
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "Stage 2.5/3: Building PGO" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host ""
+
+if (Test-Path $PGO_BUILD_DIR) {
+    Write-Host "Removing existing build directory..." -ForegroundColor Gray
+    Remove-Item -Recurse -Force $PGO_BUILD_DIR
+}
+
+Write-Host "Creating build directory..." -ForegroundColor Gray
+New-Item -ItemType Directory -Path $PGO_BUILD_DIR -Force | Out-Null
+
+Write-Host "Configuring with CMake..." -ForegroundColor Yellow
+
+& $CMAKE_EXE `
+    -DCMAKE_EXPORT_COMPILE_COMMANDS:BOOL=TRUE `
+    "-DCMAKE_TOOLCHAIN_FILE=$VCPKG_TOOLCHAIN_FILE" `
+    --no-warn-unused-cli `
+    -S $PGO_SOURCE_DIR `
+    -B $PGO_BUILD_DIR `
+    -G "Visual Studio 17 2022" `
+    -T "host=x64" `
+    -A "x64"
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: PGO CMake configuration failed" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "Building..." -ForegroundColor Yellow
+
+& $CMAKE_EXE `
+    --build $PGO_BUILD_DIR `
+    --config "Release" `
+    --target "ALL_BUILD" `
+    -j 24
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: PGO build failed" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "[OK] PGO build completed" -ForegroundColor Green
 Write-Host ""
 
 # ============================================================
@@ -277,6 +334,10 @@ Write-Host ""
 
 Write-Host "[OK] Odometry-Old" -ForegroundColor Green
 Write-Host "  Location: $ODOMETRY_OLD_BUILD_DIR" -ForegroundColor Gray
+Write-Host ""
+
+Write-Host "[OK] PGO" -ForegroundColor Green
+Write-Host "  Location: $PGO_BUILD_DIR" -ForegroundColor Gray
 Write-Host ""
 
 Write-Host "[OK] Python Tools ($success/$($PYTHON_FILES.Count) compiled)" -ForegroundColor Green

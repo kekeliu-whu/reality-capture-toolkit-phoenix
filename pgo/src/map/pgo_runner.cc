@@ -1,5 +1,7 @@
 
 #include <spdlog/spdlog.h>
+#include <fstream>
+#include <iomanip>
 
 #include "io/read_write.h"
 #include "map/optimizer.h"
@@ -7,8 +9,8 @@
 #include "pgo_runner.h"
 #include "utils.h"
 
-void PgoRunner::Run(const std::string &input_path,
-                    const std::string &output_path) {
+void PgoRunner::Run(const std::string& input_path,
+                    const std::string& output_path) {
   std::vector<TimestampedPointCloud> submaps;
   LoadSubmapList(input_path, submaps, config_.submap_duration_secs());
 
@@ -42,4 +44,24 @@ void PgoRunner::Run(const std::string &input_path,
   }
   spdlog::info("Saving optimized map to {}", output_path + "/map_opt.las");
   SaveLasFile(submaps_reload, output_path + "/map_opt.las", proj4_string);
+
+  // todo kk
+  // save optimized poses to text file for evaluation
+  std::string traj_filename = output_path + "/traj_opt.txt";
+  std::ofstream traj_file(traj_filename);
+  if (!traj_file.is_open()) {
+    spdlog::error("Failed to open trajectory output file: {}", traj_filename);
+  } else {
+    traj_file << "#timestamp_s tx ty tz qx qy qz qw\n";
+    traj_file << std::fixed << std::setprecision(12);
+    for (const auto& sm : submaps_reload) {
+      const auto& pose     = sm.pose;
+      Eigen::Vector3d t    = pose.translation();
+      Eigen::Quaterniond q = pose.unit_quaternion();
+      traj_file << sm.timestamp << " " << t.x() << " " << t.y() << " " << t.z() << " "
+                << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << "\n";
+    }
+    spdlog::info("Saved optimized trajectory to {}", traj_filename);
+    traj_file.close();
+  }
 }

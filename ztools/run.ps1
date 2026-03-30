@@ -1,10 +1,10 @@
 #!/usr/bin/env pwsh
 # Run Insta360 Migration Pipeline
-# Usage: .\.run.ps1 -bagpath <imu.dat> -insvpath <video.insv> -outputdir <output/dir> [-calibfile <calib.yaml>] [-skip-convert_s20] [-skip-lasermapping]
+# Usage: .\.run.ps1 -inputdir <input/dir> -insvpath <video.insv> -outputdir <output/dir> [-calibfile <calib.yaml>] [-skip-convert_manifold] [-skip-lasermapping]
 
 param(
     [Parameter(Mandatory=$true)]
-    [string]$bagpath,
+    [string]$inputdir,
     
     [Parameter(Mandatory=$true)]
     [string]$insvpath,
@@ -14,7 +14,7 @@ param(
     
     [string]$calibfile = "",
     
-    [switch]$skip_convert_s20,
+    [switch]$skip_convert_manifold,
     
     [switch]$skip_lasermapping
 )
@@ -23,16 +23,16 @@ $ErrorActionPreference = "Stop"
 
 Write-Host "=== Insta360 Migration Pipeline ===" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "Bag Path:         $bagpath"
+Write-Host "Input Dir:        $inputdir"
 Write-Host "INSV Path:        $insvpath"
 Write-Host "Calibration:      $calibfile"
 Write-Host "Output Dir:       $outputdir"
-Write-Host "Skip Convert-S20: $skip_convert_s20"
+Write-Host "Skip Convert-Manifold: $skip_convert_manifold"
 Write-Host "Skip LaserMapping: $skip_lasermapping"
 Write-Host ""
 
 # Resolve paths to absolute
-$bagpath = (Resolve-Path $bagpath).Path
+$inputdir = (Resolve-Path $inputdir).Path
 $insvpath = (Resolve-Path $insvpath).Path
 $outputdir = if ([IO.Path]::IsPathRooted($outputdir)) { $outputdir } else { (Join-Path (Get-Location) $outputdir) }
 
@@ -43,8 +43,8 @@ if (!(Test-Path $outputdir)) {
 }
 
 # Verify inputs exist
-if (!(Test-Path $bagpath)) {
-    Write-Host "ERROR: Bag file not found: $bagpath" -ForegroundColor Red
+if (!(Test-Path $inputdir)) {
+    Write-Host "ERROR: Input directory not found: $inputdir" -ForegroundColor Red
     exit 1
 }
 
@@ -62,11 +62,12 @@ $BUILD_PACK = Join-Path $PROJECT_ROOT "build-pack"
 $NATIVE_TOOLS = $BUILD_PACK
 $PYTHON_TOOLS = $BUILD_PACK
 
-$convert_s20_exe = Join-Path $BUILD_PACK "convert_s20.exe"
+$convert_manifold_exe = Join-Path $BUILD_PACK "convert_manifold.exe"
 $insta_extraction_exe = Join-Path $PYTHON_TOOLS "insta_data_extraction.exe"
 $insta_sync_exe = Join-Path $PYTHON_TOOLS "insta_time_sync.exe"
 $insta_poses_exe = Join-Path $PYTHON_TOOLS "insta_compute_poses.exe"
 $lasermapping_exe = Join-Path $NATIVE_TOOLS "slam.exe"
+$slam_post_exe = Join-Path $NATIVE_TOOLS "slam_post.exe"
 
 # Check if EXEs exist
 if (!(Test-Path $insta_extraction_exe)) {
@@ -75,35 +76,35 @@ if (!(Test-Path $insta_extraction_exe)) {
     exit 1
 }
 
-# Step 1: Convert S20 Livox lidar and IMU data (optional)
-if (!$skip_convert_s20) {
-    Write-Host "=== Step 1: Converting S20 Livox/IMU data ===" -ForegroundColor Cyan
+# Step 1: Convert Manifold Livox lidar and IMU data (optional)
+if (!$skip_convert_manifold) {
+    Write-Host "=== Step 1: Converting Manifold Livox/IMU data ===" -ForegroundColor Cyan
     
-    if (Test-Path $convert_s20_exe) {
+    if (Test-Path $convert_manifold_exe) {
         if ($calibfile -and (Test-Path $calibfile)) {
-            Write-Host "Running: $convert_s20_exe" -ForegroundColor Yellow
-            Write-Host "  Bag: $bagpath" -ForegroundColor Gray
+            Write-Host "Running: $convert_manifold_exe" -ForegroundColor Yellow
+            Write-Host "  Input Dir: $inputdir" -ForegroundColor Gray
             Write-Host "  Calib: $calibfile" -ForegroundColor Gray
             
-            & $convert_s20_exe `
-                --bag_filename $bagpath `
+            & $convert_manifold_exe `
+                --project_dir $inputdir `
                 --calib_filename $calibfile `
                 --output_dir $outputdir
             
             if ($LASTEXITCODE -eq 0) {
-                Write-Host "[OK] S20 conversion completed" -ForegroundColor Green
+                Write-Host "[OK] Manifold conversion completed" -ForegroundColor Green
             } else {
-                Write-Host "[WARN] S20 conversion failed" -ForegroundColor Yellow
+                Write-Host "[WARN] Manifold conversion failed" -ForegroundColor Yellow
             }
         } else {
             Write-Host "[WARN] Calibration file not found or not provided: $calibfile" -ForegroundColor Yellow
             Write-Host "  Usage: -calibfile path/to/calib.yaml" -ForegroundColor Yellow
         }
     } else {
-        Write-Host "[WARN] convert_s20.exe not found at: $convert_s20_exe" -ForegroundColor Yellow
+        Write-Host "[WARN] convert_manifold.exe not found at: $convert_manifold_exe" -ForegroundColor Yellow
     }
 } else {
-    Write-Host "=== Step 1: Skipping S20 conversion ===" -ForegroundColor Yellow
+    Write-Host "=== Step 1: Skipping Manifold conversion ===" -ForegroundColor Yellow
 }
 
 # Step 2: Extract camera data from INSV
@@ -210,7 +211,7 @@ if ($LASTEXITCODE -ne 0) {
 # Step 5: Run lasermapping if not skipped
 if (!$skip_lasermapping) {
     Write-Host "`n=== Step 5: Computing trajectory from lidar data ===" -ForegroundColor Yellow
-    Write-Host "[WARN] This step requires pre-processed lidar data from S20 conversion" -ForegroundColor Yellow
+    Write-Host "[WARN] This step requires pre-processed lidar data from Manifold conversion" -ForegroundColor Yellow
     Write-Host "  Note: slam needs pre-processed .dat files in $outputdir" -ForegroundColor Yellow
     Write-Host "  - calibration.dat" -ForegroundColor Gray
     Write-Host "  - imu.dat" -ForegroundColor Gray
@@ -239,8 +240,30 @@ if (!$skip_lasermapping) {
         }
     } else {
         Write-Host "  Data files not found, skipping trajectory computation" -ForegroundColor Yellow
-        Write-Host "  To process: Run S20 conversion first or extract .dat files manually" -ForegroundColor Yellow
+        Write-Host "  To process: Run Manifold conversion first or extract .dat files manually" -ForegroundColor Yellow
     }
+}
+
+# Step 6: Run slam_post.exe to refine trajectory (if slam.exe succeeded)
+Write-Host "`n=== Step 6: Refining trajectory with slam_post.exe ===" -ForegroundColor Cyan
+if (Test-Path $slam_post_exe) {
+    $pgo_config_file = Join-Path $BUILD_PACK "pgo.json"
+    if (-not (Test-Path $pgo_config_file)) {
+        Write-Host "ERROR: pgo.json not found in build-pack. Please run .\ztools\build-pack.ps1" -ForegroundColor Red
+        exit 1
+    }
+
+    Write-Host "Running: $slam_post_exe --config_filename $pgo_config_file --project_input_path $outputdir --project_output_path $outputdir" -ForegroundColor Gray
+    
+    & $slam_post_exe "--config_filename=$pgo_config_file" "--project_input_path=$outputdir" "--project_output_path=$outputdir"
+    
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[OK] Trajectory refined with slam_post.exe" -ForegroundColor Green
+    } else {
+        Write-Host "[WARN] slam_post.exe failed to refine trajectory" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "[WARN] slam_post.exe not found, skipping trajectory refinement" -ForegroundColor Yellow
 }
 
 # Step 7: Compute camera poses

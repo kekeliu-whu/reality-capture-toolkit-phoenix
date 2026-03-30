@@ -17,11 +17,8 @@
 #include "proto/calib.pb.h"
 #include "proto/sensors.pb.h"
 
-DEFINE_string(project_dir, "D:\\ProjectX\\project-3d\\data\\manifold-tech-calib\\MT20260326-121109", "Project directory");
-DEFINE_string(
-    calib_filename,
-    "\\wsl.localhost\\Ubuntu-24.04\\home\\rick\\iKalibr\\src\\iKalibr\\calib-s20\\2026-02-06_11-34-29-s20\\ikalibr_output\\ikalibr_param.yaml",
-    "Calibration filename");
+DEFINE_string(project_dir, "D:\\ProjectX\\project-3d\\data\\manifold-tech-calib\\MT20260326-162323", "Project directory");
+DEFINE_string(calib_filename, "D:\\ProjectX\\project-3d\\data\\manifold-tech-calib\\ikalibr_param.yaml", "Calibration filename");
 DEFINE_string(output_dir, "D:\\output", "Output dir to save converted data");
 
 // Helper function to convert DDMM.MMMMMM format to decimal degrees
@@ -38,7 +35,7 @@ double ConvertGprsDegrees(double gps_coord, char direction) {
 
 // Helper function to parse GPS raw messages from gps.txt
 // Expects NMEA format: timestamp,$GNGGA,time,lat,N/S,lon,E/W,fix_quality,num_sats,hdop,altitude,M,geoid_height,M,...
-void ParseGpsRawMessages(const std::string& gps_file_path, proto::GpsMsgList& gnss_msg_list) {
+void ParseGpsRawMessages(const std::string& gps_file_path, proto::GpsMsgList& gnss_msg_list, std::ofstream& gnss_csv) {
   std::ifstream gps_file(gps_file_path);
   if (!gps_file.is_open()) {
     spdlog::error("Failed to open GPS file: {}", gps_file_path);
@@ -91,29 +88,41 @@ void ParseGpsRawMessages(const std::string& gps_file_path, proto::GpsMsgList& gn
       char lon_dir     = fields[6][0];
       double longitude = ConvertGprsDegrees(lon_raw, lon_dir);
 
-      double altitude = std::stod(fields[10]);
+      double hdop            = std::stod(fields[9]);
+      double altitude        = std::stod(fields[10]);
+      std::string alt_unit   = (fields.size() > 11 ? fields[11] : "");
+      double geoid_height    = std::stod(fields[12]);
+      std::string geoid_unit = (fields.size() > 13 ? fields[13] : "");
 
-      // Create GPS message
+      // Save full GNSS row to CSV (all gngga fields)
+      double ellipsoid_height = altitude + geoid_height;
+      gnss_csv << std::fixed << std::setprecision(6) << timestamp << "," << fields[2] << "," << std::setprecision(8) << latitude << "," << lat_dir
+               << "," << std::setprecision(8) << longitude << "," << lon_dir << "," << fix_quality << "," << std::setprecision(0)
+               << std::stoi(fields[8]) << "," << std::setprecision(2) << hdop << "," << std::setprecision(6) << altitude << "," << alt_unit << ","
+               << std::setprecision(6) << geoid_height << "," << geoid_unit << "," << std::setprecision(6) << ellipsoid_height << ","
+               << "\"" << line << "\"\n";
+
+      gga_count++;
+      if (gga_count % 100 == 0) {
+        spdlog::info("Parsed {} GNGGA messages", gga_count);
+      }
+
+      spdlog::info("Parsed GPS message at time: {:.6f} lat={:.8f}, lon={:.8f}, alt={:.3f}, fix_quality={}", timestamp, latitude, longitude, altitude,
+                   fix_quality);
+
+      if (fix_quality != 4) {
+        continue;
+      }
+
+      // Create GPS message if fix quality is 4 (RTK fixed)
       auto new_msg = gnss_msg_list.add_gps_msgs();
       new_msg->set_timestamp(timestamp);
       new_msg->set_latitude(latitude);
       new_msg->set_longitude(longitude);
-      new_msg->set_altitude(altitude);
-
-      // Set default standard deviations based on fix quality
-      // These are typical values for GNSS receivers
-      double std_dev = (fix_quality == 4) ? 0.05 : 0.1;  // RTK fixed is more accurate
-      new_msg->set_lat_std(std_dev);
-      new_msg->set_lon_std(std_dev);
-      new_msg->set_alt_std(std_dev * 2.0);  // Altitude accuracy is typically worse
-
-      gga_count++;
-      if (gga_count % 100 == 0) {
-        spdlog::debug("Parsed {} GNGGA messages", gga_count);
-      }
-
-      spdlog::debug("Parsed GPS message at time: {:.6f} lat={:.8f}, lon={:.8f}, alt={:.3f}, fix_quality={}", timestamp, latitude, longitude, altitude,
-                    fix_quality);
+      new_msg->set_altitude(ellipsoid_height);
+      new_msg->set_lat_std(0.05);  // RTK fixed is typically around 5cm accuracy
+      new_msg->set_lon_std(0.05);
+      new_msg->set_alt_std(0.1);  // Altitude accuracy is typically worse
     } catch (const std::exception& e) {
       spdlog::warn("Failed to parse GPS line: {}, error: {}", line, e.what());
       continue;
@@ -191,18 +200,10 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // Open GNSS CSV file for writing all fields
+  // Open GNSS CSV file for writing all fields (NMEA GNGGA rows)
   std::ofstream gnss_csv(FLAGS_output_dir + "/gnss.full.csv");
-  gnss_csv << "timestamp,"
-           << "bestpos_type,"
-           << "bestpos_lat,bestpos_lon,bestpos_hgt,"
-           << "bestpos_latstd,bestpos_lonstd,bestpos_hgtstd,"
-           << "bestpos_diffage,bestpos_svs,bestpos_solnsvs,"
-           << "psrpos_type,psrpos_lat,psrpos_lon,psrpos_hgt,psrpos_svs,psrpos_solnsvs,"
-           << "undulation,psrvel_east,psrvel_north,psrvel_ground,"
-           << "heading_type,heading_length,heading_degree,heading_pitch,"
-           << "heading_trackedsvs,heading_solnsvs,heading_ggl1,heading_ggl1l2,"
-           << "gdop,pdop,hdop,htdop,tdop,cutoff,num_sat\n";
+  gnss_csv << "timestamp,gps_time,latitude,lat_dir,longitude,lon_dir,fix_quality,num_sats,hdop,altitude,altitude_unit,geoid_height,geoid_unit,"
+              "ellipsoid_height,raw_line\n";
 
   // Process all bag files
   for (const auto& bag_file_path : bag_files) {
@@ -244,14 +245,14 @@ int main(int argc, char** argv) {
     bag.close();
   }
 
-  gnss_csv.close();
-  spdlog::info("GNSS raw data CSV written to: {}/gnss.full.csv", FLAGS_output_dir);
-
   // Load GPS data from gps/gps.txt file
   std::string gps_file = FLAGS_project_dir + "/gps/gps.txt";
   if (std::filesystem::exists(gps_file)) {
     spdlog::info("Loading GPS data from: {}", gps_file);
-    ParseGpsRawMessages(gps_file, gnss_msg_list);
+    ParseGpsRawMessages(gps_file, gnss_msg_list, gnss_csv);
+
+    gnss_csv.close();
+    spdlog::info("GNSS raw data CSV written to: {}/gnss.full.csv", FLAGS_output_dir);
   } else {
     spdlog::warn("GPS file not found at: {}", gps_file);
   }

@@ -2,17 +2,19 @@
 #include "map/pgo_runner.h"
 #include "migration/proto_io.h"
 
-DEFINE_string(project_input_path, "D:/slam", "Input project path");
-DEFINE_string(project_output_path, "D:/slam", "Output project path");
+DEFINE_string(project_input_path, "D:/output", "Input project path");
+DEFINE_string(project_output_path, "D:/output", "Output project path");
+DEFINE_string(config_filename, std::string(PROJECT_DIR) + "/../migration/config/pgo/pgo.json", "PGO configuration filename");
 
 int main(int argc, char **argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   proto::PgoConfig pgo_config;
-  auto ok = ReadPgoConfigFile(
-      std::string(PROJECT_DIR) + "/../migration/config/pgo/pgo.json",
-      pgo_config);
-  if (!ok) { spdlog::error("Check failed"); exit(1); }
+  auto ok = ReadPgoConfigFile(FLAGS_config_filename, pgo_config);
+  if (!ok) {
+    spdlog::error("Check failed");
+    exit(1);
+  }
   spdlog::info("Read configuration success:\n{}", pgo_config.DebugString());
 
   PgoRunner runner(pgo_config);
