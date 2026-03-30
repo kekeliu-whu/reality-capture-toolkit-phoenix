@@ -99,7 +99,7 @@ $xsfm_exe = Join-Path $BUILD_PACK "xsfm.exe"
   -point_cloud_offset_filename "$dataDir\xsfm\localenu.json" `
   -database_filename "$dataDir\xsfm\xsfm.db" `
   -initial_pose_filename "$dataDir\xsfm\localenu_pose.txt" `
-  -images_path "$dataDir\0\images" `
+  -images_path "$dataDir\images" `
   -output_path "$dataDir\xsfm\sparse" `
   --use_point_cloud
 

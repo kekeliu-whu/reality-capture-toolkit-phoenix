@@ -38,7 +38,7 @@ parser = argparse.ArgumentParser(description="科研相机数据提取工具")
 parser.add_argument(
     "--input-video-filename",
     type=str,
-    default="D:\\ProjectX\\project-3d\\data\\custom-device-dataset\\VID_20260206_033425_00_011.insv",
+    default="D:\\ProjectX\\project-3d\\data\\manifold-tech-calib\\calib\\MT20260326-161907\\VID_20260326_161848_00_055.insv",
     help="输入视频文件路径",
 )
 
@@ -46,7 +46,7 @@ parser.add_argument(
 parser.add_argument(
     "--output-dir",
     type=str,
-    default="D:/slam/",
+    default="D:/output/images",
     help="输出目录",
 )
 
@@ -54,7 +54,7 @@ parser.add_argument(
 parser.add_argument(
     "--time-offset",
     type=float,
-    default=1735725830.203135,
+    default=1749886731.5319195,
     help="时间偏移量（秒）",
 )
 
@@ -62,7 +62,7 @@ parser.add_argument(
 parser.add_argument(
     "--export-frames",
     action=argparse.BooleanOptionalAction,
-    default=False,
+    default=True,
     help="是否导出相机帧（默认: 导出；可用 --no-export-frames 关闭）",
 )
 

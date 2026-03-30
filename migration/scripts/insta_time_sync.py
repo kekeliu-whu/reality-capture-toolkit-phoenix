@@ -709,7 +709,7 @@ def main():
     print("[结果对比] 三个峰值的优化结果")
     print("=" * 60)
     for r in results:
-        marker = " ✓ [最佳]" if r["peak_idx"] == best_idx else ""
+        marker = " [最佳]" if r["peak_idx"] == best_idx else ""
         print(
             f"  峰值 {r['peak_idx']+1}: 粗延迟 {r['coarse_delay']*1000:8.3f}ms, "
             f"精延迟 {r['fine_delay']*1000:8.3f}ms, "

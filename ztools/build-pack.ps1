@@ -245,6 +245,39 @@ function Copy-Dependencies {
     }
 }
 
+function Download-VocabTree {
+    Write-Section "Downloading vocab_tree_faiss_flickr100K_words32K.bin"
+
+    $url = "https://github.com/kekeliu-whu/vcpkg/releases/download/2025.07.25-colmap-faiss-bow/vocab_tree_faiss_flickr100K_words32K.bin"
+    $destination = Join-Path $PACK_DIR "vocab_tree_faiss_flickr100K_words32K.bin"
+
+    try {
+        if (-not (Test-Path $PACK_DIR)) {
+            New-Item -ItemType Directory -Path $PACK_DIR -Force | Out-Null
+        }
+
+        $proxy = $env:HTTPS_PROXY
+        if (-not $proxy) { $proxy = $env:https_proxy }
+        if (-not $proxy) { $proxy = $env:HTTP_PROXY }
+        if (-not $proxy) { $proxy = $env:http_proxy }
+
+        $invokeParams = @{ Uri = $url; OutFile = $destination; UseBasicParsing = $true; ErrorAction = 'Stop' }
+        if ($proxy) {
+            Write-Status "Using proxy: $proxy"
+            $invokeParams.Proxy = $proxy
+            # 允许基于系统凭据认证代理（可选）
+            $invokeParams.ProxyUseDefaultCredentials = $true
+        }
+
+        Invoke-WebRequest @invokeParams
+        Write-Status "Downloaded vocab tree file to $destination"
+    } catch {
+        Write-ErrorMsg "Failed to download vocab tree file from $url"
+        Write-ErrorMsg $_.Exception.Message
+        exit 1
+    }
+}
+
 function Copy-DataFiles {
     Write-Section "Copying data files"
 
@@ -290,6 +323,9 @@ if ($TestOnly) {
     Write-Host "[TEST MODE]" -ForegroundColor Yellow
     Write-Host ""
 }
+
+# Download vocab tree file first (if missing, this exits)
+Download-VocabTree
 
 # Check prerequisites
 if (-not (Test-PrerequisitesAndBuild)) {
