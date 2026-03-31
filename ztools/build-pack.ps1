@@ -50,6 +50,12 @@ function Write-ErrorMsg {
     Write-Host "  [ERROR] $Text" -ForegroundColor Red
 }
 
+function Fail {
+    param([string]$Text)
+    Write-ErrorMsg $Text
+    exit 1
+}
+
 function Test-PrerequisitesAndBuild {
     Write-Section "Checking prerequisites and build artifacts"
 
@@ -191,6 +197,7 @@ function Copy-ExecutableFiles {
 
     Write-Status "Copying documented executable files..."
     $copiedCount = 0
+    $missing = @()
     
     # Search for each executable in all build directories
     $allExeFiles = Get-ChildItem $XCOLOR_BUILD_DIR -Filter "*.exe" -ErrorAction SilentlyContinue
@@ -202,14 +209,23 @@ function Copy-ExecutableFiles {
     foreach ($exeName in $exeFiles) {
         $foundFile = $allExeFiles | Where-Object { $_.Name -eq $exeName }
         if ($foundFile) {
-            Copy-Item -LiteralPath $foundFile.FullName -Destination $PACK_DIR -Force
-            Write-Host "    Copied: $exeName"
-            $copiedCount++
+            try {
+                Copy-Item -LiteralPath $foundFile.FullName -Destination $PACK_DIR -Force -ErrorAction Stop
+                Write-Host "    Copied: $exeName"
+                $copiedCount++
+            } catch {
+                $errMsg = $_.Exception.Message
+                Fail "Failed to copy executable ${exeName}: ${errMsg}"
+            }
         } else {
-            Write-Host "    WARNING: Not found: $exeName" -ForegroundColor Yellow
+            $missing += $exeName
         }
     }
-    
+
+    if ($missing.Count -gt 0) {
+        Fail "Missing executable files: $($missing -join ', ')"
+    }
+
     Write-Host "    Total copied: $copiedCount files"
 }
 
@@ -217,53 +233,52 @@ function Copy-Dependencies {
     Write-Section "Copying dependencies from Release directories"
 
     Write-Status "Copying XColor Release DLL files..."
-    Get-ChildItem $XCOLOR_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
-        Copy-Item -LiteralPath $_.FullName -Destination $PACK_DIR -Force
+    $xcolorDlls = Get-ChildItem $XCOLOR_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue
+    if ($xcolorDlls.Count -eq 0) { Fail "No DLL files found in $XCOLOR_BUILD_DIR" }
+    foreach ($dll in $xcolorDlls) {
+        try { Copy-Item -LiteralPath $dll.FullName -Destination $PACK_DIR -Force -ErrorAction Stop } catch { Fail "Failed to copy $($dll.Name): $($_.Exception.Message)" }
     }
-    $count = @(Get-ChildItem $XCOLOR_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue).Count
-    Write-Host "    Copied $count files"
+    Write-Host "    Copied $($xcolorDlls.Count) files"
 
     Write-Status "Copying XColor migration_build Release DLL files..."
-    Get-ChildItem $XCOLOR_MIGRATION_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
-        Copy-Item -LiteralPath $_.FullName -Destination $PACK_DIR -Force
+    $migrationDlls = Get-ChildItem $XCOLOR_MIGRATION_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue
+    if ($migrationDlls.Count -eq 0) { Fail "No DLL files found in $XCOLOR_MIGRATION_BUILD_DIR" }
+    foreach ($dll in $migrationDlls) {
+        try { Copy-Item -LiteralPath $dll.FullName -Destination $PACK_DIR -Force -ErrorAction Stop } catch { Fail "Failed to copy $($dll.Name): $($_.Exception.Message)" }
     }
-    $count = @(Get-ChildItem $XCOLOR_MIGRATION_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue).Count
-    Write-Host "    Copied $count files"
+    Write-Host "    Copied $($migrationDlls.Count) files"
 
     Write-Status "Copying Odometry-Old Release DLL files..."
-    Get-ChildItem $ODOMETRY_OLD_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
-        Copy-Item -LiteralPath $_.FullName -Destination $PACK_DIR -Force
+    $odometryDlls = Get-ChildItem $ODOMETRY_OLD_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue
+    if ($odometryDlls.Count -eq 0) { Fail "No DLL files found in $ODOMETRY_OLD_BUILD_DIR" }
+    foreach ($dll in $odometryDlls) {
+        try { Copy-Item -LiteralPath $dll.FullName -Destination $PACK_DIR -Force -ErrorAction Stop } catch { Fail "Failed to copy $($dll.Name): $($_.Exception.Message)" }
     }
-    $count = @(Get-ChildItem $ODOMETRY_OLD_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue).Count
-    Write-Host "    Copied $count files"
+    Write-Host "    Copied $($odometryDlls.Count) files"
 
     Write-Status "Copying PGO Release DLL files..."
-    if (Test-Path $PGO_BUILD_DIR) {
-        Get-ChildItem $PGO_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
-            Copy-Item -LiteralPath $_.FullName -Destination $PACK_DIR -Force
-        }
-        $count = @(Get-ChildItem $PGO_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue).Count
-        Write-Host "    Copied $count files"
-    } else {
-        Write-Host "    WARNING: PGO build directory not found at $PGO_BUILD_DIR" -ForegroundColor Yellow
+    if (-not (Test-Path $PGO_BUILD_DIR)) { Fail "PGO build directory not found: $PGO_BUILD_DIR" }
+    $pgoDlls = Get-ChildItem $PGO_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue
+    if ($pgoDlls.Count -eq 0) { Fail "No DLL files found in $PGO_BUILD_DIR" }
+    foreach ($dll in $pgoDlls) {
+        try { Copy-Item -LiteralPath $dll.FullName -Destination $PACK_DIR -Force -ErrorAction Stop } catch { Fail "Failed to copy $($dll.Name): $($_.Exception.Message)" }
     }
+    Write-Host "    Copied $($pgoDlls.Count) files"
 
     Write-Status "Copying CUDA DLL files..."
-    if (Test-Path $CUDA_BIN_DIR) {
-        Get-ChildItem $CUDA_BIN_DIR -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
-            Copy-Item -LiteralPath $_.FullName -Destination $PACK_DIR -Force
-        }
-        $count = @(Get-ChildItem $CUDA_BIN_DIR -Filter "*.dll" -ErrorAction SilentlyContinue).Count
-        Write-Host "    Copied $count files"
-    } else {
-        Write-Host "    WARNING: CUDA directory not found at $CUDA_BIN_DIR" -ForegroundColor Yellow
+    if (-not (Test-Path $CUDA_BIN_DIR)) { Fail "CUDA directory not found: $CUDA_BIN_DIR" }
+    $cudaDlls = Get-ChildItem $CUDA_BIN_DIR -Filter "*.dll" -ErrorAction SilentlyContinue
+    if ($cudaDlls.Count -eq 0) { Fail "No CUDA DLL files found in $CUDA_BIN_DIR" }
+    foreach ($dll in $cudaDlls) {
+        try { Copy-Item -LiteralPath $dll.FullName -Destination $PACK_DIR -Force -ErrorAction Stop } catch { Fail "Failed to copy $($dll.Name): $($_.Exception.Message)" }
     }
+    Write-Host "    Copied $($cudaDlls.Count) files"
 }
 
 function Download-VocabTree {
     Write-Section "Downloading vocab_tree_faiss_flickr100K_words32K.bin"
 
-    $url = "https://github.com/kekeliu-whu/vcpkg/releases/download/2025.07.25-colmap-faiss-bow/vocab_tree_faiss_flickr100K_words32K.bin"
+    $url = "https://kompflight.com/d3captureinstaller/vocab_tree_faiss_flickr100K_words32K.bin"
     $destination = Join-Path $PACK_DIR "vocab_tree_faiss_flickr100K_words32K.bin"
 
     try {
@@ -297,20 +312,22 @@ function Copy-DataFiles {
     Write-Section "Copying data files"
 
     Write-Status "Copying proj.db..."
-    if (Test-Path $PROJ_DB_SOURCE) {
-        Copy-Item -LiteralPath $PROJ_DB_SOURCE -Destination $PACK_DIR -Force
+    if (-not (Test-Path $PROJ_DB_SOURCE)) { Fail "proj.db not found at $PROJ_DB_SOURCE" }
+    try {
+        Copy-Item -LiteralPath $PROJ_DB_SOURCE -Destination $PACK_DIR -Force -ErrorAction Stop
         Write-Host "    Copied proj.db"
-    } else {
-        Write-Host "    WARNING: proj.db not found at $PROJ_DB_SOURCE" -ForegroundColor Yellow
+    } catch {
+        Fail "Failed to copy proj.db: $($_.Exception.Message)"
     }
 
     $pgoJsonSource = Join-Path $PROJECT_ROOT "migration\config\pgo\pgo.json"
     Write-Status "Copying pgo.json..."
-    if (Test-Path $pgoJsonSource) {
-        Copy-Item -LiteralPath $pgoJsonSource -Destination $PACK_DIR -Force
+    if (-not (Test-Path $pgoJsonSource)) { Fail "pgo.json not found at $pgoJsonSource" }
+    try {
+        Copy-Item -LiteralPath $pgoJsonSource -Destination $PACK_DIR -Force -ErrorAction Stop
         Write-Host "    Copied pgo.json"
-    } else {
-        Write-Host "    WARNING: pgo.json not found at $pgoJsonSource" -ForegroundColor Yellow
+    } catch {
+        Fail "Failed to copy pgo.json: $($_.Exception.Message)"
     }
 }
 
@@ -348,9 +365,6 @@ if ($TestOnly) {
     Write-Host ""
 }
 
-# Download vocab tree file first (if missing, this exits)
-Download-VocabTree
-
 # Check prerequisites
 if (-not (Test-PrerequisitesAndBuild)) {
     Write-Host ""
@@ -367,6 +381,9 @@ if ($TestOnly) {
 
 # Create pack directory
 Create-PackDirectory
+
+# Download vocab tree file first (if missing, this exits)
+Download-VocabTree
 
 # Copy files
 Copy-ExecutableFiles

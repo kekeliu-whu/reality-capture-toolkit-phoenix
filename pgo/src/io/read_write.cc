@@ -178,9 +178,6 @@ void SaveLasFile(const std::vector<TimestampedPointCloud> &submaps,
   options.add("scale_x", 1e-4);
   options.add("scale_y", 1e-4);
   options.add("scale_z", 1e-4);
-  options.add("offset_x", "auto");
-  options.add("offset_y", "auto");
-  options.add("offset_z", "auto");
   options.add("minor_version", 2);
   options.add("dataformat_id", 1);  // PointFormat = 1
 
@@ -195,9 +192,6 @@ void SaveLasFile(const std::vector<TimestampedPointCloud> &submaps,
   writer.prepare(table);
   writer.execute(table);
 }
-
-namespace {
-}  // namespace
 
 bool LoadGnssDataFromProject(const std::string &gnss_filename,
                              std::vector<GpsData> &gnss_data) {

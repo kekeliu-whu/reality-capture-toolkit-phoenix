@@ -7,13 +7,13 @@
 运行主处理脚本，将原始传感器数据转换为点云：
 
 ```powershell
-./ztools/run.ps1 -bagpath D:/ProjectX/project-3d/data/custom-device-dataset/all_2026-02-06-11-34-35.bag -insvpath D:/ProjectX/project-3d/data/custom-device-dataset/VID_20260206_033425_00_011.insv -calibfile D:/ProjectX/project-3d/data/custom-device-dataset/ikalibr_param.yaml -outputdir D:/output
+./ztools/run.ps1 -inputdir d:\ProjectX\project-3d\data\manifold-tech-calib\MT20260326-162323 -insvpath d:\ProjectX\project-3d\data\manifold-tech-calib\MT20260326-162323\VID_20260326_162319_00_057.insv -calibfile d:\ProjectX\project-3d\data\manifold-tech-calib\ikalibr_param.yaml -outputdir D:/output
 ```
 
 **参数说明：**
-- `-bagpath`: ROS bag 文件路径（传感器数据容器）
+- `-inputdir`: 原始输入数据目录（包含 Manifold 导出数据）
 - `-insvpath`: INSV 视频文件路径（Insta360 视频格式）
-- `-calibfile`: 相机标定参数文件（YAML 格式）
+- `-calibfile`: 相机标定参数文件（YAML 格式，推荐填写以启用 Manifold 转换）
 - `-outputdir`: 输出目录路径，存放处理结果
 
 ## 步骤 2: 颜色化处理

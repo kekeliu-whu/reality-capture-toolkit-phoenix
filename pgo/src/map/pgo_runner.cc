@@ -14,8 +14,8 @@ void PgoRunner::Run(const std::string& input_path,
   std::vector<TimestampedPointCloud> submaps;
   LoadSubmapList(input_path, submaps, config_.submap_duration_secs());
 
-  spdlog::info("Saving raw map to {}", output_path + "/map_raw.las");
-  SaveLasFile(submaps, output_path + "/map_raw.las");
+  // spdlog::info("Saving raw map to {}", output_path + "/map_raw.las");
+  // SaveLasFile(submaps, output_path + "/map_raw.las");
 
   // release raw scans to save memory
   MallocTrim();
