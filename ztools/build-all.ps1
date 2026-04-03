@@ -7,6 +7,16 @@ param(
     [switch]$TestOnly = $false
 )
 
+# Activate Python virtual environment
+Write-Host "Activating Python virtual environment..." -ForegroundColor Yellow
+& d:\ProjectX\project-3d\reality-capture-toolkit\.venv\Scripts\Activate.ps1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: Failed to activate virtual environment" -ForegroundColor Red
+    exit 1
+}
+Write-Host "Virtual environment activated successfully" -ForegroundColor Green
+Write-Host ""
+
 # CMake executable path
 $CMAKE_EXE = "D:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
 $VCPKG_TOOLCHAIN_FILE = "F:/Library/vcpkg/scripts/buildsystems/vcpkg.cmake"
