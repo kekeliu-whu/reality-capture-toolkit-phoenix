@@ -50,7 +50,6 @@ set(
   src/io/local_enu_transformer.cc
   src/common/msg_conversions.h
   src/common/types.h
-  src/factor/btc_factor.h
   src/factor/gps_factor.h
   src/factor/gravity_factor.h
   src/factor/local_parameterization_se3.h
@@ -82,9 +81,16 @@ if(VTK_FOUND)
   list(APPEND PGO_PRIVATE_LIBS ${VTK_LIBRARIES})
 endif()
 
+add_library(
+  pgo_private
+  STATIC
+  ${PGO_PRIVATE_SRCS}
+)
+target_link_libraries(pgo_private ${PGO_PRIVATE_LIBS})
+
 function(add_private_tool name)
-  add_executable(${name} ${ARGN} ${PGO_PRIVATE_SRCS})
-  target_link_libraries(${name} ${PGO_PRIVATE_LIBS})
+  add_executable(${name} ${ARGN})
+  target_link_libraries(${name} pgo_private)
 endfunction()
 
 add_private_tool(slam_post src/pgo_main.cc)

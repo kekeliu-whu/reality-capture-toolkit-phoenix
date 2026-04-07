@@ -1,5 +1,11 @@
 #define SOPHUS_DISABLE_ENSURES
 
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <cstdlib>
+#include <vector>
+
 #include <ceres/ceres.h>
 #include <pcl/kdtree/kdtree.h>
 #include <pcl/registration/gicp.h>
@@ -9,7 +15,6 @@
 // Use btc_compat/ stubs to satisfy ros/ros.h and visualization_msgs headers.
 #include "BTC.h"
 
-#include "factor/btc_factor.h"
 #include "factor/gravity_factor.h"
 #include "factor/local_parameterization_se3.h"
 #include "factor/pose_graph_edge_factor.h"
@@ -21,6 +26,74 @@
 namespace {
 
 using PointT = pcl::PointXYZI;
+
+std::string GetEnvString(const char *name) {
+  const char *value = nullptr;
+#ifdef _MSC_VER
+  char *buffer       = nullptr;
+  size_t buffer_size = 0;
+  if (_dupenv_s(&buffer, &buffer_size, name) != 0 || buffer == nullptr) {
+    return "";
+  }
+  value = buffer;
+#else
+  value = std::getenv(name);
+  if (value == nullptr) {
+    return "";
+  }
+#endif
+
+  std::string result(value);
+#ifdef _MSC_VER
+  free(buffer);
+#endif
+  return result;
+}
+
+bool IsEnabledFromEnv(const char *name) {
+  std::string env_value = GetEnvString(name);
+  if (env_value.empty()) {
+    return false;
+  }
+
+  std::string normalized(std::move(env_value));
+  std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                 [](unsigned char c) {
+                   return static_cast<char>(std::tolower(c));
+                 });
+  return normalized == "1" || normalized == "true" ||
+         normalized == "yes" || normalized == "on";
+}
+
+double EstimateMedianTimestampGap(
+    const std::vector<TimestampedPointCloud> &submaps) {
+  if (submaps.size() < 2) {
+    return 0.0;
+  }
+
+  std::vector<double> gaps;
+  gaps.reserve(submaps.size() - 1);
+  for (size_t i = 1; i < submaps.size(); ++i) {
+    const double gap = submaps[i].timestamp - submaps[i - 1].timestamp;
+    if (gap > 0.0) {
+      gaps.push_back(gap);
+    }
+  }
+
+  if (gaps.empty()) {
+    return 0.0;
+  }
+
+  const size_t mid = gaps.size() / 2;
+  std::nth_element(gaps.begin(), gaps.begin() + mid, gaps.end());
+  if ((gaps.size() % 2) == 1) {
+    return gaps[mid];
+  }
+
+  const double upper = gaps[mid];
+  std::nth_element(gaps.begin(), gaps.begin() + mid - 1, gaps.end());
+  return 0.5 * (gaps[mid - 1] + upper);
+}
 
 double CalcFitnessScore(const pcl::PointCloud<PointT>::ConstPtr &cloud1,
                         const pcl::PointCloud<PointT>::ConstPtr &cloud2,
@@ -82,8 +155,9 @@ bool MatchGICP(pcl::PointCloud<pcl::PointXYZI>::Ptr &target,
 
   pcl::PointCloud<pcl::PointXYZI> aligned_source;
   gicp.align(aligned_source, T_source_to_target.matrix().cast<float>());
-  T_source_to_target =
-      Sophus::SE3d(gicp.getFinalTransformation().cast<double>());
+  const Eigen::Matrix4d final_transform =
+      gicp.getFinalTransformation().cast<double>();
+  T_source_to_target = Sophus::SE3d::fitToSE3(final_transform);
 
   double score = CalcFitnessScore(target, source, T_source_to_target, 2.0);
   if (score < gicp_fitness_score_threshold) {
@@ -91,6 +165,189 @@ bool MatchGICP(pcl::PointCloud<pcl::PointXYZI>::Ptr &target,
     return true;
   }
   return false;
+}
+
+struct BTCConstraintStats {
+  int constraints_added          = 0;
+  int frames_without_descriptors = 0;
+  int frames_without_candidate   = 0;
+  int matches_rejected_by_time   = 0;
+  int matches_rejected_by_gicp   = 0;
+  int accepted_outside_radius    = 0;
+};
+
+ConfigSetting MakeBTCConfig(const proto::PgoConfig &config,
+                            double median_timestamp_gap) {
+  ConfigSetting btc_cfg;
+  btc_cfg.voxel_size_                 = 1.0f;
+  btc_cfg.voxel_init_num_             = 10;
+  btc_cfg.plane_merge_normal_thre_    = 0.1f;
+  btc_cfg.plane_merge_dis_thre_       = 0.3f;
+  btc_cfg.plane_detection_thre_       = 0.01f;
+  btc_cfg.proj_plane_num_             = 2;
+  btc_cfg.proj_image_resolution_      = 0.5f;
+  btc_cfg.proj_image_high_inc_        = 0.1f;
+  btc_cfg.proj_dis_min_               = 0.0f;
+  btc_cfg.proj_dis_max_               = 5.0f;
+  btc_cfg.summary_min_thre_           = 10.0f;
+  btc_cfg.line_filter_enable_         = 1;
+  btc_cfg.useful_corner_num_          = 100;
+  btc_cfg.touch_filter_enable_        = 0;
+  btc_cfg.descriptor_near_num_        = 15.0f;
+  btc_cfg.descriptor_min_len_         = 2.0f;
+  btc_cfg.descriptor_max_len_         = 50.0f;
+  btc_cfg.non_max_suppression_radius_ = 2.0f;
+  btc_cfg.std_side_resolution_        = 0.2f;
+  btc_cfg.skip_near_num_              = 30;
+  btc_cfg.candidate_num_              = 20;
+  btc_cfg.rough_dis_threshold_        = 0.01f;
+  btc_cfg.similarity_threshold_       = 0.7f;
+  btc_cfg.icp_threshold_              = 0.15f;
+  btc_cfg.normal_threshold_           = 0.2f;
+  btc_cfg.dis_threshold_              = 0.5f;
+
+  if (median_timestamp_gap > 0.0) {
+    btc_cfg.skip_near_num_ = std::max(
+        30, static_cast<int>(std::llround(
+                config.loop_closure_search_time_diff() / median_timestamp_gap)));
+  }
+
+  return btc_cfg;
+}
+
+void LogBTCConfig(const ConfigSetting &btc_cfg,
+                  const proto::PgoConfig &config,
+                  double median_timestamp_gap,
+                  double trajectory_duration,
+                  bool visualize_stdescs) {
+  if (median_timestamp_gap <= 0.0) {
+    spdlog::warn(
+        "BTC could not infer a positive timestamp gap from submaps; using default skip_near_num={} frames",
+        btc_cfg.skip_near_num_);
+  }
+
+  spdlog::info(
+      "BTC config: median_dt={:.3f}s, traj_duration={:.1f}s, skip_near_num={} frames, candidate_num={}, similarity_threshold={:.2f}, icp_threshold={:.2f}",
+      median_timestamp_gap, trajectory_duration, btc_cfg.skip_near_num_,
+      btc_cfg.candidate_num_, btc_cfg.similarity_threshold_,
+      btc_cfg.icp_threshold_);
+
+  if (trajectory_duration <= config.loop_closure_search_time_diff()) {
+    spdlog::warn(
+        "Trajectory duration {:.1f}s is not longer than loop_closure_search_time_diff {:.1f}s. BTC retrieval may never accept a time-separated loop for this dataset.",
+        trajectory_duration, config.loop_closure_search_time_diff());
+  }
+
+  if (visualize_stdescs) {
+    spdlog::info(
+        "PGO_BTC_VISUALIZE is enabled. BTC descriptor visualization will block on each submap until you press N.");
+  }
+}
+
+Eigen::DiagonalMatrix<double, 6> MakeBTCSqrtInformation(
+    const proto::PgoConfig &config) {
+  Eigen::DiagonalMatrix<double, 6> btc_sqrt_information;
+  btc_sqrt_information.diagonal()
+      << 1.0 / config.loop_edge_translation_error(),
+      1.0 / config.loop_edge_translation_error(),
+      1.0 / config.loop_edge_translation_error(),
+      1.0 / (config.loop_edge_rotation_error() / 180.0 * M_PI),
+      1.0 / (config.loop_edge_rotation_error() / 180.0 * M_PI),
+      1.0 / (config.loop_edge_rotation_error() / 180.0 * M_PI);
+  return btc_sqrt_information;
+}
+
+pcl::PointCloud<pcl::PointXYZINormal>::Ptr GetCurrentPlaneCloud(
+    STDescManager &desc_manager) {
+  if (!desc_manager.plane_cloud_vec_.empty()) {
+    return desc_manager.plane_cloud_vec_.back();
+  }
+  return pcl::PointCloud<pcl::PointXYZINormal>::Ptr(
+      new pcl::PointCloud<pcl::PointXYZINormal>());
+}
+
+void TryAddBTCConstraintForFrame(
+    int frame_id,
+    std::vector<STD> &stds,
+    ceres::Problem &problem,
+    std::vector<TimestampedPointCloud> &submaps,
+    STDescManager &desc_manager,
+    const ConfigSetting &btc_cfg,
+    const proto::PgoConfig &config,
+    const Eigen::DiagonalMatrix<double, 6> &btc_sqrt_information,
+    BTCConstraintStats &stats) {
+  if (frame_id <= btc_cfg.skip_near_num_) {
+    return;
+  }
+
+  std::pair<int, double> loop_result;
+  std::pair<Eigen::Vector3d, Eigen::Matrix3d> loop_transform;
+  std::vector<std::pair<STD, STD>> loop_std_pair;
+  auto pl_cur = GetCurrentPlaneCloud(desc_manager);
+  desc_manager.SearchLoop(stds, loop_result, loop_transform, loop_std_pair,
+                          pl_cur);
+
+  const int matched_id = loop_result.first;
+  if (matched_id < 0) {
+    ++stats.frames_without_candidate;
+    return;
+  }
+  if (matched_id >= frame_id) {
+    return;
+  }
+
+  const double time_diff =
+      std::abs(submaps[frame_id].timestamp - submaps[matched_id].timestamp);
+  if (time_diff <= config.loop_closure_search_time_diff()) {
+    ++stats.matches_rejected_by_time;
+    spdlog::info(
+        "BTC match {}<->{} rejected: time diff {:.2f}s <= {:.2f}s",
+        frame_id, matched_id, time_diff,
+        config.loop_closure_search_time_diff());
+    return;
+  }
+
+  const double spatial_dist =
+      (submaps[frame_id].pose.translation() -
+       submaps[matched_id].pose.translation())
+          .norm();
+  if (spatial_dist > config.loop_closure_search_radius()) {
+    ++stats.accepted_outside_radius;
+    spdlog::warn(
+        "BTC match {}<->{} verified with score {:.3f} but prior pose distance is {:.2f}m > {:.2f}m. Keeping it because prior drift can hide real loops.",
+        frame_id, matched_id, loop_result.second, spatial_dist,
+        config.loop_closure_search_radius());
+  }
+
+  const Eigen::Vector3d &t_btc = loop_transform.first;
+  const Eigen::Matrix3d &R_btc = loop_transform.second;
+  Sophus::SE3d T_current_to_matched(R_btc, t_btc);
+  const bool gicp_ok = MatchGICP(
+      submaps[matched_id].cloud,
+      submaps[frame_id].cloud,
+      T_current_to_matched,
+      config.gicp_fitness_score_threshold(),
+      config.gicp_max_iterations(),
+      config.gicp_transform_epsilon());
+  if (!gicp_ok) {
+    ++stats.matches_rejected_by_gicp;
+    spdlog::info("BTC match {}<->{} rejected by GICP refinement",
+                 frame_id, matched_id);
+    return;
+  }
+
+  problem.AddResidualBlock(
+      PoseGraphEdgeFactor::Create(T_current_to_matched.inverse(),
+                                  btc_sqrt_information.toDenseMatrix()),
+      nullptr,
+      submaps[frame_id].pose.data(),
+      submaps[matched_id].pose.data());
+
+  ++stats.constraints_added;
+  spdlog::info(
+      "BTC constraint: submap {} <-> {} (score={:.3f}, time={:.2f}s, prior_dist={:.2f}m, stds={})",
+      frame_id, matched_id, loop_result.second, time_diff, spatial_dist,
+      stds.size());
 }
 
 void AddParameters(ceres::Problem &problem,
@@ -136,93 +393,12 @@ void AddAdjacentConstraints(
     auto &submap_a = submaps[i];
     auto &submap_b = submaps[i + 1];
 
-    Sophus::SE3d T_ab      = submap_a.pose.inverse() * submap_b.pose;
+    Sophus::SE3d T_b2a     = submap_a.pose.inverse() * submap_b.pose;
     auto residual_block_id = problem.AddResidualBlock(
-        PoseGraphEdgeFactor::Create(T_ab, odom_sqrt_information), nullptr,
+        PoseGraphEdgeFactor::Create(T_b2a, odom_sqrt_information), nullptr,
         submap_a.pose.data(), submap_b.pose.data());
     prior_residual_blocks.insert(residual_block_id);
   }
-}
-
-void AddLoopClosureConstraints(ceres::Problem &problem,
-                               std::vector<TimestampedPointCloud> &submaps,
-                               const proto::PgoConfig &config) {
-  Eigen::DiagonalMatrix<double, 6> loop_sqrt_information;
-  loop_sqrt_information.diagonal() << 1 / config.loop_edge_translation_error(),
-      1 / config.loop_edge_translation_error(),
-      1 / config.loop_edge_translation_error(),
-      1 / (config.loop_edge_rotation_error() / 180.0 * M_PI),
-      1 / (config.loop_edge_rotation_error() / 180.0 * M_PI),
-      1 / (config.loop_edge_rotation_error() / 180.0 * M_PI);
-
-  std::set<std::pair<int, int>> edges_used;
-  int loop_edge_num = 40;  // todo
-  do {
-    int target_id = rand() % submaps.size();
-
-    // select candidates
-    std::vector<int> candidate_scan_ids;
-    for (int i = 0; i < submaps.size(); ++i) {
-      if (abs(submaps[target_id].timestamp - submaps[i].timestamp) > config.loop_closure_search_time_diff()) {
-        if ((submaps[target_id].pose.translation() -
-             submaps[i].pose.translation())
-                .norm() < config.loop_closure_search_radius()) {  // todo
-          candidate_scan_ids.push_back(i);
-        }
-      }
-    }
-
-    if (candidate_scan_ids.empty()) {
-      spdlog::info("candidate scan ids empty");
-      continue;
-    }
-
-    if (candidate_scan_ids.size() <= 0) {
-      spdlog::error("candidate_scan_ids.size() <= 0");
-      exit(1);
-    }
-    int source_id = candidate_scan_ids[rand() % candidate_scan_ids.size()];
-
-    if (edges_used.find({target_id, source_id}) != edges_used.end() ||
-        edges_used.find({source_id, target_id}) != edges_used.end()) {
-      continue;
-    }
-
-    // match
-    Sophus::SE3d T_source_to_target(submaps[target_id].pose.inverse() *
-                                    submaps[source_id].pose);
-
-    if (source_id < 0) {
-      spdlog::error("CHECK_GE failed: source_id >= 0");
-      exit(1);
-    }
-    if (source_id >= submaps.size()) {
-      spdlog::error("CHECK_LT failed: source_id < submaps.size()");
-      exit(1);
-    }
-    if (target_id < 0) {
-      spdlog::error("CHECK_GE failed: target_id >= 0");
-      exit(1);
-    }
-    if (target_id >= submaps.size()) {
-      spdlog::error("CHECK_LT failed: target_id < submaps.size()");
-      exit(1);
-    }
-
-    if (MatchGICP(submaps[target_id].cloud, submaps[source_id].cloud,
-                  T_source_to_target, config.gicp_fitness_score_threshold(),
-                  config.gicp_max_iterations(),
-                  config.gicp_transform_epsilon())) {
-      // add loop constraint
-      problem.AddResidualBlock(PoseGraphEdgeFactor::Create(
-                                   T_source_to_target, loop_sqrt_information),
-                               nullptr, submaps[target_id].pose.data(),
-                               submaps[source_id].pose.data());
-
-      edges_used.insert({target_id, source_id});
-      loop_edge_num--;
-    }
-  } while (loop_edge_num > 0);
 }
 
 void RemoveNonPriorConstraints(
@@ -348,24 +524,16 @@ void OptimizeWithGnss(std::vector<TimestampedPointCloud> &submaps,
   }
 
   // Add BTC loop closure constraints
-  //AddBTCConstraints(problem, submaps, config);
+  AddBTCConstraints(problem, submaps, config);
 
-  // Iterative optimization with loop closure and GNSS updates
-  for (int iter = 0; iter < config.outer_iteration_num(); ++iter) {
-    // AddLoopClosureConstraints(problem, submaps, config);
+  ceres::Solver::Options options;
+  options.minimizer_progress_to_stdout = true;
+  options.max_num_iterations           = config.inner_iteration_num();
+  ceres::Solver::Summary summary;
 
-    ceres::Solver::Options options;
-    options.minimizer_progress_to_stdout = true;
-    options.max_num_iterations           = config.inner_iteration_num();
-    ceres::Solver::Summary summary;
-
-    spdlog::info("Optimization iteration {} (with GNSS fusion)...", iter + 1);
-    ceres::Solve(options, &problem, &summary);
-    spdlog::info("{}", summary.FullReport());
-
-    // Clean up non-prior constraints for the next iteration
-    // RemoveNonPriorConstraints(problem, prior_residual_blocks);
-  }
+  spdlog::info("Optimization iteration (with GNSS fusion)...");
+  ceres::Solve(options, &problem, &summary);
+  spdlog::info("{}", summary.FullReport());
 
   spdlog::info("GNSS-fused optimization completed successfully");
 }
@@ -380,120 +548,56 @@ void AddBTCConstraints(ceres::Problem &problem,
 
   spdlog::info("Starting BTC-based loop closure detection on {} submaps", submaps.size());
 
-  // ---------- 1. Configure STDescManager ----------
-  // Use indoor-friendly defaults. skip_near_num controls how many
-  // temporally-adjacent frames are excluded during retrieval; it is set
-  // proportionally to loop_closure_search_time_diff / submap spacing.
-  ConfigSetting btc_cfg;
-  btc_cfg.voxel_size_                 = 1.0f;
-  btc_cfg.voxel_init_num_             = 10;
-  btc_cfg.plane_merge_normal_thre_    = 0.1f;
-  btc_cfg.plane_merge_dis_thre_       = 0.3f;
-  btc_cfg.plane_detection_thre_       = 0.01f;
-  btc_cfg.proj_plane_num_             = 2;
-  btc_cfg.proj_image_resolution_      = 0.5f;
-  btc_cfg.proj_image_high_inc_        = 0.1f;
-  btc_cfg.proj_dis_min_               = 0.0f;
-  btc_cfg.proj_dis_max_               = 5.0f;
-  btc_cfg.summary_min_thre_           = 10.0f;
-  btc_cfg.line_filter_enable_         = 1;
-  btc_cfg.useful_corner_num_          = 100;
-  btc_cfg.touch_filter_enable_        = 0;
-  btc_cfg.descriptor_near_num_        = 15.0f;
-  btc_cfg.descriptor_min_len_         = 2.0f;
-  btc_cfg.descriptor_max_len_         = 50.0f;
-  btc_cfg.non_max_suppression_radius_ = 2.0f;
-  btc_cfg.std_side_resolution_        = 0.2f;
-  // skip_near_num: skip this many *frames* during candidate retrieval.
-  // Each submap is ~1 s; loop_closure_search_time_diff is given in seconds.
-  btc_cfg.skip_near_num_        = 0;
-  btc_cfg.candidate_num_        = 20;
-  btc_cfg.rough_dis_threshold_  = 0.01f;
-  btc_cfg.similarity_threshold_ = 0.7f;
-  btc_cfg.icp_threshold_        = 0.15f;
-  btc_cfg.normal_threshold_     = 0.2f;
-  btc_cfg.dis_threshold_        = 0.5f;
+  const bool visualize_stdescs      = IsEnabledFromEnv("PGO_BTC_VISUALIZE");
+  const double median_timestamp_gap = EstimateMedianTimestampGap(submaps);
+  const double trajectory_duration =
+      std::max(0.0, submaps.back().timestamp - submaps.front().timestamp);
+  ConfigSetting btc_cfg = MakeBTCConfig(config, median_timestamp_gap);
+  LogBTCConfig(btc_cfg,
+               config,
+               median_timestamp_gap,
+               trajectory_duration,
+               visualize_stdescs);
 
   STDescManager desc_manager(btc_cfg);
+  const auto btc_sqrt_information = MakeBTCSqrtInformation(config);
+  BTCConstraintStats stats;
 
-  // Information matrix for BTC loop-closure constraints
-  Eigen::DiagonalMatrix<double, 6> btc_sqrt_information;
-  btc_sqrt_information.diagonal() << 1.0 / config.loop_edge_translation_error(),
-      1.0 / config.loop_edge_translation_error(),
-      1.0 / config.loop_edge_translation_error(),
-      1.0 / (config.loop_edge_rotation_error() / 180.0 * M_PI),
-      1.0 / (config.loop_edge_rotation_error() / 180.0 * M_PI),
-      1.0 / (config.loop_edge_rotation_error() / 180.0 * M_PI);
-
-  int btc_constraints_added = 0;
-
-  // ---------- 2. Online build+search loop ----------
-  // Process submaps in chronological order.
-  // For each frame i:
-  //   a) Generate STDescs from its point cloud.
-  //   b) SearchLoop against the database built so far (frames 0..i-1).
-  //      The library skips frames whose frame_number is within skip_near_num of
-  //      the current frame, so only temporally distant matches are returned.
-  //   c) If a candidate is found and passes spatial filter, add constraint.
-  //   d) AddSTDescs to register this frame in the database.
   for (int i = 0; i < static_cast<int>(submaps.size()); ++i) {
     if (!submaps[i].cloud || submaps[i].cloud->empty()) {
-      // Still need to advance the database frame counter
       std::vector<STD> empty_stds;
       desc_manager.AddSTDescs(empty_stds);
       continue;
     }
 
-    // a) Generate descriptors for this submap
     std::vector<STD> stds;
     desc_manager.GenerateSTDescs(submaps[i].cloud, stds, i);
 
-    desc_manager.VisualizeSTDescs(submaps[i].cloud, stds);
-
-    // b) Search for a loop closure candidate among already-registered frames.
-    //    SearchLoop internally respects skip_near_num so only frames that are
-    //    at least skip_near_num frames away are considered.
-    if (i > btc_cfg.skip_near_num_) {
-      std::pair<int, double> loop_result;
-      std::pair<Eigen::Vector3d, Eigen::Matrix3d> loop_transform;
-      std::vector<std::pair<STD, STD>> loop_std_pair;
-      // plane cloud of the current scan (needed by SearchLoop's icp verify)
-      pcl::PointCloud<pcl::PointXYZINormal>::Ptr pl_cur(new pcl::PointCloud<pcl::PointXYZINormal>());
-
-      desc_manager.SearchLoop(stds, loop_result, loop_transform, loop_std_pair, pl_cur);
-
-      int matched_id = loop_result.first;  // -1 means no match
-      if (matched_id >= 0 && matched_id < i) {
-        // c) Verify with additional spatial distance filter
-        double spatial_dist =
-            (submaps[i].pose.translation() - submaps[matched_id].pose.translation()).norm();
-        if (spatial_dist <= config.loop_closure_search_radius()) {
-          // Build the relative pose SE3 from the BTC transform
-          // loop_transform: (translation, rotation_matrix) that maps
-          // the matched frame to the current frame.
-          const Eigen::Vector3d &t_btc = loop_transform.first;
-          const Eigen::Matrix3d &R_btc = loop_transform.second;
-          Sophus::SE3d T_matched_to_cur(R_btc, t_btc);
-
-          problem.AddResidualBlock(
-              BTCFactor::Create(T_matched_to_cur, btc_sqrt_information),
-              nullptr,
-              submaps[i].pose.data(),
-              submaps[matched_id].pose.data());
-
-          btc_constraints_added++;
-          spdlog::info("BTC constraint: submap {} <-> {} (score={:.3f}, dist={:.2f}m)",
-                       i, matched_id, loop_result.second, spatial_dist);
-        } else {
-          spdlog::debug("BTC match {}<->{} rejected: spatial dist {:.2f} > {:.2f}",
-                        i, matched_id, spatial_dist, config.loop_closure_search_radius());
-        }
-      }
+    if (visualize_stdescs) {
+      desc_manager.VisualizeSTDescs(submaps[i].cloud, stds);
     }
 
-    // d) Register this frame's descriptors in the database
+    if (stds.empty()) {
+      ++stats.frames_without_descriptors;
+    }
+
+    TryAddBTCConstraintForFrame(i,
+                                stds,
+                                problem,
+                                submaps,
+                                desc_manager,
+                                btc_cfg,
+                                config,
+                                btc_sqrt_information,
+                                stats);
+
     desc_manager.AddSTDescs(stds);
   }
 
-  spdlog::info("BTC constraint detection finished: {} constraints added", btc_constraints_added);
+  spdlog::info(
+      "BTC constraint detection finished: {} constraints added, {} frames without descriptors, {} frames without verified candidate, {} matches rejected by time threshold, {} matches rejected by GICP, {} accepted outside prior radius",
+      stats.constraints_added, stats.frames_without_descriptors,
+      stats.frames_without_candidate, stats.matches_rejected_by_time,
+      stats.matches_rejected_by_gicp,
+      stats.accepted_outside_radius);
 }

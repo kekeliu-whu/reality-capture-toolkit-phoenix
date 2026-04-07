@@ -1,5 +1,7 @@
 #include "BTC.h"
 
+#include <spdlog/spdlog.h>
+
 void read_parameters(ConfigSetting &config_setting, int isHighFly)
 {
   if(!isHighFly)
@@ -208,13 +210,21 @@ void STDescManager::SearchLoop(
     std::vector<std::pair<STD, STD>> &loop_std_pair, pcl::PointCloud<pcl::PointXYZINormal>::Ptr pl_cur) 
 {
   if (stds_vec.size() == 0) {
-    // ROS_ERROR_STREAM("No STDescs!");
+    spdlog::info("BTC frame {}: no ST descriptors generated", current_frame_id_);
     loop_result = std::pair<int, double>(-1, 0);
     return;
   }
   // step1, select candidates, default number 50
   std::vector<STDMatchList> candidate_matcher_vec;
   candidate_selector(stds_vec, candidate_matcher_vec);
+
+  if (candidate_matcher_vec.empty()) {
+    spdlog::info(
+        "BTC frame {}: no rough candidates survived retrieval (stds={})",
+        current_frame_id_, stds_vec.size());
+    loop_result = std::pair<int, double>(-1, 0);
+    return;
+  }
 
   // step2, select best candidates from rough candidates
   double best_score = 0;
@@ -245,11 +255,19 @@ void STDescManager::SearchLoop(
   }
 
   if (best_score > config_setting_.icp_threshold_) {
+    spdlog::info(
+        "BTC frame {}: accepted candidate {} with score {:.3f} (rough_candidates={})",
+        current_frame_id_, best_candidate_id, best_score,
+        candidate_matcher_vec.size());
     loop_result = std::pair<int, double>(best_candidate_id, best_score);
     loop_transform = best_transform;
     loop_std_pair = best_sucess_match_vec;
     return;
   } else {
+    spdlog::info(
+        "BTC frame {}: best candidate {} rejected by geometric verification score {:.3f} <= {:.3f}",
+        current_frame_id_, best_candidate_id, best_score,
+        config_setting_.icp_threshold_);
     loop_result = std::pair<int, double>(-1, 0);
     return;
   }

@@ -33,9 +33,9 @@
 // where I is the information matrix which is the inverse of the covariance.
 class PoseGraphEdgeFactor {
 public:
-  PoseGraphEdgeFactor(Sophus::SE3d T_ab_measured,
+  PoseGraphEdgeFactor(Sophus::SE3d T_b2a,
                       Eigen::Matrix<double, 6, 6> sqrt_information)
-      : T_origin_(T_ab_measured),
+      : T_b2a_(T_b2a),
         sqrt_information_(std::move(sqrt_information)) {}
 
   template <typename T>
@@ -46,17 +46,17 @@ public:
     Eigen::Map<const Sophus::SE3<T>> T_b(T_b_ptr);
 
     // Compute the relative transformation
-    Sophus::SE3<T> T_ab_estimated = T_a.inverse() * T_b;
+    Sophus::SE3<T> T_b2a_estimated = T_a.inverse() * T_b;
 
     // Compute the error
-    Sophus::SE3<T> T_ab_error =
-        T_ab_estimated * T_origin_.cast<T>().inverse();
+    Sophus::SE3<T> T_b2a_error =
+        T_b2a_estimated * T_b2a_.cast<T>().inverse();
 
     // Compute the residuals
     Eigen::Map<Eigen::Matrix<T, 6, 1>> residuals(residuals_ptr);
-    residuals.template head<3>() = T_ab_error.translation();
+    residuals.template head<3>() = T_b2a_error.translation();
     residuals.template tail<3>() =
-        T(2.0) * T_ab_error.so3().unit_quaternion().vec();
+        T(2.0) * T_b2a_error.so3().unit_quaternion().vec();
 
     // Apply the square root information matrix
     residuals = sqrt_information_.template cast<T>() * residuals;
@@ -65,13 +65,13 @@ public:
   }
 
   static ceres::CostFunction *
-  Create(const Sophus::SE3d &T_ab_measured,
+  Create(const Sophus::SE3d &T_b2a,
          const Eigen::Matrix<double, 6, 6> &sqrt_information) {
     return new ceres::AutoDiffCostFunction<PoseGraphEdgeFactor, 6, 7, 7>(
-        new PoseGraphEdgeFactor(T_ab_measured, sqrt_information));
+        new PoseGraphEdgeFactor(T_b2a, sqrt_information));
   }
 
 private:
-  Sophus::SE3d T_origin_;
+  Sophus::SE3d T_b2a_;
   Eigen::Matrix<double, 6, 6> sqrt_information_;
 };
