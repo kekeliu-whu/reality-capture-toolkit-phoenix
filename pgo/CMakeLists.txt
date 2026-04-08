@@ -32,6 +32,7 @@ find_package(PROJ CONFIG REQUIRED)
 
 include_directories(
   src
+  src/thirdparty/BTC
   ${EIGEN3_INCLUDE_DIRS}
   ${CERES_INCLUDE_DIRS}
   ${PCL_INCLUDE_DIRS}
@@ -42,12 +43,13 @@ add_subdirectory(../migration migration_build)
 
 set(
   PGO_PRIVATE_SRCS
-  src/BTC.cpp
   src/map/optimizer.cc
   src/map/pgo_runner.cc
   src/map/utils.cc
   src/io/read_write.cc
   src/io/local_enu_transformer.cc
+  src/thirdparty/BTC/BTC.cpp
+
   src/common/msg_conversions.h
   src/common/types.h
   src/factor/gps_factor.h
@@ -57,10 +59,10 @@ set(
   src/factor/rtk_factor.h
   src/io/read_write.h
   src/io/local_enu_transformer.h
-  src/BTC.h
   src/map/optimizer.h
   src/map/pgo_runner.h
   src/map/utils.h
+  src/thirdparty/BTC/BTC.h
 )
 
 set(PGO_PRIVATE_LIBS

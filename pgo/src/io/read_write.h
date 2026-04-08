@@ -13,11 +13,13 @@
  * submap will be stored in the time field of the las file.
  *
  * @param project
- * @param scans
+ * @param timestamped_scan_poses Scan-level pose nodes used by optimization
+ * @param submaps Aggregated submaps anchored to scan pose nodes
  * @param submap_duration_secs <=0 means do not merge submaps
  */
 void LoadSubmapList(const std::string &project,
-                    std::vector<TimestampedPointCloud> &scans,
+                    std::vector<TimestampedPose> &timestamped_scan_poses,
+                    std::vector<TimestampedPointCloud> &submaps,
                     double submap_duration_secs);
 
 /**

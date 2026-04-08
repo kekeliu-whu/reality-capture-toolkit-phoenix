@@ -308,8 +308,8 @@ void TryAddBTCConstraintForFrame(
   }
 
   const double spatial_dist =
-      (submaps[frame_id].pose.translation() -
-       submaps[matched_id].pose.translation())
+      (submaps[frame_id].pose->translation() -
+       submaps[matched_id].pose->translation())
           .norm();
   if (spatial_dist > config.loop_closure_search_radius()) {
     ++stats.accepted_outside_radius;
@@ -340,8 +340,8 @@ void TryAddBTCConstraintForFrame(
       PoseGraphEdgeFactor::Create(T_current_to_matched.inverse(),
                                   btc_sqrt_information.toDenseMatrix()),
       nullptr,
-      submaps[frame_id].pose.data(),
-      submaps[matched_id].pose.data());
+      submaps[frame_id].pose->data(),
+      submaps[matched_id].pose->data());
 
   ++stats.constraints_added;
   spdlog::info(
@@ -351,17 +351,17 @@ void TryAddBTCConstraintForFrame(
 }
 
 void AddParameters(ceres::Problem &problem,
-                   std::vector<TimestampedPointCloud> &submaps) {
+                   std::vector<TimestampedPose> &timestamped_scan_poses) {
   ceres::Manifold *local_parameterization =
       LocalParameterizationSE3::Create();
 
-  for (auto &submap : submaps) {
-    problem.AddParameterBlock(submap.pose.data(), 7, local_parameterization);
+  for (auto &scan_pose : timestamped_scan_poses) {
+    problem.AddParameterBlock(scan_pose.pose->data(), 7, local_parameterization);
   }
 }
 
 void AddGravityConstraits(ceres::Problem &problem,
-                          std::vector<TimestampedPointCloud> &submaps,
+                          std::vector<TimestampedPose> &timestamped_scan_poses,
                           std::set<ceres::ResidualBlockId> &prior_residual_blocks,
                           const proto::PgoConfig &config) {
   Eigen::DiagonalMatrix<double, 3> gravity_align_sqrt_information;
@@ -369,16 +369,16 @@ void AddGravityConstraits(ceres::Problem &problem,
       1 / (config.gravity_align_rotation_error() / 180.0 * M_PI),
       1 / (config.gravity_align_rotation_error() / 180.0 * M_PI);
 
-  for (auto &submap : submaps) {
+  for (auto &scan_pose : timestamped_scan_poses) {
     // todo
-    auto residual_block_id = problem.AddResidualBlock(GravityAlignFactor::Create(submap.pose, Eigen::Vector3d(0, 0, -1), gravity_align_sqrt_information), nullptr, submap.pose.data());
+    auto residual_block_id = problem.AddResidualBlock(GravityAlignFactor::Create(*scan_pose.pose, Eigen::Vector3d(0, 0, -1), gravity_align_sqrt_information), nullptr, scan_pose.pose->data());
     prior_residual_blocks.insert(residual_block_id);
   }
 }
 
 void AddAdjacentConstraints(
     ceres::Problem &problem,
-    std::vector<TimestampedPointCloud> &submaps,
+    std::vector<TimestampedPose> &timestamped_scan_poses,
     std::set<ceres::ResidualBlockId> &prior_residual_blocks,
     const proto::PgoConfig &config) {
   Eigen::DiagonalMatrix<double, 6> odom_sqrt_information;
@@ -389,14 +389,14 @@ void AddAdjacentConstraints(
       1 / (config.odom_edge_rotation_error() / 180.0 * M_PI),
       1 / (config.odom_edge_rotation_error() / 180.0 * M_PI);
 
-  for (size_t i = 0; i < submaps.size() - 1; ++i) {
-    auto &submap_a = submaps[i];
-    auto &submap_b = submaps[i + 1];
+  for (size_t i = 0; i + 1 < timestamped_scan_poses.size(); ++i) {
+    auto &scan_pose_a = timestamped_scan_poses[i];
+    auto &scan_pose_b = timestamped_scan_poses[i + 1];
 
-    Sophus::SE3d T_b2a     = submap_a.pose.inverse() * submap_b.pose;
+    Sophus::SE3d T_b2a     = scan_pose_a.pose->inverse() * (*scan_pose_b.pose);
     auto residual_block_id = problem.AddResidualBlock(
         PoseGraphEdgeFactor::Create(T_b2a, odom_sqrt_information), nullptr,
-        submap_a.pose.data(), submap_b.pose.data());
+        scan_pose_a.pose->data(), scan_pose_b.pose->data());
     prior_residual_blocks.insert(residual_block_id);
   }
 }
@@ -420,7 +420,7 @@ namespace {
 
 void AddGnssConstraints(
     ceres::Problem &problem,
-    std::vector<TimestampedPointCloud> &submaps,
+    std::vector<TimestampedPose> &timestamped_scan_poses,
     const LocalENUTransformer &transformer,
     const std::vector<GpsData> &gnss_data,
     std::set<ceres::ResidualBlockId> &prior_residual_blocks) {
@@ -431,13 +431,13 @@ void AddGnssConstraints(
 
   int gnss_constraints_added = 0;
 
-  // For each submap, find GNSS data points that bracket its timestamp and interpolate
-  for (size_t submap_idx = 0; submap_idx < submaps.size(); ++submap_idx) {
-    double submap_timestamp = submaps[submap_idx].timestamp;
+  // For each scan pose, find GNSS data points that bracket its timestamp and interpolate
+  for (size_t scan_idx = 0; scan_idx < timestamped_scan_poses.size(); ++scan_idx) {
+    double scan_timestamp = timestamped_scan_poses[scan_idx].timestamp;
 
-    // Use lower_bound to find the first GNSS point >= submap_timestamp
+    // Use lower_bound to find the first GNSS point >= scan timestamp
     auto next_it = std::lower_bound(
-        gnss_data.begin(), gnss_data.end(), submap_timestamp,
+        gnss_data.begin(), gnss_data.end(), scan_timestamp,
         [](const GpsData &gps, double timestamp) { return gps.timestamp < timestamp; });
 
     int next_idx = std::distance(gnss_data.begin(), next_it);
@@ -457,7 +457,7 @@ void AddGnssConstraints(
     // Linear interpolation between two GNSS points
     double t_prev = gnss_data[prev_idx].timestamp;
     double t_next = gnss_data[next_idx].timestamp;
-    double alpha  = (submap_timestamp - t_prev) / (t_next - t_prev);
+    double alpha  = (scan_timestamp - t_prev) / (t_next - t_prev);
 
     // Interpolate latitude, longitude, altitude
     double interp_lat = gnss_data[prev_idx].latitude +
@@ -477,28 +477,42 @@ void AddGnssConstraints(
 
     Eigen::Vector3d position_std(interp_lat_std, interp_lon_std, interp_alt_std);
 
-    spdlog::info("enu {} {} {} {} {} {}", enu_gps[0], enu_gps[1], enu_gps[2], submaps[submap_idx].pose.translation().x(),
-                 submaps[submap_idx].pose.translation().y(), submaps[submap_idx].pose.translation().z());
+    spdlog::info("enu {} {} {} {} {} {}", enu_gps[0], enu_gps[1], enu_gps[2], timestamped_scan_poses[scan_idx].pose->translation().x(),
+                 timestamped_scan_poses[scan_idx].pose->translation().y(), timestamped_scan_poses[scan_idx].pose->translation().z());
     auto position_factor = RtkPositionFactor::Create(enu_gps, position_std);
     auto residual_id     = problem.AddResidualBlock(
-        position_factor, nullptr, submaps[submap_idx].pose.data());
+        position_factor, nullptr, timestamped_scan_poses[scan_idx].pose->data());
     prior_residual_blocks.insert(residual_id);
     gnss_constraints_added++;
   }
 
-  spdlog::info("Added {} GNSS constraints to {} submaps",
-               gnss_constraints_added, submaps.size());
+  spdlog::info("Added {} GNSS constraints to {} scan poses",
+               gnss_constraints_added, timestamped_scan_poses.size());
 }
 
 }  // namespace
 
-void OptimizeWithGnss(std::vector<TimestampedPointCloud> &submaps,
+void Optimize(std::vector<TimestampedPose> &timestamped_scan_poses,
+              std::vector<TimestampedPointCloud> &submaps,
+              const proto::PgoConfig &config) {
+  const std::vector<GpsData> empty_gnss_data;
+  std::string proj4_string;
+  OptimizeWithGnss(timestamped_scan_poses,
+                   submaps,
+                   empty_gnss_data,
+                   config,
+                   false,
+                   proj4_string);
+}
+
+void OptimizeWithGnss(std::vector<TimestampedPose> &timestamped_scan_poses,
+                      std::vector<TimestampedPointCloud> &submaps,
                       const std::vector<GpsData> &gnss_data,
                       const proto::PgoConfig &config,
                       bool use_rtk,
                       std::string &proj4_string) {
-  if (submaps.empty()) {
-    spdlog::error("No submaps to optimize");
+  if (timestamped_scan_poses.empty() || submaps.empty()) {
+    spdlog::error("No scan poses or submaps to optimize");
     return;
   }
 
@@ -512,15 +526,15 @@ void OptimizeWithGnss(std::vector<TimestampedPointCloud> &submaps,
   std::set<ceres::ResidualBlockId> prior_residual_blocks;
 
   // Setup optimization
-  AddParameters(problem, submaps);
-  AddAdjacentConstraints(problem, submaps, prior_residual_blocks, config);
-  // AddGravityConstraits(problem, submaps, prior_residual_blocks, config);
+  AddParameters(problem, timestamped_scan_poses);
+  AddAdjacentConstraints(problem, timestamped_scan_poses, prior_residual_blocks, config);
+  // AddGravityConstraits(problem, timestamped_scan_poses, prior_residual_blocks, config);
 
   // Add GNSS constraints only if enabled
   if (use_rtk && !gnss_data.empty()) {
     LocalENUTransformer transformer(gnss_data[0].latitude, gnss_data[0].longitude);
     proj4_string = transformer.GetProj4String();
-    AddGnssConstraints(problem, submaps, transformer, gnss_data, prior_residual_blocks);
+    AddGnssConstraints(problem, timestamped_scan_poses, transformer, gnss_data, prior_residual_blocks);
   }
 
   // Add BTC loop closure constraints

@@ -18,6 +18,7 @@ namespace {
 
 void LoadRawScans(
     const std::string &project_path,
+    std::vector<TimestampedPose> &timestamped_scan_poses,
     std::vector<TimestampedPointCloud> &scans) {
   const std::string traj_dat_filename     = project_path + "/traj.dat";
   const std::string lidar_undist_filename = project_path + "/lidar_undist.dat";
@@ -41,6 +42,11 @@ void LoadRawScans(
     spdlog::error("No poses loaded from {}", traj_dat_filename);
     exit(1);
   }
+
+  timestamped_scan_poses.clear();
+  timestamped_scan_poses.reserve(poses.size());
+  scans.clear();
+  scans.reserve(poses.size());
 
   // Read lidar_undist.dat (proto::LidarMsg stream, body frame, undistorted)
   // Scans and poses have 1:1 correspondence
@@ -70,9 +76,14 @@ void LoadRawScans(
 
     // Use corresponding pose directly (1:1 correspondence)
     const Sophus::SE3d &pose_w = poses[scan_count];
+    TimestampedPose timestamped_scan_pose;
+    timestamped_scan_pose.timestamp = scan_timestamp;
+    *timestamped_scan_pose.pose     = pose_w;
+
     TimestampedPointCloud scan;
-    scan.timestamp = scan_timestamp;
-    scan.pose      = pose_w;
+    scan.timestamp         = scan_timestamp;
+    scan.pose              = timestamped_scan_pose.pose;
+    scan.anchor_pose_index = scan_count;
 
     // Points in lidar_undist.dat are in body frame, keep them in body frame (no coordinate transform)
     for (const auto &pt_proto : lidar_msg->points()) {
@@ -83,6 +94,7 @@ void LoadRawScans(
       scan.cloud->push_back(pt);
     }
 
+    timestamped_scan_poses.push_back(std::move(timestamped_scan_pose));
     scans.push_back(std::move(scan));
     scan_count++;
   }
@@ -104,20 +116,28 @@ void BuildSubMapFromRawScans(const std::vector<TimestampedPointCloud> &scans,
     return;
   }
 
+  if (submap_duration_secs <= 0.0) {
+    submaps = scans;
+    spdlog::info("Use {} raw scans directly without submap merging.", submaps.size());
+    return;
+  }
+
   TimestampedPointCloud current_submap;
-  current_submap.pose      = scans.front().pose;
-  current_submap.timestamp = scans.front().timestamp;
+  current_submap.pose              = scans.front().pose;
+  current_submap.timestamp         = scans.front().timestamp;
+  current_submap.anchor_pose_index = scans.front().anchor_pose_index;
 
   for (const auto &scan : scans) {
     if (scan.timestamp - current_submap.timestamp > submap_duration_secs) {
       submaps.push_back(current_submap);
-      current_submap           = TimestampedPointCloud();
-      current_submap.pose      = scan.pose;
-      current_submap.timestamp = scan.timestamp;
+      current_submap                   = TimestampedPointCloud();
+      current_submap.pose              = scan.pose;
+      current_submap.timestamp         = scan.timestamp;
+      current_submap.anchor_pose_index = scan.anchor_pose_index;
     }
 
     Sophus::SE3d pose_scan_body_to_submap_body =
-        current_submap.pose.inverse() * scan.pose;
+        current_submap.pose->inverse() * (*scan.pose);
 
     for (const auto &p : scan.cloud->points) {
       auto np = p;
@@ -128,17 +148,21 @@ void BuildSubMapFromRawScans(const std::vector<TimestampedPointCloud> &scans,
     }
   }
 
+  if (!current_submap.cloud->empty()) {
+    submaps.push_back(current_submap);
+  }
+
   spdlog::info("Build {} submaps from {} scans done.", submaps.size(), scans.size());
 }
 
 }  // namespace
 
 void LoadSubmapList(const std::string &project_path,
+                    std::vector<TimestampedPose> &timestamped_scan_poses,
                     std::vector<TimestampedPointCloud> &submaps,
                     double submap_duration_secs) {
-  CHECK_GT(submap_duration_secs, 0);
   std::vector<TimestampedPointCloud> scans;
-  LoadRawScans(project_path, scans);
+  LoadRawScans(project_path, timestamped_scan_poses, scans);
   BuildSubMapFromRawScans(scans, submap_duration_secs, submaps);
 }
 
@@ -159,7 +183,7 @@ void SaveLasFile(const std::vector<TimestampedPointCloud> &submaps,
 
   for (const auto &submap : submaps) {
     for (const auto &p : submap.cloud->points) {
-      auto point_transform = submap.pose * p.getVector3fMap().cast<double>();
+      auto point_transform = (*submap.pose) * p.getVector3fMap().cast<double>();
 
       pdal::PointId id = view->size();
       view->setField(pdal::Dimension::Id::X, id, point_transform.x());

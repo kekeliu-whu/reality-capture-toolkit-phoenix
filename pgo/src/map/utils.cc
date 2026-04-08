@@ -4,8 +4,8 @@
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/search/kdtree.h>
-#include <Eigen/Eigen>
 #include <spdlog/spdlog.h>
+#include <Eigen/Eigen>
 #include <thread>
 #include <vector>
 
@@ -142,17 +142,18 @@ void DownsamplePointCloud(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &cloud
 void LoadFullPointCloud(const std::string &project_input_path,
                         pcl::PointCloud<pcl::PointXYZI>::Ptr &cloud,
                         std::vector<Eigen::Vector3f> &centers) {
+  std::vector<TimestampedPose> timestamped_scan_poses;
   std::vector<TimestampedPointCloud> submap_list;
-  LoadSubmapList(project_input_path, submap_list, 0);
+  LoadSubmapList(project_input_path, timestamped_scan_poses, submap_list, 0);
 
   for (auto &submap : submap_list) {
     for (auto &p : *submap.cloud) {
       pcl::PointXYZI np;
-      np.getVector3fMap() = (submap.pose * p.getVector3fMap().cast<double>()).cast<float>();
+      np.getVector3fMap() = ((*submap.pose) * p.getVector3fMap().cast<double>()).cast<float>();
       np.intensity        = p.intensity;
 
       cloud->points.push_back(np);
-      centers.push_back(submap.pose.translation().cast<float>());
+      centers.push_back(submap.pose->translation().cast<float>());
     }
   }
 }
