@@ -119,7 +119,7 @@ foreach ($file in $python_files) {
 
 # 计算位姿
 .\python-tools\insta_compute_poses.exe `
-  --poses-file D:/slam/output/traj.txt `
+  --poses-file D:/slam/output/trajectory.txt `
   --calib-file D:/slam/calibration.dat `
   --image-folder D:/slam/camera `
   --output D:/slam/camera/ImgPose.txt
@@ -210,7 +210,7 @@ foreach ($file in $python_files) {
 
 # 计算位姿
 .\python-tools\insta_compute_poses.exe `
-  --poses-file D:/slam/output/traj.txt `
+  --poses-file D:/slam/output/trajectory.txt `
   --calib-file D:/slam/calibration.dat `
   --image-folder D:/slam/camera `
   --output D:/slam/camera/ImgPose.txt
@@ -253,7 +253,7 @@ python insta_time_sync.py `
 ## insta_compute_poses.py - 计算相机位姿
 ```powershell
 python insta_compute_poses.py `
-  --poses-file D:/slam/output/traj.txt `
+  --poses-file D:/slam/output/trajectory.txt `
   --calib-file D:/slam/calibration.dat `
   --image-folder D:/slam/camera `
   --output D:/slam/camera/ImgPose.txt

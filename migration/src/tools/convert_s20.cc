@@ -13,8 +13,8 @@
 #include "migration/proto_io.h"
 #include "proto/sensors.pb.h"
 
-DEFINE_string(bag_filename, "D:\\Users\\rick\\Desktop\\2026-03-16_09-34-40-with-rtk\\all_2026-03-16-09-34-52.bag", "Point cloud filename");
-DEFINE_string(output_dir, "D:\\slam", "Output dir to save converted data");
+DEFINE_string(bag_filename, R"(D:\Users\rick\Downloads\2026-03-25_09-41-05-1\all_2026-03-25-09-41-23.bag)", "Point cloud filename");
+DEFINE_string(output_dir, R"(D:\output)", "Output dir to save converted data");
 
 void PointCloudCallback(const livox_ros_driver::CustomMsgConstPtr& msg, std::shared_ptr<proto::LidarMsg>& lidar_msg) {
   for (size_t i = 0; i < msg->points.size(); ++i) {

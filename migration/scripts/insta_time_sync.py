@@ -15,7 +15,7 @@ import matplotlib
 import argparse
 from proto.sensors_pb2 import ImuMsgList
 
-from spdlog_compat import init_spdlog_like_logger
+from spdlog_compat import init_spdlog_like_logger, plain_print
 
 
 LOGGER = init_spdlog_like_logger()
@@ -736,7 +736,7 @@ def main():
     # ===== 打印时间同步结果 =====
     print_time_sync_results(time_delay)
 
-    print("final time delay (s):", time_delay - data["offset"])
+    plain_print("final time delay (s):", time_delay - data["offset"])
 
 
 if __name__ == "__main__":

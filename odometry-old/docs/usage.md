@@ -25,6 +25,6 @@ slam \
 
 **说明**：
 - `--project_dirname`: 包含 `calibration.dat`、`imu.dat`、`encoder.dat`、`lidar.dat` 的目录
-- `--output_dir`: 输出目录，生成 `traj.txt`（轨迹）和 `map.las`（地图）
+- `--output_dir`: 输出目录，生成 `trajectory.txt`（轨迹）和 `map.las`（地图）
 - `--indoor`: `true` 使用室内模式，`false` 使用室外模式
 

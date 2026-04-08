@@ -47,21 +47,21 @@ bool BuildFullResolutionScansForSave(
 
 void SaveOptimizedTrajectory(const std::string& output_path,
                              const std::vector<TimestampedPose>& scan_poses) {
-  const std::string traj_filename = output_path + "/traj_opt.txt";
+  const std::string traj_filename = output_path + "/trajectory_opt.txt";
   std::ofstream traj_file(traj_filename);
   if (!traj_file.is_open()) {
     spdlog::error("Failed to open trajectory output file: {}", traj_filename);
     return;
   }
 
-  traj_file << "#timestamp_s tx ty tz qx qy qz qw\n";
+  traj_file << "# x y z roll pitch yaw qx qy qz qw timestamp\n";
   traj_file << std::fixed << std::setprecision(12);
   for (const auto& scan_pose : scan_poses) {
     const auto& pose     = *scan_pose.pose;
     Eigen::Vector3d t    = pose.translation();
     Eigen::Quaterniond q = pose.unit_quaternion();
-    traj_file << scan_pose.timestamp << " " << t.x() << " " << t.y() << " " << t.z() << " "
-              << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << "\n";
+    traj_file << t.x() << " " << t.y() << " " << t.z() << " " << 0.0 << " " << 0.0 << " " << 0.0 << " "
+              << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << " " << scan_pose.timestamp << "\n";
   }
 
   spdlog::info("Saved optimized trajectory to {}", traj_filename);

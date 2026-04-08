@@ -43,7 +43,7 @@ parser = argparse.ArgumentParser(description="Scientific camera data extraction 
 parser.add_argument(
     "--input-video-filename",
     type=str,
-    default="D:\\ProjectX\\project-3d\\data\\manifold-tech-calib\\calib\\MT20260326-161907\\VID_20260326_161848_00_055.insv",
+    default=R"D:\Users\rick\Downloads\2026-03-25_09-41-05-1\VID_20260325_094100_00_226.insv",
     help="Input video file path",
 )
 
@@ -59,7 +59,7 @@ parser.add_argument(
 parser.add_argument(
     "--time-offset",
     type=float,
-    default=1749886731.5319195,
+    default=1735726109.5283203,
     help="Time offset in seconds",
 )
 
@@ -70,6 +70,12 @@ parser.add_argument(
     default=True,
     help="Whether to export camera frames (default: enabled; use --no-export-frames to disable)",
 )
+parser.add_argument(
+    "--frame-sample-rate",
+    type=int,
+    default=12,
+    help="Export one frame every N frames (default: 12)",
+)
 
 # 解析命令行参数
 args = parser.parse_args()
@@ -79,12 +85,12 @@ INPUT_VIDEO = args.input_video_filename
 OUTPUT_DIRECTORY = args.output_dir
 TIME_OFFSET_SECS = args.time_offset
 EXPORT_FRAMES = args.export_frames
+FRAME_SAMPLE_RATE = args.frame_sample_rate
 
 # IMU输出文件路径（保存在输出目录中）
 IMU_OUTPUT_FILE = os.path.join(OUTPUT_DIRECTORY, "insv.dat")
 
 # --------- 视频提取参数 ---------
-FRAME_SAMPLE_RATE = 12  # 采样率：每隔N帧取1帧 (1表示取所有帧, 2表示每2帧取1帧)
 QUALITY = 2  # 0-31, 越低质量越好
 NUM_STREAMS = 2  # 摄像头流数量 (cam0, cam1等)
 

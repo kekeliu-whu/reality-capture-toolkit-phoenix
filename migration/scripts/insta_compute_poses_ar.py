@@ -5,7 +5,7 @@ Handles multiple cameras organized in cam0, cam1, ... folders.
 Generates ImgPose.txt file with positions, quaternions, and camera IDs.
 
 Usage:
-    python insta_compute_poses.py --poses-file <traj.txt> --calib-file <calib.dat>
+    python insta_compute_poses.py --poses-file <trajectory.txt> --calib-file <calib.dat>
                                    --image-folder <parent_folder> --output <output.txt>
 
 Expected folder structure:
@@ -28,7 +28,7 @@ from scipy.spatial.transform import Rotation, Slerp
 from spdlog_compat import init_spdlog_like_logger
 
 
-LOGGER = init_spdlog_like_logger()
+# LOGGER = init_spdlog_like_logger()
 
 
 def extract_timestamp_from_filename(filename):
@@ -153,18 +153,36 @@ def load_calibration_from_pb(calib_file):
 
 def load_poses_from_txt(poses_file):
     """Load poses from text file format.
-    Expected format: timestamp tx ty tz rx ry rz rw
+
+    Preferred format:
+        x y z roll pitch yaw qx qy qz qw timestamp
+
+    The roll/pitch/yaw columns are placeholders only and are ignored.
+
+    Legacy formats are still accepted for compatibility.
     """
     poses = []
-    with open(poses_file, "r") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            parts = line.split()
-            if len(parts) >= 8:
-                pose_dict = {
-                    "timestamp": float(parts[0]),
+
+    def parse_pose_parts(parts):
+        if len(parts) >= 11:
+            first = float(parts[0])
+            last = float(parts[10])
+
+            if abs(last) > 1e8 and abs(first) < 1e8:
+                return {
+                    "timestamp": last,
+                    "tx": first,
+                    "ty": float(parts[1]),
+                    "tz": float(parts[2]),
+                    "rx": float(parts[6]),
+                    "ry": float(parts[7]),
+                    "rz": float(parts[8]),
+                    "rw": float(parts[9]),
+                }
+
+            if abs(first) > 1e8:
+                return {
+                    "timestamp": first,
                     "tx": float(parts[1]),
                     "ty": float(parts[2]),
                     "tz": float(parts[3]),
@@ -173,7 +191,32 @@ def load_poses_from_txt(poses_file):
                     "rz": float(parts[6]),
                     "rw": float(parts[7]),
                 }
+
+        if len(parts) >= 8:
+            return {
+                "timestamp": float(parts[0]),
+                "tx": float(parts[1]),
+                "ty": float(parts[2]),
+                "tz": float(parts[3]),
+                "rx": float(parts[4]),
+                "ry": float(parts[5]),
+                "rz": float(parts[6]),
+                "rw": float(parts[7]),
+            }
+
+        raise ValueError("unsupported trajectory row format")
+
+    with open(poses_file, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            try:
+                pose_dict = parse_pose_parts(parts)
                 poses.append(pose_dict)
+            except ValueError:
+                continue
     return poses
 
 
@@ -242,13 +285,6 @@ def process_poses(poses_file, calib_file, image_folder, output_file, image_list=
                 "x",
                 "y",
                 "z",
-                "roll",
-                "pitch",
-                "yaw",
-                "qx",
-                "qy",
-                "qz",
-                "qw",
                 "timestamp",
             ]
         )
@@ -312,13 +348,6 @@ def process_poses(poses_file, calib_file, image_folder, output_file, image_list=
                         cam_pose["tx"],
                         cam_pose["ty"],
                         cam_pose["tz"],
-                        0.0,
-                        0.0,
-                        0.0,
-                        cam_pose["rx"],
-                        cam_pose["ry"],
-                        cam_pose["rz"],
-                        cam_pose["rw"],
                         timestamp,
                     ]
                 )

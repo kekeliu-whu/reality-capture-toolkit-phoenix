@@ -271,7 +271,7 @@ Write-Host "`n=== Step 7: Computing camera poses ===" -ForegroundColor Cyan
 
 if (Test-Path $insta_poses_exe) {
     # Look for pose file in laser mapping output directory
-    $traj_file = Join-Path $outputdir "traj_opt.txt"
+    $traj_file = Join-Path $outputdir "trajectory_opt.txt"
     $calib_file = Join-Path $outputdir "calibration.dat"
     
     if ((Test-Path $traj_file) -and (Test-Path $calib_file)) {
@@ -294,7 +294,7 @@ if (Test-Path $insta_poses_exe) {
     } else {
         Write-Host "[WARN] Trajectory or calibration file not found" -ForegroundColor Yellow
         Write-Host "  Expected in: $outputdir" -ForegroundColor Yellow
-        Write-Host "  Looking for: traj_opt.txt and calibration.dat" -ForegroundColor Yellow
+        Write-Host "  Looking for: trajectory_opt.txt and calibration.dat" -ForegroundColor Yellow
         Write-Host "  Hint: LaserMapping should have generated these files" -ForegroundColor Yellow
     }
 } else {

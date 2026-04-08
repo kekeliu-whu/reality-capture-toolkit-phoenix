@@ -2,148 +2,115 @@
 #include <yaml-cpp/yaml.h>
 
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 
 #include "migration/proto_io.h"
 #include "proto/calib.pb.h"
 
-DEFINE_string(calib_filename, "D:\\ProjectX\\project-3d\\data\\manifold-tech-calib\\ikalibr_param.yaml", "Calibration filename");
-DEFINE_string(output_dir, "D:\\output", "Output dir to save converted calibration data");
+DEFINE_string(calib_filename, R"(D:\ProjectX\project-3d\data\manifold-tech-calib\ikalibr_param.yaml)", "Calibration filename");
+DEFINE_string(output_dir, R"(D:\output)", "Output dir to save converted calibration data");
 
 namespace {
 
+YAML::Node RequireNode(const YAML::Node& parent, const char* key) {
+  const YAML::Node node = parent[key];
+  if (!node) {
+    throw std::runtime_error(std::string("Missing required node: ") + key);
+  }
+  return node;
+}
+
+const YAML::Node FindItemByKey(const YAML::Node& sequence, const std::string& key, const char* sequence_name) {
+  if (!sequence || !sequence.IsSequence()) {
+    throw std::runtime_error(std::string("Expected sequence node: ") + sequence_name);
+  }
+
+  for (const auto& item : sequence) {
+    if (RequireNode(item, "key").as<std::string>() == key) {
+      return RequireNode(item, "value");
+    }
+  }
+
+  throw std::runtime_error(std::string("Missing required entry '") + key + "' in " + sequence_name);
+}
+
 void LoadLidarCalibration(const YAML::Node& extri, const YAML::Node& temporal, proto::SensorCalib* calib) {
-  try {
-    for (const auto& item : extri["SO3_LkToBr"]) {
-      if (item["key"].as<std::string>() == "/livox/lidar") {
-        const auto& quat   = item["value"];
-        auto lidar_to_body = calib->mutable_lidar_to_encoder();
-        lidar_to_body->set_rx(quat["qx"].as<double>());
-        lidar_to_body->set_ry(quat["qy"].as<double>());
-        lidar_to_body->set_rz(quat["qz"].as<double>());
-        lidar_to_body->set_rw(quat["qw"].as<double>());
-        spdlog::info("Loaded Lidar rotation: qx={}, qy={}, qz={}, qw={}", quat["qx"].as<double>(), quat["qy"].as<double>(), quat["qz"].as<double>(),
-                     quat["qw"].as<double>());
-        break;
-      }
-    }
-  } catch (const std::exception& e) {
-    spdlog::warn("Failed to read SO3_LkToBr: {}", e.what());
-  }
+  const auto quat          = FindItemByKey(RequireNode(extri, "SO3_LkToBr"), "/livox/lidar", "EXTRI.SO3_LkToBr");
+  const auto pos           = FindItemByKey(RequireNode(extri, "POS_LkInBr"), "/livox/lidar", "EXTRI.POS_LkInBr");
+  const auto time_offset   = FindItemByKey(RequireNode(temporal, "TO_LkToBr"), "/livox/lidar", "TEMPORAL.TO_LkToBr");
+  auto lidar_to_body       = calib->mutable_lidar_to_encoder();
+  lidar_to_body->set_rx(RequireNode(quat, "qx").as<double>());
+  lidar_to_body->set_ry(RequireNode(quat, "qy").as<double>());
+  lidar_to_body->set_rz(RequireNode(quat, "qz").as<double>());
+  lidar_to_body->set_rw(RequireNode(quat, "qw").as<double>());
+  lidar_to_body->set_tx(RequireNode(pos, "r0c0").as<double>());
+  lidar_to_body->set_ty(RequireNode(pos, "r1c0").as<double>());
+  lidar_to_body->set_tz(RequireNode(pos, "r2c0").as<double>());
+  lidar_to_body->set_time_offset(time_offset.as<double>());
 
-  try {
-    for (const auto& item : extri["POS_LkInBr"]) {
-      if (item["key"].as<std::string>() == "/livox/lidar") {
-        const auto& pos    = item["value"];
-        auto lidar_to_body = calib->mutable_lidar_to_encoder();
-        lidar_to_body->set_tx(pos["r0c0"].as<double>());
-        lidar_to_body->set_ty(pos["r1c0"].as<double>());
-        lidar_to_body->set_tz(pos["r2c0"].as<double>());
-        spdlog::info("Loaded Lidar position: tx={}, ty={}, tz={}", pos["r0c0"].as<double>(), pos["r1c0"].as<double>(), pos["r2c0"].as<double>());
-        break;
-      }
-    }
-  } catch (const std::exception& e) {
-    spdlog::warn("Failed to read POS_LkInBr: {}", e.what());
-  }
-
-  try {
-    for (const auto& item : temporal["TO_LkToBr"]) {
-      if (item["key"].as<std::string>() == "/livox/lidar") {
-        double time_offset = item["value"].as<double>();
-        auto lidar_to_body = calib->mutable_lidar_to_encoder();
-        lidar_to_body->set_time_offset(time_offset);
-        spdlog::info("Loaded Lidar time offset: {}", time_offset);
-        break;
-      }
-    }
-  } catch (const std::exception& e) {
-    spdlog::warn("Failed to read TO_LkToBr: {}", e.what());
-  }
+  spdlog::info("Loaded Lidar rotation: qx={}, qy={}, qz={}, qw={}", lidar_to_body->rx(), lidar_to_body->ry(), lidar_to_body->rz(),
+               lidar_to_body->rw());
+  spdlog::info("Loaded Lidar position: tx={}, ty={}, tz={}", lidar_to_body->tx(), lidar_to_body->ty(), lidar_to_body->tz());
+  spdlog::info("Loaded Lidar time offset: {}", lidar_to_body->time_offset());
 }
 
 void LoadCameraCalibration(const YAML::Node& calib_param, proto::SensorCalib* calib) {
-  try {
-    const auto& extri       = calib_param["EXTRI"];
-    const auto& temporal    = calib_param["TEMPORAL"];
-    const auto& so3_list    = extri["SO3_CmToBr"];
-    const auto& pos_list    = extri["POS_CmInBr"];
-    const auto& to_cm_list  = temporal["TO_CmToBr"];
-    const auto& camera_list = calib_param["INTRI"]["Camera"];
+  const auto& extri       = RequireNode(calib_param, "EXTRI");
+  const auto& temporal    = RequireNode(calib_param, "TEMPORAL");
+  const auto& so3_list    = RequireNode(extri, "SO3_CmToBr");
+  const auto& pos_list    = RequireNode(extri, "POS_CmInBr");
+  const auto& to_cm_list  = RequireNode(temporal, "TO_CmToBr");
+  const auto& intri       = RequireNode(calib_param, "INTRI");
+  const auto& camera_list = RequireNode(intri, "Camera");
 
-    for (const auto& so3_item : so3_list) {
-      try {
-        std::string cam_key = so3_item["key"].as<std::string>();
-        spdlog::info("Processing camera: {}", cam_key);
+  if (!so3_list.IsSequence() || so3_list.size() == 0) {
+    throw std::runtime_error("No camera extrinsics found in EXTRI.SO3_CmToBr");
+  }
 
-        auto cam_param = calib->add_camera_param();
-        cam_param->set_name(cam_key);
+  for (const auto& so3_item : so3_list) {
+    std::string cam_key    = RequireNode(so3_item, "key").as<std::string>();
+    const auto quat        = RequireNode(so3_item, "value");
+    const auto pos         = FindItemByKey(pos_list, cam_key, "EXTRI.POS_CmInBr");
+    const auto time_offset = FindItemByKey(to_cm_list, cam_key, "TEMPORAL.TO_CmToBr");
+    const auto cam_data    = RequireNode(RequireNode(FindItemByKey(camera_list, cam_key, "INTRI.Camera"), "ptr_wrapper"), "data");
 
-        try {
-          for (const auto& pos_item : pos_list) {
-            if (pos_item["key"].as<std::string>() == cam_key) {
-              const auto& quat = so3_item["value"];
-              const auto& pos  = pos_item["value"];
-              auto extrinsic   = cam_param->mutable_extrinsic();
-              extrinsic->set_rx(quat["qx"].as<double>());
-              extrinsic->set_ry(quat["qy"].as<double>());
-              extrinsic->set_rz(quat["qz"].as<double>());
-              extrinsic->set_rw(quat["qw"].as<double>());
-              extrinsic->set_tx(pos["r0c0"].as<double>());
-              extrinsic->set_ty(pos["r1c0"].as<double>());
-              extrinsic->set_tz(pos["r2c0"].as<double>());
-              spdlog::info("{} extrinsic: rot({}, {}, {}, {}), trans({}, {}, {})", cam_key, quat["qx"].as<double>(), quat["qy"].as<double>(),
-                           quat["qz"].as<double>(), quat["qw"].as<double>(), pos["r0c0"].as<double>(), pos["r1c0"].as<double>(),
-                           pos["r2c0"].as<double>());
-              break;
-            }
-          }
-        } catch (const std::exception& e) {
-          spdlog::warn("Failed to read position for camera {}: {}", cam_key, e.what());
-        }
+    spdlog::info("Processing camera: {}", cam_key);
 
-        try {
-          for (const auto& time_item : to_cm_list) {
-            if (time_item["key"].as<std::string>() == cam_key) {
-              double time_offset = time_item["value"].as<double>();
-              cam_param->mutable_extrinsic()->set_time_offset(time_offset);
-              spdlog::info("{} time offset: {}", cam_key, time_offset);
-              break;
-            }
-          }
-        } catch (const std::exception& e) {
-          spdlog::warn("Failed to read time offset for camera {}: {}", cam_key, e.what());
-        }
+    auto cam_param = calib->add_camera_param();
+    cam_param->set_name(cam_key);
 
-        try {
-          for (const auto& cam_item : camera_list) {
-            if (cam_item["key"].as<std::string>() == cam_key) {
-              const auto& cam_data = cam_item["value"]["ptr_wrapper"]["data"];
-              auto focal           = cam_data["focal_length"];
-              auto principal       = cam_data["principal_point"];
-              auto disto           = cam_data["disto_param"];
-              cam_param->set_fx(focal[0].as<double>());
-              cam_param->set_fy(focal[1].as<double>());
-              cam_param->set_cx(principal[0].as<double>());
-              cam_param->set_cy(principal[1].as<double>());
-              cam_param->set_k1(disto[0].as<double>());
-              cam_param->set_k2(disto[1].as<double>());
-              cam_param->set_k3(disto[2].as<double>());
-              cam_param->set_k4(disto[3].as<double>());
-              spdlog::info("{} intrinsic: fx={}, fy={}, cx={}, cy={}, k1={}, k2={}, k3={}, k4={}", cam_key, cam_param->fx(), cam_param->fy(),
-                           cam_param->cx(), cam_param->cy(), cam_param->k1(), cam_param->k2(), cam_param->k3(), cam_param->k4());
-              break;
-            }
-          }
-        } catch (const std::exception& e) {
-          spdlog::warn("Failed to read intrinsic for camera {}: {}", cam_key, e.what());
-        }
-      } catch (const std::exception& e) {
-        spdlog::warn("Failed to process camera: {}", e.what());
-      }
+    auto extrinsic = cam_param->mutable_extrinsic();
+    extrinsic->set_rx(RequireNode(quat, "qx").as<double>());
+    extrinsic->set_ry(RequireNode(quat, "qy").as<double>());
+    extrinsic->set_rz(RequireNode(quat, "qz").as<double>());
+    extrinsic->set_rw(RequireNode(quat, "qw").as<double>());
+    extrinsic->set_tx(RequireNode(pos, "r0c0").as<double>());
+    extrinsic->set_ty(RequireNode(pos, "r1c0").as<double>());
+    extrinsic->set_tz(RequireNode(pos, "r2c0").as<double>());
+    extrinsic->set_time_offset(time_offset.as<double>());
+
+    const auto focal     = RequireNode(cam_data, "focal_length");
+    const auto principal = RequireNode(cam_data, "principal_point");
+    const auto disto     = RequireNode(cam_data, "disto_param");
+    if (!focal.IsSequence() || focal.size() < 2 || !principal.IsSequence() || principal.size() < 2 || !disto.IsSequence() || disto.size() < 4) {
+      throw std::runtime_error("Camera intrinsic array size is invalid for " + cam_key);
     }
-  } catch (const std::exception& e) {
-    spdlog::warn("Failed to read camera extrinsic and intrinsic parameters: {}", e.what());
+
+    cam_param->set_fx(focal[0].as<double>());
+    cam_param->set_fy(focal[1].as<double>());
+    cam_param->set_cx(principal[0].as<double>());
+    cam_param->set_cy(principal[1].as<double>());
+    cam_param->set_k1(disto[0].as<double>());
+    cam_param->set_k2(disto[1].as<double>());
+    cam_param->set_k3(disto[2].as<double>());
+    cam_param->set_k4(disto[3].as<double>());
+
+    spdlog::info("{} extrinsic: rot({}, {}, {}, {}), trans({}, {}, {})", cam_key, extrinsic->rx(), extrinsic->ry(), extrinsic->rz(), extrinsic->rw(),
+                 extrinsic->tx(), extrinsic->ty(), extrinsic->tz());
+    spdlog::info("{} time offset: {}", cam_key, extrinsic->time_offset());
+    spdlog::info("{} intrinsic: fx={}, fy={}, cx={}, cy={}, k1={}, k2={}, k3={}, k4={}", cam_key, cam_param->fx(), cam_param->fy(), cam_param->cx(),
+                 cam_param->cy(), cam_param->k1(), cam_param->k2(), cam_param->k3(), cam_param->k4());
   }
 }
 

@@ -4,7 +4,7 @@ from pathlib import Path
 import matplotlib
 
 
-DEFAULT_TRAJ_PATH = R"D:\output\traj_opt.txt"
+DEFAULT_TRAJ_PATH = R"D:\output\trajectory_opt.txt"
 DEFAULT_LOG_PATH = R"D:\output\slam_post_debug_round2.log"
 DEFAULT_OUTPUT_PATH = R"D:\output\constraint_edges_3d_from_script.png"
 DEFAULT_CSV_PATH = R"D:\output\constraint_edges_3d_from_script.csv"
@@ -28,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--traj",
         default=DEFAULT_TRAJ_PATH,
-        help="Path to traj_opt.txt or another trajectory text file.",
+        help="Path to trajectory_opt.txt or another trajectory text file.",
     )
     parser.add_argument(
         "--log",
@@ -103,14 +103,28 @@ import pandas as pd
 
 
 def load_positions(traj_path: Path) -> np.ndarray:
-    traj = pd.read_csv(
-        traj_path,
-        sep=r"\s+",
-        comment="#",
-        header=None,
-        names=["timestamp_s", "tx", "ty", "tz", "qx", "qy", "qz", "qw"],
-    )
-    return traj[["tx", "ty", "tz"]].to_numpy(dtype=float)
+    positions: list[list[float]] = []
+
+    for line in traj_path.read_text(encoding=detect_text_encoding(traj_path), errors="ignore").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        parts = stripped.split()
+        if len(parts) >= 11:
+            first = float(parts[0])
+            last = float(parts[10])
+            if abs(last) > 1e8 and abs(first) < 1e8:
+                positions.append([float(parts[0]), float(parts[1]), float(parts[2])])
+                continue
+            if abs(first) > 1e8:
+                positions.append([float(parts[1]), float(parts[2]), float(parts[3])])
+                continue
+
+        if len(parts) >= 8:
+            positions.append([float(parts[1]), float(parts[2]), float(parts[3])])
+
+    return np.asarray(positions, dtype=float)
 
 
 def parse_loop_edges(log_path: Path) -> list[dict]:

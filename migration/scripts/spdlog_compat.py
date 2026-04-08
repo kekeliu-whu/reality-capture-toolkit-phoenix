@@ -24,6 +24,11 @@ _PRINT_PATCHED = False
 _ORIGINAL_PRINT = builtins.print
 
 
+def plain_print(*args, sep=" ", end="\n", file=None, flush=False):
+    target = sys.stdout if file is None else file
+    _ORIGINAL_PRINT(*args, sep=sep, end=end, file=target, flush=flush)
+
+
 def _normalize_message(text: str) -> str:
     text = text.strip()
     for prefix in ("[OK] ", "[WARN] ", "[ERROR] ", "[INFO] "):
@@ -46,7 +51,10 @@ def _infer_level(text: str) -> int:
 class SpdlogLikeFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
         timestamp = datetime.datetime.fromtimestamp(record.created)
-        return timestamp.strftime("%Y-%m-%d %H:%M:%S.") + f"{timestamp.microsecond // 1000:03d}"
+        return (
+            timestamp.strftime("%Y-%m-%d %H:%M:%S.")
+            + f"{timestamp.microsecond // 1000:03d}"
+        )
 
     def format(self, record):
         message = _normalize_message(record.getMessage())

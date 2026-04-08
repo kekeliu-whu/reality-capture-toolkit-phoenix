@@ -114,7 +114,7 @@ void SigHandle(int sig) { flg_exit = true; }
 
 double last_pose_timestamp = -1.0;
 void   SaveTraj(std::ofstream &fp, double timestamp, const Eigen::Quaterniond &offset_R_L_I,
-                const Eigen::Vector3d &offset_T_L_I, const Eigen::Vector3d &grav, const std::vector<Pose6D> &imu_poses) {
+                const Eigen::Vector3d &offset_T_L_I, const std::vector<Pose6D> &imu_poses) {
   for (const auto &pose : imu_poses) {
     if (pose.offset_time + timestamp <= last_pose_timestamp) {
       spdlog::warn("skip pose at time because of loop back: {:.6f}", pose.offset_time + timestamp);
@@ -126,8 +126,7 @@ void   SaveTraj(std::ofstream &fp, double timestamp, const Eigen::Quaterniond &o
     Eigen::Quaterniond rot = Eigen::Quaterniond(pose.rot) * offset_R_L_I;
     Eigen::Vector3d    pos = pose.rot * offset_T_L_I + pose.pos;
     fp << fmt::format("{:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f}",
-                        last_pose_timestamp, pos(0), pos(1), pos(2), rot.x(), rot.y(), rot.z(), rot.w(), grav[0], grav[1],
-                        grav[2])
+                      pos(0), pos(1), pos(2), 0.0, 0.0, 0.0, rot.x(), rot.y(), rot.z(), rot.w(), last_pose_timestamp)
        << std::endl;
   }
 }
@@ -476,13 +475,13 @@ int main(int argc, char **argv) {
   kf.init_dyn_share(get_f, df_dx, df_dw, h_share_model, NUM_MAX_ITERATIONS, epsi);
 
   /*** traj record ***/
-  std::string   traj_dir = FLAGS_output_dir + "/traj.txt";
+  std::string   traj_dir = FLAGS_output_dir + "/trajectory.txt";
   std::ofstream fp_traj(traj_dir);
   if (!fp_traj) {
     spdlog::error("Failed to open trajectory file: {}", traj_dir);
     return -1;
   }
-  fp_traj << "#timestamp_s tx ty tz qx qy qz qw\n";
+  fp_traj << "# x y z roll pitch yaw qx qy qz qw timestamp\n";
   fp_traj.flush();
 
   /*** Load IMU data ***/
@@ -665,8 +664,7 @@ int main(int argc, char **argv) {
         if (!imu_poses.empty()) {
           CorrectImuPoses(Measures.lidar_end_time - last_timestamp, state_predict, g_state_point, imu_poses);
 
-          SaveTraj(fp_traj, last_timestamp, g_state_point.offset_R_L_I, g_state_point.offset_T_L_I, g_state_point.grav,
-                   imu_poses);
+          SaveTraj(fp_traj, last_timestamp, g_state_point.offset_R_L_I, g_state_point.offset_T_L_I, imu_poses);
         }
         std::cout << "Progress " << lidar_reader.getProgress() << "%" << std::endl;
       }
