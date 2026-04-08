@@ -11,6 +11,11 @@ import cv2
 import argparse
 import sys
 
+from spdlog_compat import init_spdlog_like_logger
+
+
+LOGGER = init_spdlog_like_logger()
+
 # ============================================================
 # 尝试导入ROS相关库（可选）
 # ============================================================
@@ -24,22 +29,22 @@ try:
 
     ROSBAG_AVAILABLE = True
 except ImportError as e:
-    print(f"[WARN] 警告: 未能导入ROS相关库 - {e}")
-    print("  rosbag功能将被禁用，但其他功能可正常运行")
+    print(f"[WARN] Failed to import ROS-related libraries: {e}")
+    print("  rosbag export will be disabled, but other features remain available")
 
 # ============================================================
 # 配置参数和路径 (所有设置放在这里)
 # ============================================================
 
 # 创建命令行参数解析器
-parser = argparse.ArgumentParser(description="科研相机数据提取工具")
+parser = argparse.ArgumentParser(description="Scientific camera data extraction tool")
 
 # --------- 输入文件路径 ---------
 parser.add_argument(
     "--input-video-filename",
     type=str,
     default="D:\\ProjectX\\project-3d\\data\\manifold-tech-calib\\calib\\MT20260326-161907\\VID_20260326_161848_00_055.insv",
-    help="输入视频文件路径",
+    help="Input video file path",
 )
 
 # --------- 输出目录 ---------
@@ -47,7 +52,7 @@ parser.add_argument(
     "--output-dir",
     type=str,
     default="D:/output/images",
-    help="输出目录",
+    help="Output directory",
 )
 
 # --------- 时间偏移参数 ---------
@@ -55,7 +60,7 @@ parser.add_argument(
     "--time-offset",
     type=float,
     default=1749886731.5319195,
-    help="时间偏移量（秒）",
+    help="Time offset in seconds",
 )
 
 # --------- 数据导出参数 ---------
@@ -63,7 +68,7 @@ parser.add_argument(
     "--export-frames",
     action=argparse.BooleanOptionalAction,
     default=True,
-    help="是否导出相机帧（默认: 导出；可用 --no-export-frames 关闭）",
+    help="Whether to export camera frames (default: enabled; use --no-export-frames to disable)",
 )
 
 # 解析命令行参数
@@ -130,7 +135,7 @@ def extract_frames_from_video(
                     os.remove(old_path)
 
                 except Exception as e:
-                    print(f"  [WARN] 无法删除旧文件 {old_file}: {e}")
+                    print(f"  [WARN] Failed to delete old file {old_file}: {e}")
 
     # 为每个摄像头流提取帧
     image_lists = {}
@@ -138,7 +143,7 @@ def extract_frames_from_video(
     for stream_idx in range(num_streams):
         cam_dir = os.path.join(output_base_dir, f"cam{stream_idx}")
 
-        print(f"[OK] 正在处理 cam{stream_idx}...")
+        print(f"[OK] Processing cam{stream_idx}...")
 
         try:
             # 使用ffmpeg提取stream到临时文件
@@ -162,7 +167,7 @@ def extract_frames_from_video(
                 temp_output,
             ]
 
-            print(f"  提取原始帧...")
+            print("  Extracting raw frames...")
             result = subprocess.run(cmd, check=True, capture_output=True, text=True)
 
             # 获取所有临时帧文件
@@ -173,7 +178,7 @@ def extract_frames_from_video(
                     if f.startswith("temp_") and f.endswith(".jpg")
                 ]
             )
-            print(f"  [OK] cam{stream_idx} 已提取 {len(temp_frames)} 帧")
+            print(f"  [OK] Extracted {len(temp_frames)} frames for cam{stream_idx}")
 
             # 根据采样率进行采样并重命名文件
             sampled_images = []
@@ -199,7 +204,7 @@ def extract_frames_from_video(
                     sampled_images.append(new_name)
                     sampled_timestamps.append(all_timestamps[idx])
                 except Exception as e:
-                    print(f"  [WARN] 无法重命名文件 {temp_frame}: {e}")
+                    print(f"  [WARN] Failed to rename file {temp_frame}: {e}")
                     continue
 
             # 删除未采样的临时文件
@@ -212,21 +217,21 @@ def extract_frames_from_video(
                 try:
                     os.remove(os.path.join(cam_dir, temp_file))
                 except Exception as e:
-                    print(f"  [WARN] 无法删除未采样的文件 {temp_file}: {e}")
+                    print(f"  [WARN] Failed to delete unsampled file {temp_file}: {e}")
 
             print(
-                f"  [OK] cam{stream_idx} 采样完成: {len(sampled_images)} 帧 (采样率: {frame_sample_rate})"
+                f"  [OK] cam{stream_idx} sampling complete: {len(sampled_images)} frames (sample rate: {frame_sample_rate})"
             )
 
             # 保存图片列表
             image_lists[f"cam{stream_idx}"] = sampled_images
 
         except subprocess.CalledProcessError as e:
-            print(f"[ERROR] 错误: 提取 cam{stream_idx} 帧失败")
+            print(f"[ERROR] Failed to extract frames for cam{stream_idx}")
             print(f"  stderr: {e.stderr}")
             raise
         except FileNotFoundError:
-            print("[ERROR] 错误: 未找到 ffmpeg，请确保已安装并在 PATH 中")
+            print("[ERROR] ffmpeg was not found. Make sure it is installed and available in PATH")
             raise
 
     # 将时间戳添加到返回值
@@ -269,8 +274,8 @@ def save_to_rosbag(
         timeoffset_secs: 时间偏移量 (秒)
     """
     if not ROSBAG_AVAILABLE:
-        print("[ERROR] 错误: rosbag 库未安装或ROS环境不可用，跳过 rosbag 保存")
-        print("  提示: 若要使用rosbag功能，请安装 rosbag 库")
+        print("[ERROR] rosbag is unavailable or the ROS environment is missing, skipping rosbag export")
+        print("  Install rosbag support if you need rosbag export")
         return False
 
     try:
@@ -284,11 +289,11 @@ def save_to_rosbag(
         bag_path = os.path.join(output_dir, "images.bag")
         bridge = CvBridge()
 
-        print(f"[OK] 开始创建 rosbag 文件: {bag_path}")
+        print(f"[OK] Creating rosbag file: {bag_path}")
 
         with rosbag.Bag(bag_path, "w") as bag:
             # ==================== 保存 IMU 数据 ====================
-            print("  正在写入 IMU 数据...")
+            print("  Writing IMU data...")
             imu_count = 0
             for imu_msg in imu_msg_list.imu_msgs:
                 # 创建ROS Imu消息
@@ -314,7 +319,7 @@ def save_to_rosbag(
                 bag.write("/imu0", imu_ros, t=imu_ros.header.stamp)
                 imu_count += 1
 
-            print(f"    [OK] 已写入 {imu_count} 条 IMU 消息")
+            print(f"    [OK] Wrote {imu_count} IMU messages")
 
             # ==================== 保存 相机 数据 ====================
             for cam_idx in range(num_streams):
@@ -322,7 +327,7 @@ def save_to_rosbag(
                 if not cam_dir.exists():
                     continue
 
-                print(f"  正在写入 cam{cam_idx} 图片...")
+                print(f"  Writing cam{cam_idx} images...")
                 image_files = sorted(
                     cam_dir.glob("*.jpg"), key=lambda x: int(x.stem.split("_")[0])
                 )
@@ -336,7 +341,7 @@ def save_to_rosbag(
                         # 读取图片
                         cv_image = cv2.imread(str(img_file))
                         if cv_image is None:
-                            print(f"    [WARN] 无法读取图片: {img_file}")
+                            print(f"    [WARN] Failed to read image: {img_file}")
                             continue
 
                         # resize to 1/2
@@ -359,19 +364,19 @@ def save_to_rosbag(
                         bag.write(topic, ros_image, t=ros_image.header.stamp)
                         img_count += 1
                     except Exception as e:
-                        print(f"    [WARN] 处理图片失败 {img_file}: {str(e)}")
+                        print(f"    [WARN] Failed to process image {img_file}: {str(e)}")
                         continue
 
-                print(f"    [OK] 已写入 {img_count} 张 cam{cam_idx} 图片")
+                print(f"    [OK] Wrote {img_count} images for cam{cam_idx}")
 
         file_size = os.path.getsize(bag_path)
-        print(f"\n[OK] rosbag 文件已生成完成")
-        print(f"  文件路径: {bag_path}")
-        print(f"  文件大小: {file_size / 1024 / 1024:.2f} MB")
+        print("\n[OK] rosbag file created successfully")
+        print(f"  Path: {bag_path}")
+        print(f"  Size: {file_size / 1024 / 1024:.2f} MB")
         return True
 
     except Exception as e:
-        print(f"[ERROR] 错误: 创建 rosbag 文件失败")
+        print("[ERROR] Failed to create rosbag file")
         print(f"  {str(e)}")
         return False
 
@@ -382,7 +387,7 @@ def save_to_rosbag(
 
 # 开始处理
 print("=" * 60)
-print("开始数据提取和处理流程...")
+print("Starting data extraction and processing pipeline...")
 print("=" * 60)
 
 # 初始化解析器
@@ -413,25 +418,25 @@ with open(IMU_OUTPUT_FILE, "wb") as f:
 
 # 验证写入成功
 file_size = os.path.getsize(IMU_OUTPUT_FILE)
-print(f"[OK] 已输出到: {IMU_OUTPUT_FILE}")
-print(f"  文件大小: {file_size} 字节")
-print(f"  IMU数据点数: {len(imu_msg_list.imu_msgs)}")
+print(f"[OK] Wrote output to: {IMU_OUTPUT_FILE}")
+print(f"  File size: {file_size} bytes")
+print(f"  IMU sample count: {len(imu_msg_list.imu_msgs)}")
 print(f"  Camera: {tp.camera}")
 print(f"  Model: {tp.model}")
 
 if not EXPORT_FRAMES:
     print("\n" + "=" * 60)
-    print("[WARN] 注意: 未导出相机帧，时间戳数据未被使用")
+    print("[WARN] Camera frames were not exported, timestamps were not consumed")
     print("=" * 60)
     sys.exit(0)
 
 # 获取时间戳数据（在提取帧之前）
 print("\n" + "=" * 60)
-print("准备时间戳数据...")
+print("Preparing timestamp data...")
 print("=" * 60)
 exposure_data = tp.telemetry()[0]["Exposure"]["Data"]
 all_timestamps = [e["t"] + TIME_OFFSET_SECS for e in exposure_data]  # 加上时间偏移
-print(f"[OK] 已读取 {len(all_timestamps)} 个时间戳")
+print(f"[OK] Loaded {len(all_timestamps)} timestamps")
 
 # ============================================================
 # 执行逻辑
@@ -439,7 +444,7 @@ print(f"[OK] 已读取 {len(all_timestamps)} 个时间戳")
 
 # 调用函数提取帧
 print("\n" + "=" * 60)
-print(f"开始提取视频帧 (采样率: {FRAME_SAMPLE_RATE})...")
+print(f"Starting frame extraction (sample rate: {FRAME_SAMPLE_RATE})...")
 print("=" * 60)
 result = extract_frames_from_video(
     input_video_path=INPUT_VIDEO,
@@ -456,32 +461,32 @@ image_lists = {k: v for k, v in result.items() if k != "timestamps"}
 
 # 统计提取的帧数
 print("\n" + "=" * 60)
-print("帧提取统计:")
+print("Frame extraction summary:")
 print("=" * 60)
 for cam, images in image_lists.items():
-    print(f"  {cam}: {len(images)} 帧")
+    print(f"  {cam}: {len(images)} frames")
 
-print(f"\n[OK] 原始时间戳数: {len(all_timestamps)}")
-print(f"  采样后时间戳数: {len(sampled_timestamps)}")
-print(f"  采样率: {FRAME_SAMPLE_RATE}")
+print(f"\n[OK] Original timestamp count: {len(all_timestamps)}")
+print(f"  Sampled timestamp count: {len(sampled_timestamps)}")
+print(f"  Sample rate: {FRAME_SAMPLE_RATE}")
 if len(sampled_timestamps) > 0:
-    print(f"  时间戳范围: {sampled_timestamps[0]:.6f} 到 {sampled_timestamps[-1]:.6f}")
+    print(f"  Timestamp range: {sampled_timestamps[0]:.6f} to {sampled_timestamps[-1]:.6f}")
 
 # 验证帧数和时间戳是否匹配
 print("\n" + "=" * 60)
-print("帧与时间戳验证:")
+print("Frame and timestamp validation:")
 print("=" * 60)
 frame_counts = {cam: len(images) for cam, images in image_lists.items()}
 for cam, frame_count in frame_counts.items():
-    match_status = "[OK] 匹配" if frame_count == len(sampled_timestamps) else "[ERROR] 不匹配"
+    match_status = "[OK] match" if frame_count == len(sampled_timestamps) else "[ERROR] mismatch"
     print(
-        f"  {cam}: {frame_count} 帧 vs {len(sampled_timestamps)} 时间戳 {match_status}"
+        f"  {cam}: {frame_count} frames vs {len(sampled_timestamps)} timestamps {match_status}"
     )
 
 # 保存到 rosbag（可选）
 if SAVE_TO_ROSBAG:
     print("\n" + "=" * 60)
-    print("保存数据到 rosbag...")
+    print("Saving data to rosbag...")
     print("=" * 60)
     save_to_rosbag(
         output_dir=OUTPUT_DIRECTORY,
@@ -492,9 +497,9 @@ if SAVE_TO_ROSBAG:
     )
 else:
     print("\n" + "=" * 60)
-    print("[WARN] 跳过 Rosbag 保存 (SAVE_TO_ROSBAG = False)")
+    print("[WARN] Skipping rosbag export (SAVE_TO_ROSBAG = False)")
     print("=" * 60)
 
 print("\n" + "=" * 60)
-print("[OK] 所有数据处理完成！")
+print("[OK] Data processing completed")
 print("=" * 60)

@@ -25,6 +25,11 @@ from proto.calib_pb2 import SensorCalib
 import re
 from scipy.spatial.transform import Rotation, Slerp
 
+from spdlog_compat import init_spdlog_like_logger
+
+
+LOGGER = init_spdlog_like_logger()
+
 
 def extract_timestamp_from_filename(filename):
     """Extract timestamp from image filename (format: 1735732912_646576.jpg -> 1735732912.646576)"""

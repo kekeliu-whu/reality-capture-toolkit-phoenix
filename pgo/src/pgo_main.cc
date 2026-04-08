@@ -1,6 +1,8 @@
 
+#include <migration/logging.h>
+#include <migration/proto_io.h>
+
 #include "map/pgo_runner.h"
-#include "migration/proto_io.h"
 
 DEFINE_string(project_input_path, "D:/output", "Input project path");
 DEFINE_string(project_output_path, "D:/output", "Output project path");
@@ -8,6 +10,8 @@ DEFINE_string(config_filename, std::string(PROJECT_DIR) + "/../migration/config/
 
 int main(int argc, char **argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
+
+  InitSpdLog();
 
   proto::PgoConfig pgo_config;
   auto ok = ReadPgoConfigFile(FLAGS_config_filename, pgo_config);

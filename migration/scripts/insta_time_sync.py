@@ -1,10 +1,10 @@
 """
-IMU 时间同步工具
+IMU time synchronization tool.
 
-该模块用于：
-1. 读取两个IMU传感器的数据
-2. 通过陀螺仪幅度的B-spline插值进行时间同步
-3. 生成可视化分析结果
+This module:
+1. Loads data from two IMU sensors.
+2. Synchronizes time using B-spline interpolation over gyro magnitude.
+3. Generates visualization plots for analysis.
 """
 
 import numpy as np
@@ -14,6 +14,11 @@ from scipy import signal
 import matplotlib
 import argparse
 from proto.sensors_pb2 import ImuMsgList
+
+from spdlog_compat import init_spdlog_like_logger
+
+
+LOGGER = init_spdlog_like_logger()
 
 # ============================================================================
 # [CONFIG]  配置参数 - 修改此处来调整程序行为
@@ -46,8 +51,7 @@ if not SHOW_PLOTS:
 
 import matplotlib.pyplot as plt
 
-# 配置中文字体
-matplotlib.rcParams["font.sans-serif"] = ["SimHei"]
+matplotlib.rcParams["axes.unicode_minus"] = True
 
 # ============================================================================
 # 数据加载模块
@@ -65,7 +69,7 @@ def load_imu_data(imu_device_path: str, imu_insta_path: str) -> tuple:
     Returns:
         (t1, t2, gyro_mag1, gyro_mag2): 时间戳和陀螺仪幅度
     """
-    print("[数据] 正在加载IMU数据...")
+    print("[INFO] Loading IMU data...")
 
     # 读取protobuf二进制文件
     with open(imu_device_path, "rb") as f:
@@ -94,16 +98,16 @@ def load_imu_data(imu_device_path: str, imu_insta_path: str) -> tuple:
 
     offset = t_insta[0] - t_device[0]
     print(
-        f"  [时间偏移] Insta相对于Device的初始时间偏移: {offset:.3f} s, t_device[0]: {t_device[0]:.3f} t_device[end]: {t_device[-1]:.3f}, t_insta[0]: {t_insta[0]:.3f}, t_insta[end]: {t_insta[-1]:.3f}"
+        f"  Initial Insta-to-Device time offset: {offset:.3f} s, t_device[0]: {t_device[0]:.3f} t_device[end]: {t_device[-1]:.3f}, t_insta[0]: {t_insta[0]:.3f}, t_insta[end]: {t_insta[-1]:.3f}"
     )
     t_device -= t_device[0]
     t_insta -= t_insta[0]
 
     print(
-        f"  [Device] {len(imu_device_msgs.imu_msgs)} 条记录 ({t_device[0]:.3f}s - {t_device[-1]:.3f}s)"
+        f"  [Device] {len(imu_device_msgs.imu_msgs)} samples ({t_device[0]:.3f}s - {t_device[-1]:.3f}s)"
     )
     print(
-        f"  [Insta] {len(imu_insta_msgs.imu_msgs)} 条记录 ({t_insta[0]:.3f}s - {t_insta[-1]:.3f}s)"
+        f"  [Insta] {len(imu_insta_msgs.imu_msgs)} samples ({t_insta[0]:.3f}s - {t_insta[-1]:.3f}s)"
     )
 
     # 保存原始数据用于后续导出
@@ -169,7 +173,7 @@ def remove_duplicate_times(
         final_diffs = np.diff(t_unique)
         if np.any(final_diffs <= 0):
             # 如果仍然有问题，采用更激进的方法
-            print(f"  [警告] 清理后仍有非递增数据，应用额外清理...")
+            print("[WARN] Non-increasing timestamps remain after cleanup, applying extra filtering...")
             # 逐个检查，跳过所有不满足条件的点
             indices = [0]
             for i in range(1, len(t_unique)):
@@ -181,7 +185,7 @@ def remove_duplicate_times(
 
     if n_removed > 0:
         print(
-            f"  [清理] 移除了 {n_removed} 个重复或乱序的时间点 (保留 {len(t_unique)} 个)"
+            f"  [Cleanup] Removed {n_removed} duplicate or out-of-order timestamps ({len(t_unique)} kept)"
         )
 
     return t_unique, y_unique
@@ -210,7 +214,7 @@ def create_bspline_models(
 
     # 检查清理后的数据是否满足最小要求
     if len(t_clean) < k + 2:
-        print(f"  [警告] 数据点不足 ({len(t_clean)} < {k+2})，使用较低的阶数")
+        print(f"[WARN] Not enough data points ({len(t_clean)} < {k+2}), falling back to a lower spline order")
         k_adjusted = max(1, len(t_clean) - 2)
         return UnivariateSpline(t_clean, gyro_clean, k=k_adjusted, s=0.01)
 
@@ -221,12 +225,12 @@ def create_bspline_models(
         error_str = str(e)
         if "strictly increasing" in error_str or "increasing" in error_str:
             # 如果时间戳仍然有问题，使用更激进的平滑
-            print(f"  [修复] 检测到时间戳问题，使用更高的平滑因子")
+            print("[INFO] Timestamp issue detected, retrying with higher smoothing")
             try:
                 return UnivariateSpline(t_clean, gyro_clean, k=k, s=0.1)
             except ValueError:
                 # 如果还是失败，使用最高平滑
-                print(f"  [修复] 使用最大平滑处理时间戳问题")
+                print("[INFO] Retrying with maximum smoothing to handle timestamp issues")
                 return UnivariateSpline(t_clean, gyro_clean, k=k, s=1.0)
         else:
             raise
@@ -309,7 +313,7 @@ def find_coarse_alignment(
     Returns:
         (optimal_delay, max_correlation, time_delays, correlation): 最优延迟、最大相关系数、时间延迟序列、相关系数序列
     """
-    print("[粗对齐] 正在进行粗对齐（基于互相关系数）...")
+    print("[INFO] Running coarse alignment using cross-correlation...")
 
     # 使用对齐范围内的最大延迟（无上限限制）
     time_range = t1_aligned[-1] - t1_aligned[0]
@@ -320,8 +324,8 @@ def find_coarse_alignment(
         )
     )
 
-    print(f"  [TIME]  粗对齐延迟: {optimal_delay*1000:.3f} ms")
-    print(f"  [CORR] 最大互相关系数: {max_correlation:.6f}")
+    print(f"  [TIME]  Coarse alignment delay: {optimal_delay*1000:.3f} ms")
+    print(f"  [CORR] Maximum cross-correlation: {max_correlation:.6f}")
 
     return optimal_delay, max_correlation, time_delays, correlation
 
@@ -359,9 +363,9 @@ def find_top_peaks(
     # 返回前N个
     top_peaks = peak_data[:num_peaks]
 
-    print(f"  [峰值] 找到了 {len(peak_data)} 个峰值，前 {len(top_peaks)} 个为：")
+    print(f"  [Peaks] Found {len(peak_data)} peaks, top {len(top_peaks)} are:")
     for i, (delay, corr) in enumerate(top_peaks):
-        print(f"    [{i+1}] 延迟: {delay*1000:8.3f} ms, 相关系数: {corr:.6f}")
+        print(f"    [{i+1}] Delay: {delay*1000:8.3f} ms, correlation: {corr:.6f}")
 
     return top_peaks
 
@@ -377,7 +381,7 @@ def plot_coarse_alignment(
     fig, ax = plt.subplots(figsize=(12, 6))
 
     ax.plot(
-        time_delays * 1000, correlation, linewidth=2, color="blue", label="互相关系数"
+        time_delays * 1000, correlation, linewidth=2, color="blue", label="Cross-correlation"
     )
 
     # 绘制主要峰值（红色）
@@ -386,7 +390,7 @@ def plot_coarse_alignment(
         color="red",
         linestyle="--",
         linewidth=2,
-        label=f"最优延迟: {optimal_delay*1000:.3f}ms",
+        label=f"Best delay: {optimal_delay*1000:.3f}ms",
     )
     ax.scatter(
         [optimal_delay * 1000],
@@ -395,7 +399,7 @@ def plot_coarse_alignment(
         s=100,
         marker="o",
         zorder=5,
-        label=f"最大值: {max_correlation:.6f}",
+        label=f"Peak value: {max_correlation:.6f}",
     )
 
     # 绘制其他候选峰值（如果有）
@@ -412,10 +416,10 @@ def plot_coarse_alignment(
             )
             ax.axvline(delay * 1000, color="orange", linestyle=":", alpha=0.5)
 
-    ax.set_xlabel("时间延迟 (ms)", fontsize=12)
-    ax.set_ylabel("互相关系数", fontsize=12)
+    ax.set_xlabel("Time delay (ms)", fontsize=12)
+    ax.set_ylabel("Cross-correlation", fontsize=12)
     ax.set_title(
-        "粗对齐：互相关系数分析（显示前3个峰值）", fontsize=14, fontweight="bold"
+        "Coarse alignment: cross-correlation analysis (top 3 peaks)", fontsize=14, fontweight="bold"
     )
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
@@ -423,7 +427,7 @@ def plot_coarse_alignment(
     plt.tight_layout()
     if SAVE_PLOTS:
         plt.savefig("coarse_alignment_correlation.png", dpi=150, bbox_inches="tight")
-        print("  [保存] coarse_alignment_correlation.png")
+        print("[INFO] Saved coarse_alignment_correlation.png")
     if SHOW_PLOTS:
         plt.show()
 
@@ -490,7 +494,7 @@ def optimize_time_delay(
         (最优时间延迟, 对齐误差) 元组
     """
     if verbose:
-        print("[精细对齐] 正在进行精细对齐（基于B-spline优化）...")
+        print("[INFO] Running fine alignment using B-spline optimization...")
 
     spl_device = create_bspline_models(t_device, gyro_mag_device)
     spl_insta = create_bspline_models(t_insta, gyro_mag_insta)
@@ -510,8 +514,8 @@ def optimize_time_delay(
     error = result.fun
 
     if verbose:
-        print(f"  [延迟] 精细对齐延迟: {time_delay*1000:.3f} ms")
-        print(f"  [误差] 对齐误差 (MSE): {error:.6f}")
+        print(f"  [TIME] Fine alignment delay: {time_delay*1000:.3f} ms")
+        print(f"  [MSE] Alignment error: {error:.6f}")
 
     return time_delay, error
 
@@ -530,7 +534,7 @@ def plot_fine_alignment_gyro_comparison(
     coarse_delay: float,
 ) -> None:
     """绘制粗对齐和精细对齐的对比图"""
-    print("[图表] 正在绘制粗对齐 vs 精细对齐对比...")
+    print("[INFO] Plotting coarse vs fine alignment comparison...")
 
     fig, ax = plt.subplots(figsize=(14, 7))
 
@@ -540,7 +544,7 @@ def plot_fine_alignment_gyro_comparison(
         gyro_mag_device,
         "g-",
         linewidth=2,
-        label="Device 陀螺仪幅度（参考）",
+        label="Device gyro magnitude (reference)",
         alpha=0.9,
     )
 
@@ -552,7 +556,7 @@ def plot_fine_alignment_gyro_comparison(
         "orange",
         linewidth=1.5,
         linestyle="--",
-        label=f"Insta 粗对齐 (延迟: {coarse_delay*1000:.3f}ms)",
+        label=f"Insta coarse alignment (delay: {coarse_delay*1000:.3f}ms)",
         alpha=0.7,
     )
 
@@ -563,20 +567,20 @@ def plot_fine_alignment_gyro_comparison(
         gyro_mag_insta,
         "r-",
         linewidth=2,
-        label=f"Insta 精细对齐 (延迟: {time_delay*1000:.3f}ms)",
+        label=f"Insta fine alignment (delay: {time_delay*1000:.3f}ms)",
         alpha=0.9,
     )
 
-    ax.set_xlabel("时间 (s)", fontsize=12)
-    ax.set_ylabel("陀螺仪幅度 (rad/s)", fontsize=12)
-    ax.set_title("粗对齐 vs 精细对齐对比", fontsize=14, fontweight="bold")
+    ax.set_xlabel("Time (s)", fontsize=12)
+    ax.set_ylabel("Gyro magnitude (rad/s)", fontsize=12)
+    ax.set_title("Coarse vs fine alignment", fontsize=14, fontweight="bold")
     ax.legend(fontsize=10, loc="upper right")
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
     if SAVE_PLOTS:
         plt.savefig("fine_alignment_gyro_comparison.png", dpi=150, bbox_inches="tight")
-        print("  [保存] fine_alignment_gyro_comparison.png")
+        print("[INFO] Saved fine_alignment_gyro_comparison.png")
     if SHOW_PLOTS:
         plt.show()
 
@@ -589,10 +593,10 @@ def plot_fine_alignment_gyro_comparison(
 def print_time_sync_results(time_delay: float) -> None:
     """打印时间同步结果"""
     print("\n" + "=" * 60)
-    print("[结果] 时间同步结果")
+    print("[INFO] Time synchronization result")
     print("=" * 60)
-    print(f"  [TIME]  时间延迟: {time_delay*1000:.3f} ms ({time_delay:.6f} s)")
-    print("  [说明] Insta 的时间戳应加上此延迟与 Device 对齐")
+    print(f"  [TIME]  Delay: {time_delay*1000:.3f} ms ({time_delay:.6f} s)")
+    print("  Insta timestamps should be shifted by this delay to align with Device")
 
 
 # ============================================================================
@@ -604,24 +608,24 @@ def main():
     """主程序入口"""
     # ===== 命令行参数解析 =====
     parser = argparse.ArgumentParser(
-        description="IMU 时间同步工具 - 通过B-spline插值进行陀螺仪幅度匹配"
+        description="IMU time synchronization using B-spline interpolation over gyro magnitude"
     )
     parser.add_argument(
         "--device",
         type=str,
         default=DEFAULT_IMU_DEVICE_FILE,
-        help=f"Device IMU数据文件路径 (默认: {DEFAULT_IMU_DEVICE_FILE})",
+        help=f"Path to the Device IMU data file (default: {DEFAULT_IMU_DEVICE_FILE})",
     )
     parser.add_argument(
         "--insta",
         type=str,
         default=DEFAULT_IMU_INSTA_FILE,
-        help=f"Insta IMU数据文件路径 (默认: {DEFAULT_IMU_INSTA_FILE})",
+        help=f"Path to the Insta IMU data file (default: {DEFAULT_IMU_INSTA_FILE})",
     )
     args = parser.parse_args()
 
     print("\n" + "=" * 60)
-    print("[开始] IMU 时间同步和旋转对齐分析")
+    print("[INFO] Starting IMU time synchronization and alignment analysis")
     print("=" * 60)
 
     # ===== 第1步: 加载数据 =====
@@ -630,7 +634,7 @@ def main():
     gyro_mag_device, gyro_mag_insta = data["gyro_mag_device"], data["gyro_mag_insta"]
 
     # ===== 第1.5步: 清理数据（移除重复的时间戳）=====
-    print("[清理] 正在清理原始时间戳...")
+    print("[INFO] Cleaning raw timestamps...")
     t_device, gyro_mag_device = remove_duplicate_times(t_device, gyro_mag_device)
     t_insta, gyro_mag_insta = remove_duplicate_times(t_insta, gyro_mag_insta)
 
@@ -649,7 +653,7 @@ def main():
     for peak_idx, (coarse_delay_candidate, peak_corr) in enumerate(top_peaks):
         print("\n" + "=" * 60)
         print(
-            f"[试验 {peak_idx+1}/3] 使用峰值 {peak_idx+1}: {coarse_delay_candidate*1000:.3f}ms"
+            f"[INFO] Trial {peak_idx+1}/3 using peak {peak_idx+1}: {coarse_delay_candidate*1000:.3f}ms"
         )
         print("=" * 60)
 
@@ -660,7 +664,7 @@ def main():
 
         # 确保交集有效
         if t_common_start >= t_common_end:
-            print(f"  [错误] 粗对齐后时间轴无交集，跳过此峰值")
+            print("[ERROR] No overlapping time range after coarse alignment, skipping this peak")
             continue
 
         # 使用较密集的采样率
@@ -671,7 +675,7 @@ def main():
         t_common = np.linspace(t_common_start, t_common_end, num_samples)
 
         print(
-            f"  [时间轴] 公共时间范围: [{t_common_start:.3f}, {t_common_end:.3f}] ({num_samples} 个采样点)"
+            f"  [Range] Common time window: [{t_common_start:.3f}, {t_common_end:.3f}] ({num_samples} samples)"
         )
 
         # 精细对齐
@@ -699,21 +703,21 @@ def main():
 
     # ===== 第3步: 选择最好的结果（误差最小）=====
     if not results:
-        print("[错误] 没有有效的结果，无法继续处理！")
+        print("[ERROR] No valid result was found, aborting")
         return
 
     best_result = min(results, key=lambda x: x["error"])
     best_idx = best_result["peak_idx"]
 
     print("\n" + "=" * 60)
-    print("[结果对比] 三个峰值的优化结果")
+    print("[INFO] Optimization results for the three candidate peaks")
     print("=" * 60)
     for r in results:
-        marker = " [最佳]" if r["peak_idx"] == best_idx else ""
+        marker = " [best]" if r["peak_idx"] == best_idx else ""
         print(
-            f"  峰值 {r['peak_idx']+1}: 粗延迟 {r['coarse_delay']*1000:8.3f}ms, "
-            f"精延迟 {r['fine_delay']*1000:8.3f}ms, "
-            f"误差 {r['error']:.6f}{marker}"
+            f"  Peak {r['peak_idx']+1}: coarse delay {r['coarse_delay']*1000:8.3f}ms, "
+            f"fine delay {r['fine_delay']*1000:8.3f}ms, "
+            f"error {r['error']:.6f}{marker}"
         )
 
     time_delay = best_result["fine_delay"]

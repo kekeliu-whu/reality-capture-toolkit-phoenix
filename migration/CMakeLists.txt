@@ -109,12 +109,15 @@ set(TEST_LIB ${PROJECT_NAME})
 add_test_library_srcs("${PROJECT_SRCS}")
 enable_automatic_test_and_benchmark()
 
-add_executable(convert_l2pro src/tools/convert_l2pro.cc)
-target_link_libraries(convert_l2pro ${TEST_LIB})
-add_executable(convert_s20 src/tools/convert_s20.cc)
-target_link_libraries(convert_s20 ${TEST_LIB})
-add_executable(convert_manifold src/tools/convert_manifold.cc)
-target_link_libraries(convert_manifold ${TEST_LIB})
+function(add_private_tool name)
+    add_executable(${name} ${ARGN} ${PRIVATE_SRCS})
+    target_link_libraries(${name} ${TEST_LIB})
+endfunction()
+
+add_private_tool(convert_l2pro src/tools/convert_l2pro.cc)
+add_private_tool(convert_s20 src/tools/convert_s20.cc)
+add_private_tool(convert_manifold src/tools/convert_manifold.cc)
+add_private_tool(convert_calib src/tools/convert_calib.cc)
 
 target_include_directories(
     ${PROJECT_NAME}
