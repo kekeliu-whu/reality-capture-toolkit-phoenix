@@ -91,7 +91,7 @@ function Test-PrerequisitesAndBuild {
 
     # Verify Python Tools
     Write-Status "Checking Python Tools executables..."
-    $pythonExes = @("insta_compute_poses.exe", "insta_data_extraction.exe", "insta_time_sync.exe")
+    $pythonExes = @("insta_compute_poses.exe", "insta_compute_poses_ar.exe", "insta_data_extraction.exe", "insta_time_sync.exe")
     $pythonExeCount = 0
     foreach ($exe in $pythonExes) {
         if (Test-Path (Join-Path $PYTHON_TOOLS_DIR $exe)) {
@@ -191,6 +191,7 @@ function Copy-ExecutableFiles {
         "slam_post.exe",
         # Python Tools
         "insta_compute_poses.exe",
+        "insta_compute_poses_ar.exe",
         "insta_data_extraction.exe",
         "insta_time_sync.exe"
     )
