@@ -4,13 +4,15 @@
 流程：
 1. 读取 camera/ImgPose.txt —— 每行含相片路径和相机位姿（四元数）
 2. 读取 colorized.las —— 点云（世界坐标系）
-3. 读取 calibration.dat —— 鱼眼相机内参及畸变系数（protobuf格式）
+3. 读取 calibration.json / calibration.dat —— 鱼眼相机内参及畸变系数
 4. 随机选一张相片，将点云投影到该相片，采样颜色
 5. 将带颜色的点云保存为 recolored.las
 """
 
+import json
 import os
 import random
+import shutil
 import sys
 import time
 
@@ -18,10 +20,15 @@ import numpy as np
 import laspy
 import cv2
 from scipy.spatial.transform import Rotation as ScipyR
-from proto import calib_pb2
 
-BASE_DIR = R"D:/output2"
+try:
+    from proto import calib_pb2
+except ImportError:
+    calib_pb2 = None
+
+BASE_DIR = R"D:\ProjectX\project-3d\data\abc"
 target_img = "cam0/1749886787_819981.jpg"  # 默认图片
+MAX_POINTS = 20_000_000
 
 
 # ──────────────────────────────────────────────
@@ -36,17 +43,27 @@ def load_img_poses(filepath: str) -> list[dict]:
     poses = []
     with open(filepath, "r") as f:
         lines = f.readlines()
-    for line in lines[1:]:          # 跳过列头
+    for line in lines[1:]:  # 跳过列头
         parts = line.strip().split()
         if len(parts) < 11:
             continue
-        poses.append({
-            "img_path":  parts[0],
-            "position":  np.array([float(parts[1]), float(parts[2]), float(parts[3])]),
-            # 四元数：qx qy qz qw（columns 7-10）
-            "quat":      np.array([float(parts[7]), float(parts[8]),
-                                   float(parts[9]), float(parts[10])]),
-        })
+        poses.append(
+            {
+                "img_path": parts[0],
+                "position": np.array(
+                    [float(parts[1]), float(parts[2]), float(parts[3])]
+                ),
+                # 四元数：qx qy qz qw（columns 7-10）
+                "quat": np.array(
+                    [
+                        float(parts[7]),
+                        float(parts[8]),
+                        float(parts[9]),
+                        float(parts[10]),
+                    ]
+                ),
+            }
+        )
     return poses
 
 
@@ -55,15 +72,43 @@ def load_img_poses(filepath: str) -> list[dict]:
 # ──────────────────────────────────────────────
 def load_calibration(filepath: str) -> dict:
     """
-    从protobuf格式的calibration.dat读取相机内参和畸变参数。
+    从 calibration.json 或 calibration.dat 读取相机内参和畸变参数。
     返回 {相机名称: {fx, fy, cx, cy, k1, k2, k3, k4}} 字典。
     """
+    ext = os.path.splitext(filepath)[1].lower()
+
+    if ext == ".json":
+        with open(filepath, "r", encoding="utf-8") as f:
+            calib_json = json.load(f)
+
+        cameras = {}
+        for cam_param in calib_json.get("cameras", []):
+            intrinsic = cam_param.get("intrinsic", {})
+            distortion = cam_param.get("distortion", {}).get("params", {})
+            name = cam_param.get("name", "default")
+            cameras[name] = {
+                "fx": float(intrinsic["fl_x"]),
+                "fy": float(intrinsic["fl_y"]),
+                "cx": float(intrinsic["cx"]),
+                "cy": float(intrinsic["cy"]),
+                "k1": float(distortion.get("k1", 0.0)),
+                "k2": float(distortion.get("k2", 0.0)),
+                "k3": float(distortion.get("k3", 0.0)),
+                "k4": float(distortion.get("k4", 0.0)),
+            }
+        return cameras
+
+    if calib_pb2 is None:
+        raise ImportError(
+            "protobuf 标定解析不可用，请安装 proto 模块或改用 calibration.json"
+        )
+
     with open(filepath, "rb") as f:
         calib_data = f.read()
-    
+
     sensor_calib = calib_pb2.SensorCalib()
     sensor_calib.ParseFromString(calib_data)
-    
+
     cameras = {}
     for cam_param in sensor_calib.camera_param:
         name = cam_param.name if cam_param.name else "default"
@@ -80,14 +125,82 @@ def load_calibration(filepath: str) -> dict:
     return cameras
 
 
+def get_camera_calibration(calibs: dict, cam_name: str) -> dict:
+    aliases = {
+        "cam0": ["/cam0/image_raw", "cam0", "left", "left_camera"],
+        "cam1": ["/cam1/image_raw", "cam1", "right", "right_camera"],
+    }
+
+    for key in aliases.get(cam_name, [cam_name]):
+        if key in calibs:
+            return calibs[key]
+
+    available = ", ".join(sorted(calibs.keys()))
+    raise KeyError(f"未找到相机 '{cam_name}' 的标定参数，可用相机: {available}")
+
+
+def resolve_las_path(base_dir: str) -> str:
+    candidates = ["map.las", "colorized.las", "rtk_all.las"]
+    for filename in candidates:
+        path = os.path.join(base_dir, filename)
+        if os.path.exists(path):
+            return path
+
+    las_files = sorted(
+        name for name in os.listdir(base_dir) if name.lower().endswith(".las")
+    )
+    if len(las_files) == 1:
+        return os.path.join(base_dir, las_files[0])
+
+    raise FileNotFoundError(f"未找到 LAS 文件，尝试过: {', '.join(candidates)}")
+
+
+def infer_camera_name(img_rel: str) -> str:
+    norm_path = img_rel.replace("\\", "/").lower()
+    if "cam0" in norm_path or norm_path.startswith("left/"):
+        return "cam0"
+    if "cam1" in norm_path or norm_path.startswith("right/"):
+        return "cam1"
+    raise ValueError(f"无法从图片路径推断相机名称: {img_rel}")
+
+
+def resolve_image_path(base_dir: str, img_rel: str) -> str:
+    norm_path = img_rel.replace("\\", "/")
+    return os.path.join(base_dir, "images", *norm_path.split("/"))
+
+
+def write_single_point_pcd(filepath: str, point_xyz: np.ndarray) -> None:
+    x, y, z = [float(value) for value in point_xyz]
+    content = """# .PCD v0.7 - Point Cloud Data file format
+VERSION 0.7
+FIELDS x y z
+SIZE 4 4 4
+TYPE F F F
+COUNT 1 1 1
+WIDTH 1
+HEIGHT 1
+VIEWPOINT 0 0 0 1 0 0 0
+POINTS 1
+DATA ascii
+{x:.9f} {y:.9f} {z:.9f}
+""".format(x=x, y=y, z=z)
+    with open(filepath, "w", encoding="ascii") as f:
+        f.write(content)
+
+
 # ──────────────────────────────────────────────
 # 4. OpenCV 鱼眼投影
 # ──────────────────────────────────────────────
 def project_fisheye(
     pts_cam: np.ndarray,
-    fl_x: float, fl_y: float,
-    cx: float, cy: float,
-    k1: float, k2: float, k3: float, k4: float,
+    fl_x: float,
+    fl_y: float,
+    cx: float,
+    cy: float,
+    k1: float,
+    k2: float,
+    k3: float,
+    k4: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     OpenCV FISHEYE 畸变模型投影。
@@ -105,10 +218,10 @@ def project_fisheye(
     r = np.sqrt(X**2 + Y**2)
     theta = np.arctan2(r, Z)
     t2 = theta * theta
-    theta_d = theta * (1.0 + k1*t2 + k2*t2**2 + k3*t2**3 + k4*t2**4)
+    theta_d = theta * (1.0 + k1 * t2 + k2 * t2**2 + k3 * t2**3 + k4 * t2**4)
 
     safe_r = np.where(r > 1e-9, r, 1.0)
-    scale  = np.where(r > 1e-9, theta_d / safe_r, 0.0)
+    scale = np.where(r > 1e-9, theta_d / safe_r, 0.0)
 
     u = fl_x * (scale * X) + cx
     v = fl_y * (scale * Y) + cy
@@ -124,44 +237,61 @@ def colorize_pointcloud(seed: int | None = None) -> None:
         random.seed(seed)
 
     # ── 加载点云（步长降采样）──
-    las_path = os.path.join(BASE_DIR, "map.las")
+    las_path = resolve_las_path(BASE_DIR)
     las = laspy.read(las_path)
     total = len(las.points)
-    step = 2  # 每 100 点取 1，快速测试；改为 4 可做 1/4 采样
+
+    # 控制默认处理规模，避免超大点云在交互环境中被中断。
+    step = max(1, (total + MAX_POINTS - 1) // MAX_POINTS)
     idx = np.arange(0, total, step)
     las.points = las.points[idx]
-    pts_world = np.vstack([las.x, las.y, las.z]).T          # (N, 3)
-    N = len(pts_world)
+    pts_world = np.vstack([las.x, las.y, las.z]).T  # (N, 3)
+    world_origin = las.header.offsets.astype(np.float64)
+    pts_world_local = pts_world - world_origin
+    N = len(pts_world_local)
     print(f"降采样（1/{step}）：{total} → {N} 个点")
-    print(f"点云（降采样后）：{N} 个点")
-    print(f"  X: [{pts_world[:,0].min():.4f}, {pts_world[:,0].max():.4f}]")
-    print(f"  Y: [{pts_world[:,1].min():.4f}, {pts_world[:,1].max():.4f}]")
-    print(f"  Z: [{pts_world[:,2].min():.4f}, {pts_world[:,2].max():.4f}]")
+    print(f"点云（降采样后，已去偏移）：{N} 个点")
+    print(f"  计算原点：{world_origin}")
+    print(f"  X: [{pts_world_local[:,0].min():.4f}, {pts_world_local[:,0].max():.4f}]")
+    print(f"  Y: [{pts_world_local[:,1].min():.4f}, {pts_world_local[:,1].max():.4f}]")
+    print(f"  Z: [{pts_world_local[:,2].min():.4f}, {pts_world_local[:,2].max():.4f}]")
 
     # ── 加载位姿 & 标定 ──
-    poses  = load_img_poses(os.path.join(BASE_DIR, "images", "ImgPose.txt"))
-    calibs = load_calibration(os.path.join(BASE_DIR, "calibration.dat"))
+    poses = load_img_poses(os.path.join(BASE_DIR, "images", "ImgPose.txt"))
+    calibs = load_calibration(os.path.join(BASE_DIR, "calibration.json"))
     print(f"位姿条目：{len(poses)} 条")
 
+    existing_poses = [
+        p for p in poses if os.path.exists(resolve_image_path(BASE_DIR, p["img_path"]))
+    ]
+    print(f"可用图片位姿：{len(existing_poses)} 条")
+    if not existing_poses:
+        raise FileNotFoundError("ImgPose.txt 中没有任何可用图片文件")
+
     pose = None
-    for p in poses:
+    for p in existing_poses:
         # 规范化路径（处理反斜杠）
         norm_path = p["img_path"].replace("\\", "/")
-        if target_img in norm_path or norm_path == target_img or target_img in p["img_path"]:
+        if (
+            target_img in norm_path
+            or norm_path == target_img
+            or target_img in p["img_path"]
+        ):
             pose = p
             print(f"✓ 在ImgPose.txt中找到对应的pose")
             break
     if pose is None:
         print(f"✗ 警告：未找到 '{target_img}'，使用随机图片")
-        # pose = poses[0]
-        pose = random.choice(poses)
-    
-    img_rel  = pose["img_path"]
-    cam_name = "cam0" if "cam0" in img_rel else "cam1"
-    img_path = os.path.join(BASE_DIR, "images", img_rel)
+        pose = random.choice(existing_poses)
+
+    img_rel = pose["img_path"]
+    cam_name = infer_camera_name(img_rel)
+    img_path = resolve_image_path(BASE_DIR, img_rel)
+    pose_position = pose["position"].astype(np.float64)
+    t_c2w_local = pose_position - world_origin
 
     print(f"\n选中图片：{img_rel}  ({cam_name} 相机)")
-    print(f"  位置 (x,y,z)  : {pose['position']}")
+    print(f"  位置 (x,y,z，已去偏移): {t_c2w_local}")
     print(f"  四元数(qx,qy,qz,qw): {pose['quat']}")
 
     # 加载图片
@@ -172,30 +302,34 @@ def colorize_pointcloud(seed: int | None = None) -> None:
     H, W = img_rgb.shape[:2]
     print(f"  图片尺寸：{W} × {H}")
 
-    calib = calibs[f"/{cam_name}/image_raw"]
+    calib = get_camera_calibration(calibs, cam_name)
 
     # ── 坐标变换：世界 → 相机（world_from_camera，即 c2w）──
     # quat 和 position 均为 c2w：P_world = R_c2w @ P_cam + t_c2w
     # 反求：P_cam = R_c2w^T @ (P_world - t_c2w)
     R_c2w = ScipyR.from_quat(pose["quat"]).as_matrix()  # scipy 接受 [qx,qy,qz,qw]
-    t_c2w = pose["position"]
-    pts_cam = (R_c2w.T @ (pts_world - t_c2w).T).T   # (N, 3)
+    pts_cam = (R_c2w.T @ (pts_world_local - t_c2w_local).T).T  # (N, 3)
 
     print(f"\n相机坐标系 Z 范围：[{pts_cam[:,2].min():.4f}, {pts_cam[:,2].max():.4f}]")
 
     # ── 鱼眼投影 ──
     u, v, valid_front = project_fisheye(
         pts_cam,
-        calib["fx"], calib["fy"],
-        calib["cx"],   calib["cy"],
-        calib["k1"],   calib["k2"], calib["k3"], calib["k4"],
+        calib["fx"],
+        calib["fy"],
+        calib["cx"],
+        calib["cy"],
+        calib["k1"],
+        calib["k2"],
+        calib["k3"],
+        calib["k4"],
     )
 
     # 像素边界检查
     ui = np.round(u).astype(np.int32)
     vi = np.round(v).astype(np.int32)
     in_bounds = (ui >= 0) & (ui < W) & (vi >= 0) & (vi < H)
-    valid     = valid_front & in_bounds
+    valid = valid_front & in_bounds
 
     hit = int(valid.sum())
     print(f"投影到图片内的点：{hit} / {N}  ({100.0 * hit / N:.1f}%)")
@@ -208,24 +342,38 @@ def colorize_pointcloud(seed: int | None = None) -> None:
     # ── 写出带色 LAS ──
     # 转换到支持 RGB 的 Point Format 2
     out_las = laspy.convert(las, point_format_id=2)
+    out_las.header.scales = las.header.scales.copy()
+    out_las.header.offsets = np.zeros(3, dtype=np.float64)
+    out_las.x = pts_world_local[:, 0]
+    out_las.y = pts_world_local[:, 1]
+    out_las.z = pts_world_local[:, 2]
 
     # LAS 颜色字段为 uint16（0-65535），8-bit 值左移 8 位
-    out_las.red   = (colors[:, 0].astype(np.uint16)) << 8
+    out_las.red = (colors[:, 0].astype(np.uint16)) << 8
     out_las.green = (colors[:, 1].astype(np.uint16)) << 8
-    out_las.blue  = (colors[:, 2].astype(np.uint16)) << 8
+    out_las.blue = (colors[:, 2].astype(np.uint16)) << 8
 
     out_path = os.path.join(BASE_DIR, "recolored.las")
     out_las.write(out_path)
-    print(f"\n已保存：{out_path}")
+    print(f"\n已保存（局部坐标，无全局偏移）：{out_path}")
+
+    camera_center_path = os.path.join(BASE_DIR, "camera_center.pcd")
+    write_single_point_pcd(camera_center_path, t_c2w_local)
+    print(f"已保存相机中心点：{camera_center_path}")
+
+    image_ext = os.path.splitext(img_path)[1] or ".jpg"
+    output_image_path = os.path.join(BASE_DIR, f"selected_image{image_ext}")
+    shutil.copy2(img_path, output_image_path)
+    print(f"已复制选中图片到输出目录：{output_image_path}")
 
 
 if __name__ == "__main__":
     seed_arg = None
-    
+
     if len(sys.argv) > 1:
         seed_arg = int(sys.argv[1])
-    
+
     if seed_arg is None:
         seed_arg = int(time.time() * 1e6) % (2**31)
-    
+
     colorize_pointcloud(seed=seed_arg)
