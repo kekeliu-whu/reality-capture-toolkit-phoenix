@@ -7,23 +7,34 @@ param(
     [switch]$TestOnly = $false
 )
 
-# Activate Python virtual environment
-Write-Host "Activating Python virtual environment..." -ForegroundColor Yellow
-& d:\ProjectX\project-3d\reality-capture-toolkit\.venv\Scripts\Activate.ps1
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: Failed to activate virtual environment" -ForegroundColor Red
+# Project paths
+$SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
+$PROJECT_ROOT = Split-Path -Parent $SCRIPT_DIR
+$VENV_SCRIPTS_DIR = Join-Path $PROJECT_ROOT ".venv\Scripts"
+$PYTHON_EXE = Join-Path $VENV_SCRIPTS_DIR "python.exe"
+$PYINSTALLER_EXE = Join-Path $VENV_SCRIPTS_DIR "pyinstaller.exe"
+
+# Use project-local Python tools directly instead of relying on shell activation.
+Write-Host "Checking Python virtual environment..." -ForegroundColor Yellow
+if (!(Test-Path $PYTHON_EXE)) {
+    Write-Host "ERROR: Python executable not found at $PYTHON_EXE" -ForegroundColor Red
     exit 1
 }
-Write-Host "Virtual environment activated successfully" -ForegroundColor Green
+
+if (!(Test-Path $PYINSTALLER_EXE)) {
+    Write-Host "ERROR: PyInstaller executable not found at $PYINSTALLER_EXE" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "Python environment ready" -ForegroundColor Green
+Write-Host "  Python: $PYTHON_EXE" -ForegroundColor Gray
+Write-Host "  PyInstaller: $PYINSTALLER_EXE" -ForegroundColor Gray
 Write-Host ""
 
 # CMake executable path
 $CMAKE_EXE = "D:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
 $VCPKG_TOOLCHAIN_FILE = "F:/Library/vcpkg/scripts/buildsystems/vcpkg.cmake"
 
-# Project paths
-$SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
-$PROJECT_ROOT = Split-Path -Parent $SCRIPT_DIR
 $BUILD_ALL_DIR = Join-Path $PROJECT_ROOT "build-all"
 $XCOLOR_SOURCE_DIR = Join-Path $PROJECT_ROOT "xcolor"
 $XCOLOR_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-xcolor"
@@ -80,7 +91,7 @@ $PYTHON_FILES = @(
     "insta_data_extraction.py",
     "insta_time_sync.py",
     "insta_compute_poses.py",
-    "insta_compute_poses_ar.py"
+    "insta_data_extraction_ar.py"
 )
 
 $missing = $false
@@ -301,7 +312,7 @@ foreach ($file in $PYTHON_FILES) {
     Write-Host "$file..." -ForegroundColor Yellow
     
     # Run pyinstaller
-    & pyinstaller -F $file -y
+    & $PYINSTALLER_EXE -F $file -y
     $exit_code = $LASTEXITCODE
     
     # Check if EXE was created
