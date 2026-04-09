@@ -153,7 +153,9 @@ def load_calibration_from_pb(calib_file):
 
 def load_poses_from_txt(poses_file):
     """Load poses from text file format.
-    Expected format: timestamp tx ty tz rx ry rz rw
+    Supported formats:
+    1. timestamp tx ty tz rx ry rz rw
+    2. x y z roll pitch yaw qx qy qz qw timestamp
     """
     poses = []
     with open(poses_file, "r") as f:
@@ -162,7 +164,19 @@ def load_poses_from_txt(poses_file):
             if not line or line.startswith("#"):
                 continue
             parts = line.split()
-            if len(parts) >= 8:
+            if len(parts) >= 11:
+                pose_dict = {
+                    "timestamp": float(parts[10]),
+                    "tx": float(parts[0]),
+                    "ty": float(parts[1]),
+                    "tz": float(parts[2]),
+                    "rx": float(parts[6]),
+                    "ry": float(parts[7]),
+                    "rz": float(parts[8]),
+                    "rw": float(parts[9]),
+                }
+                poses.append(pose_dict)
+            elif len(parts) >= 8:
                 pose_dict = {
                     "timestamp": float(parts[0]),
                     "tx": float(parts[1]),
@@ -174,6 +188,7 @@ def load_poses_from_txt(poses_file):
                     "rw": float(parts[7]),
                 }
                 poses.append(pose_dict)
+    poses.sort(key=lambda pose: pose["timestamp"])
     return poses
 
 
@@ -270,15 +285,19 @@ def process_poses(poses_file, calib_file, image_folder, output_file, image_list=
             print(f"\n  Processing cam{cam_idx}...")
 
             # Recursively find images in this camera folder
-            image_files = []
-            for img_ext in ["*.jpg", "*.jpeg", "*.png", "*.JPG", "*.JPEG", "*.PNG"]:
-                image_files.extend(cam_folder.rglob(img_ext))
-
-            image_files.sort()
+            image_files = sorted(
+                [
+                    img_path
+                    for img_path in cam_folder.rglob("*")
+                    if img_path.is_file()
+                    and img_path.suffix.lower() in {".jpg", ".jpeg", ".png"}
+                ]
+            )
             print(f"  Found {len(image_files)} images in cam{cam_idx}")
 
             # Process each image
             cam_valid_count = 0
+            cam_invalid_count = 0
             for img_path in image_files:
                 img_name = img_path.name
                 # Get relative path from image_folder (e.g., cam0/image.jpg)
@@ -287,12 +306,18 @@ def process_poses(poses_file, calib_file, image_folder, output_file, image_list=
                 # Skip if already processed (avoid duplicates)
                 path_str = str(img_relative_path.as_posix())
                 if path_str in processed_files:
+                    cam_invalid_count += 1
+                    print(f"  [WARN] Skipping duplicate image: {path_str}")
                     continue
                 processed_files.add(path_str)
 
                 # Extract timestamp from filename
                 timestamp = extract_timestamp_from_filename(img_name)
                 if timestamp is None:
+                    cam_invalid_count += 1
+                    print(
+                        f"  [WARN] Invalid image filename timestamp format: {path_str}"
+                    )
                     continue
 
                 # Interpolate IMU pose at this timestamp
@@ -300,6 +325,10 @@ def process_poses(poses_file, calib_file, image_folder, output_file, image_list=
                     timestamp + extrinsic["time_offset"], imu_poses
                 )
                 if imu_pose is None:
+                    cam_invalid_count += 1
+                    print(
+                        f"  [WARN] No interpolated IMU pose for image: {path_str}, timestamp={timestamp:.6f}, adjusted_timestamp={timestamp + extrinsic['time_offset']:.6f}"
+                    )
                     continue
 
                 # Apply extrinsic transformation to get camera pose
@@ -327,6 +356,10 @@ def process_poses(poses_file, calib_file, image_folder, output_file, image_list=
                 valid_count += 1
 
             print(f"  [OK] Processed {cam_valid_count} images in cam{cam_idx}")
+            if cam_invalid_count > 0:
+                print(
+                    f"  [WARN] Skipped {cam_invalid_count} invalid images in cam{cam_idx}"
+                )
 
     print(f"\n[OK] Successfully written {valid_count} total poses to {output_file}")
     return True
