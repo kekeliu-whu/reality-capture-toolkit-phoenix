@@ -15,6 +15,9 @@ from spdlog_compat import init_spdlog_like_logger
 
 
 LOGGER = init_spdlog_like_logger()
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = SCRIPT_PATH.parents[2]
+DEFAULT_MEDIASDK_EXE = REPO_ROOT / "build-pack" / "MediaSDK" / "MediaSDKTest.exe"
 
 # ============================================================
 # 尝试导入ROS相关库（可选）
@@ -43,7 +46,7 @@ parser = argparse.ArgumentParser(description="Scientific camera data extraction 
 parser.add_argument(
     "--input-video-filename",
     type=str,
-    default=R"D:\Users\rick\Downloads\2026-03-25_09-41-05-1\VID_20260325_094100_00_226.insv",
+    default=R"Z:\rick\dataset\pano-pos-zhujiang\1749886845390413448_00.insv",
     help="Input video file path",
 )
 
@@ -51,7 +54,7 @@ parser.add_argument(
 parser.add_argument(
     "--output-dir",
     type=str,
-    default="D:/output/images",
+    default=R"Z:\rick\dataset\pano-pos-zhujiang\output\images",
     help="Output directory",
 )
 
@@ -59,7 +62,7 @@ parser.add_argument(
 parser.add_argument(
     "--time-offset",
     type=float,
-    default=1735726109.5283203,
+    default=1749886846.3733861,
     help="Time offset in seconds",
 )
 
@@ -93,6 +96,10 @@ IMU_OUTPUT_FILE = os.path.join(OUTPUT_DIRECTORY, "insv.dat")
 # --------- 视频提取参数 ---------
 QUALITY = 2  # 0-31, 越低质量越好
 NUM_STREAMS = 2  # 摄像头流数量 (cam0, cam1等)
+MEDIASDK_EXE = str(DEFAULT_MEDIASDK_EXE)
+PANORAMA_CAMERA_INDEX = 0
+PANORAMA_STITCH_TYPE = "optflow"
+PANORAMA_IMAGE_TYPE = "jpg"
 
 # --------- ROS/Rosbag 参数 ---------
 SAVE_TO_ROSBAG = False  # 是否保存数据到rosbag文件
@@ -102,13 +109,182 @@ SAVE_TO_ROSBAG = False  # 是否保存数据到rosbag文件
 # ============================================================
 
 
-def extract_frames_from_video(
+def format_timestamp_filename(timestamp, image_type="jpg"):
+    timestamp_str = f"{timestamp:.6f}".replace(".", "_")
+    return f"{timestamp_str}.{image_type}"
+
+
+def build_sampled_frame_indices(total_count, frame_sample_rate):
+    if frame_sample_rate <= 0:
+        raise ValueError("frame_sample_rate must be greater than 0")
+    return list(range(0, total_count, frame_sample_rate))
+
+
+def clean_camera_output_dir(cam_dir, extensions=(".jpg",)):
+    os.makedirs(cam_dir, exist_ok=True)
+    extensions = tuple(ext.lower() for ext in extensions)
+    for old_file in os.listdir(cam_dir):
+        old_path = os.path.join(cam_dir, old_file)
+        if os.path.isdir(old_path):
+            continue
+        if old_file.startswith("temp_") or old_file.lower().endswith(extensions):
+            try:
+                os.remove(old_path)
+            except Exception as e:
+                print(f"  [WARN] Failed to delete old file {old_file}: {e}")
+
+
+def natural_sort_key(path_obj):
+    stem = path_obj.stem
+    digits = "".join(ch for ch in stem if ch.isdigit())
+    if digits:
+        return (0, int(digits), stem)
+    return (1, stem)
+
+
+def parse_exported_frame_index(path_obj):
+    stem = path_obj.stem
+    digits = "".join(ch for ch in stem if ch.isdigit())
+    if not digits:
+        raise ValueError(f"Cannot parse frame index from exported file: {path_obj.name}")
+    return int(digits)
+
+
+def extract_panorama_frames_from_mediasdk(
     input_video_path,
     output_base_dir=".",
-    quality=2,
-    num_streams=2,
-    frame_sample_rate=1,
+    media_sdk_exe=DEFAULT_MEDIASDK_EXE,
+    camera_index=0,
+    frame_sample_rate=12,
     all_timestamps=None,
+    stitch_type="optflow",
+    image_type="jpg",
+):
+    """
+    使用 MediaSDK 导出采样后的全景图，并按时间戳重命名到 cam{N} 目录。
+    """
+    if not all_timestamps:
+        raise ValueError("all_timestamps is required for panorama export")
+
+    media_sdk_exe = Path(media_sdk_exe)
+    if not media_sdk_exe.exists():
+        raise FileNotFoundError(f"MediaSDK executable not found: {media_sdk_exe}")
+
+    build_pack_dir = REPO_ROOT / "build-pack"
+    media_sdk_dir = media_sdk_exe.parent
+
+    sampled_indices = build_sampled_frame_indices(len(all_timestamps), frame_sample_rate)
+    sampled_index_to_timestamp = {idx: all_timestamps[idx] for idx in sampled_indices}
+
+    cam_dir = Path(output_base_dir) / f"cam{camera_index}"
+    clean_camera_output_dir(str(cam_dir), extensions=(f".{image_type}",))
+
+    temp_export_dir = cam_dir / "_mediasdk_tmp"
+    if temp_export_dir.exists():
+        for old_path in temp_export_dir.iterdir():
+            if old_path.is_file():
+                old_path.unlink()
+    else:
+        temp_export_dir.mkdir(parents=True, exist_ok=True)
+
+    export_frame_index = "-".join(str(idx) for idx in sampled_indices)
+    cmd = [
+        str(media_sdk_exe),
+        "-inputs",
+        str(input_video_path),
+        "-image_sequence_dir",
+        str(temp_export_dir),
+        "-export_frame_index",
+        export_frame_index,
+        "-output_size",
+        "7680x3840",
+        "-stitch_type",
+        stitch_type,
+        "-image_type",
+        image_type,
+    ]
+
+    print(f"[OK] Processing panorama export into cam{camera_index}...")
+    print(f"  MediaSDK executable: {media_sdk_exe}")
+    print(f"  Exporting {len(sampled_indices)} frames")
+
+    env = os.environ.copy()
+    path_entries = [str(media_sdk_dir), str(build_pack_dir)]
+    existing_path = env.get("PATH", "")
+    env["PATH"] = os.pathsep.join(path_entries + ([existing_path] if existing_path else []))
+
+    try:
+        subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            cwd=str(media_sdk_dir),
+            env=env,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"[ERROR] Failed to export panorama frames for cam{camera_index}")
+        if e.returncode == 3221225781:
+            print("  MediaSDKTest.exe is missing one or more dependent DLLs in its process PATH")
+            print(f"  PATH included: {media_sdk_dir}; {build_pack_dir}")
+        print(f"  stderr: {e.stderr}")
+        raise
+
+    exported_images = sorted(
+        temp_export_dir.glob(f"*.{image_type}"),
+        key=natural_sort_key,
+    )
+    if not exported_images:
+        raise RuntimeError(f"MediaSDK produced no .{image_type} files in {temp_export_dir}")
+
+    exported_indices = [parse_exported_frame_index(path_obj) for path_obj in exported_images]
+    missing_indices = [idx for idx in sampled_indices if idx not in exported_indices]
+    unexpected_indices = [idx for idx in exported_indices if idx not in sampled_index_to_timestamp]
+
+    if len(exported_images) != len(sampled_indices):
+        print(
+            f"  [WARN] MediaSDK exported {len(exported_images)} images, expected {len(sampled_indices)}"
+        )
+    if missing_indices:
+        print(f"  [WARN] Missing exported frame indices: {missing_indices}")
+    if unexpected_indices:
+        print(f"  [WARN] Unexpected exported frame indices: {unexpected_indices}")
+
+    sampled_images = []
+    finalized_timestamps = []
+    for img_path, frame_index in zip(exported_images, exported_indices):
+        timestamp = sampled_index_to_timestamp.get(frame_index)
+        if timestamp is None:
+            print(f"  [WARN] Skipping unexpected exported file: {img_path.name}")
+            continue
+        new_name = format_timestamp_filename(timestamp, image_type=image_type)
+        new_path = cam_dir / new_name
+        img_path.replace(new_path)
+        sampled_images.append(new_name)
+        finalized_timestamps.append(timestamp)
+
+    for remaining_file in temp_export_dir.iterdir():
+        if remaining_file.is_file():
+            remaining_file.unlink()
+    temp_export_dir.rmdir()
+
+    print(
+        f"  [OK] cam{camera_index} panorama export complete: {len(sampled_images)} frames (sample rate: {frame_sample_rate})"
+    )
+
+    return {
+        "timestamps": finalized_timestamps,
+        f"cam{camera_index}": sampled_images,
+    }
+
+
+def extract_frames_from_video(
+    input_video_path,
+    output_base_dir,
+    quality,
+    num_streams,
+    frame_sample_rate,
+    all_timestamps,
 ):
     """
     从视频文件提取帧到多个摄像头目录，支持采样和时间戳对应
@@ -127,21 +303,12 @@ def extract_frames_from_video(
     """
     input_video_path = str(input_video_path)
     output_base_dir = str(output_base_dir)
+    sampled_timestamps = []
 
     # 创建输出目录，并清空旧的帧文件
     for i in range(num_streams):
         cam_dir = os.path.join(output_base_dir, f"cam{i}")
-        os.makedirs(cam_dir, exist_ok=True)
-
-        # 清空目录中的旧帧文件（.jpg, temp_*.jpg 及时间戳格式的文件）
-        for old_file in os.listdir(cam_dir):
-            if old_file.endswith(".jpg") or old_file.startswith("temp_"):
-                old_path = os.path.join(cam_dir, old_file)
-                try:
-                    os.remove(old_path)
-
-                except Exception as e:
-                    print(f"  [WARN] Failed to delete old file {old_file}: {e}")
+        clean_camera_output_dir(cam_dir, extensions=(".jpg",))
 
     # 为每个摄像头流提取帧
     image_lists = {}
@@ -196,9 +363,7 @@ def extract_frames_from_video(
                 # 确定新文件名
                 if all_timestamps and idx < len(all_timestamps):
                     timestamp = all_timestamps[idx]
-                    # 文件名格式: timestamp.jpg (例如: 1735732913.646514.jpg，6位小数)
-                    timestamp_str = f"{timestamp:.6f}".replace(".", "_")
-                    new_name = f"{timestamp_str}.jpg"
+                    new_name = format_timestamp_filename(timestamp, image_type="jpg")
                 else:
                     continue  # 跳过没有时间戳的帧，确保文件名与时间戳对应
 
@@ -450,15 +615,17 @@ print(f"[OK] Loaded {len(all_timestamps)} timestamps")
 
 # 调用函数提取帧
 print("\n" + "=" * 60)
-print(f"Starting frame extraction (sample rate: {FRAME_SAMPLE_RATE})...")
+print(f"Starting panorama frame extraction (sample rate: {FRAME_SAMPLE_RATE})...")
 print("=" * 60)
-result = extract_frames_from_video(
+result = extract_panorama_frames_from_mediasdk(
     input_video_path=INPUT_VIDEO,
     output_base_dir=OUTPUT_DIRECTORY,
-    quality=QUALITY,
-    num_streams=NUM_STREAMS,
+    media_sdk_exe=MEDIASDK_EXE,
+    camera_index=PANORAMA_CAMERA_INDEX,
     frame_sample_rate=FRAME_SAMPLE_RATE,
     all_timestamps=all_timestamps,
+    stitch_type=PANORAMA_STITCH_TYPE,
+    image_type=PANORAMA_IMAGE_TYPE,
 )
 
 # 从返回结果中分离时间戳和图片列表

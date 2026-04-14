@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 # Run Insta360 Migration Pipeline
-# Usage: .\.run.ps1 -inputdir <input/dir> -insvpath <video.insv> -outputdir <output/dir> [-calibfile <calib.yaml>] [-skip-convert_manifold] [-skip-lasermapping]
+# Usage: .\.run.ps1 -inputdir <input/dir> -insvpath <video.insv> -outputdir <output/dir> [-calibfile <calibration.dat>] [-skip-convert_manifold] [-skip-lasermapping]
 
 param(
     [Parameter(Mandatory=$true)]
@@ -40,6 +40,19 @@ $outputdir = if ([IO.Path]::IsPathRooted($outputdir)) { $outputdir } else { (Joi
 if (!(Test-Path $outputdir)) {
     Write-Host "Creating output directory..." -ForegroundColor Yellow
     New-Item -ItemType Directory -Path $outputdir -Force | Out-Null
+}
+
+$output_calibfile = Join-Path $outputdir "calibration.dat"
+
+if ($calibfile) {
+    if (!(Test-Path $calibfile)) {
+        Write-Host "ERROR: Calibration file not found: $calibfile" -ForegroundColor Red
+        exit 1
+    }
+
+    Write-Host "Copying calibration.dat to output directory..." -ForegroundColor Yellow
+    Copy-Item -Path $calibfile -Destination $output_calibfile -Force
+    $calibfile = $output_calibfile
 }
 
 # Verify inputs exist
@@ -88,7 +101,6 @@ if (!$skip_convert_manifold) {
             
             & $convert_manifold_exe `
                 --project_dir $inputdir `
-                --calib_filename $calibfile `
                 --output_dir $outputdir
             
             if ($LASTEXITCODE -eq 0) {
@@ -98,7 +110,7 @@ if (!$skip_convert_manifold) {
             }
         } else {
             Write-Host "[WARN] Calibration file not found or not provided: $calibfile" -ForegroundColor Yellow
-            Write-Host "  Usage: -calibfile path/to/calib.yaml" -ForegroundColor Yellow
+            Write-Host "  Usage: -calibfile path/to/calibration.dat" -ForegroundColor Yellow
         }
     } else {
         Write-Host "[WARN] convert_manifold.exe not found at: $convert_manifold_exe" -ForegroundColor Yellow
