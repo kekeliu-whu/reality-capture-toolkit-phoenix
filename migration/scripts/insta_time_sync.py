@@ -29,8 +29,8 @@ SHOW_PLOTS = False  # 是否弹出显示图形（False=仅保存，True=显示�
 SAVE_PLOTS = False  # 是否保存图形到文件（coarse_alignment_correlation.png, fine_alignment_gyro_comparison.png）
 
 # ========== 文件路径（以下通过命令行参数传入，此处为默认值）==========
-DEFAULT_IMU_DEVICE_FILE = R"D:/output/imu.dat"
-DEFAULT_IMU_INSTA_FILE = R"D:/output/images/insv.dat"
+DEFAULT_IMU_DEVICE_FILE = R"Z:\rick\dataset\pano-pos-zhujiang\output\imu.dat"
+DEFAULT_IMU_INSTA_FILE = R"Z:\rick\dataset\pano-pos-zhujiang\output\images\insv.dat"
 
 # ========== B-spline 插值参数 ==========
 SPLINE_KNOTS = 3  # B-spline 的阶数（次数）

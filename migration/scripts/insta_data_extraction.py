@@ -14,7 +14,7 @@ import sys
 from spdlog_compat import init_spdlog_like_logger
 
 
-LOGGER = init_spdlog_like_logger()
+# LOGGER = init_spdlog_like_logger()
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parents[2]
 DEFAULT_MEDIASDK_EXE = REPO_ROOT / "build-pack" / "MediaSDK" / "MediaSDKTest.exe"
@@ -150,6 +150,20 @@ def parse_exported_frame_index(path_obj):
     return int(digits)
 
 
+def detect_panorama_output_size(video_path):
+    """Detect insv video resolution (n x n) and return panorama output size '2n x n'."""
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open video: {video_path}")
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+    n = height
+    output_size = f"{2 * n}x{n}"
+    print(f"[OK] Detected video resolution: {width}x{height} -> panorama output: {output_size}")
+    return output_size
+
+
 def extract_panorama_frames_from_mediasdk(
     input_video_path,
     output_base_dir=".",
@@ -159,9 +173,13 @@ def extract_panorama_frames_from_mediasdk(
     all_timestamps=None,
     stitch_type="optflow",
     image_type="jpg",
+    output_size="7680x3840",
 ):
     """
-    使用 MediaSDK 导出采样后的全景图，并按时间戳重命名到 cam{N} 目录。
+    使用 MediaSDK 导出全景图，并按时间戳重命名到 cam{N} 目录。
+
+    延时摄影视频的实际帧数 = len(all_timestamps) / frame_sample_rate，
+    因此导出全部视频帧，第 i 帧对应 all_timestamps[i * frame_sample_rate]。
     """
     if not all_timestamps:
         raise ValueError("all_timestamps is required for panorama export")
@@ -173,8 +191,8 @@ def extract_panorama_frames_from_mediasdk(
     build_pack_dir = REPO_ROOT / "build-pack"
     media_sdk_dir = media_sdk_exe.parent
 
-    sampled_indices = build_sampled_frame_indices(len(all_timestamps), frame_sample_rate)
-    sampled_index_to_timestamp = {idx: all_timestamps[idx] for idx in sampled_indices}
+    # 第一帧对应 all_timestamps[0]（即 exposure_data[0]），后续每帧 +0.5s
+    base_timestamp = all_timestamps[0]
 
     cam_dir = Path(output_base_dir) / f"cam{camera_index}"
     clean_camera_output_dir(str(cam_dir), extensions=(f".{image_type}",))
@@ -187,26 +205,26 @@ def extract_panorama_frames_from_mediasdk(
     else:
         temp_export_dir.mkdir(parents=True, exist_ok=True)
 
-    export_frame_index = "-".join(str(idx) for idx in sampled_indices)
+    # 导出全部视频帧（不传 -export_frame_index）
     cmd = [
         str(media_sdk_exe),
         "-inputs",
         str(input_video_path),
         "-image_sequence_dir",
         str(temp_export_dir),
-        "-export_frame_index",
-        export_frame_index,
         "-output_size",
-        "7680x3840",
+        output_size,
         "-stitch_type",
         stitch_type,
         "-image_type",
         image_type,
+        "-disable_cuda",
+        "false",
     ]
 
     print(f"[OK] Processing panorama export into cam{camera_index}...")
     print(f"  MediaSDK executable: {media_sdk_exe}")
-    print(f"  Exporting {len(sampled_indices)} frames")
+    print(f"  Exporting all video frames...")
 
     env = os.environ.copy()
     path_entries = [str(media_sdk_dir), str(build_pack_dir)]
@@ -237,26 +255,13 @@ def extract_panorama_frames_from_mediasdk(
     if not exported_images:
         raise RuntimeError(f"MediaSDK produced no .{image_type} files in {temp_export_dir}")
 
-    exported_indices = [parse_exported_frame_index(path_obj) for path_obj in exported_images]
-    missing_indices = [idx for idx in sampled_indices if idx not in exported_indices]
-    unexpected_indices = [idx for idx in exported_indices if idx not in sampled_index_to_timestamp]
+    print(f"  MediaSDK exported {len(exported_images)} images")
 
-    if len(exported_images) != len(sampled_indices):
-        print(
-            f"  [WARN] MediaSDK exported {len(exported_images)} images, expected {len(sampled_indices)}"
-        )
-    if missing_indices:
-        print(f"  [WARN] Missing exported frame indices: {missing_indices}")
-    if unexpected_indices:
-        print(f"  [WARN] Unexpected exported frame indices: {unexpected_indices}")
-
+    # 排序后按顺序分配时间戳：第 i 帧 = exposure_data[0] + i * 0.5
     sampled_images = []
     finalized_timestamps = []
-    for img_path, frame_index in zip(exported_images, exported_indices):
-        timestamp = sampled_index_to_timestamp.get(frame_index)
-        if timestamp is None:
-            print(f"  [WARN] Skipping unexpected exported file: {img_path.name}")
-            continue
+    for video_idx, img_path in enumerate(exported_images):
+        timestamp = base_timestamp + video_idx * 0.5
         new_name = format_timestamp_filename(timestamp, image_type=image_type)
         new_path = cam_dir / new_name
         img_path.replace(new_path)
@@ -269,7 +274,8 @@ def extract_panorama_frames_from_mediasdk(
     temp_export_dir.rmdir()
 
     print(
-        f"  [OK] cam{camera_index} panorama export complete: {len(sampled_images)} frames (sample rate: {frame_sample_rate})"
+        f"  [OK] cam{camera_index} panorama export complete: {len(sampled_images)} frames"
+        f" (base_ts={base_timestamp:.6f}, step=0.5s)"
     )
 
     return {
@@ -613,6 +619,9 @@ print(f"[OK] Loaded {len(all_timestamps)} timestamps")
 # 执行逻辑
 # ============================================================
 
+# 自动检测视频分辨率，计算全景输出尺寸
+panorama_output_size = detect_panorama_output_size(INPUT_VIDEO)
+
 # 调用函数提取帧
 print("\n" + "=" * 60)
 print(f"Starting panorama frame extraction (sample rate: {FRAME_SAMPLE_RATE})...")
@@ -626,6 +635,7 @@ result = extract_panorama_frames_from_mediasdk(
     all_timestamps=all_timestamps,
     stitch_type=PANORAMA_STITCH_TYPE,
     image_type=PANORAMA_IMAGE_TYPE,
+    output_size=panorama_output_size,
 )
 
 # 从返回结果中分离时间戳和图片列表
