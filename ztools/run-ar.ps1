@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
-# Run Insta360 Migration Pipeline
-# Usage: .\.run.ps1 -inputdir <input/dir> -insvpath <video.insv> -outputdir <output/dir> [-calibfile <calib.yaml>] [-skip-convert_manifold] [-skip-lasermapping]
+# Run Insta360 AR Pipeline
+# Usage: .\run-ar.ps1 -inputdir <dir> -insvpath <video.insv> -outputdir <dir> [-calibfile <calib.dat>] [-movpath <video.mov>] [-trajectoryfile <traj.txt>]
 
 param(
     [Parameter(Mandatory=$true)]
@@ -8,15 +8,15 @@ param(
     
     [Parameter(Mandatory=$true)]
     [string]$insvpath,
+
+    [string]$movpath,
     
     [Parameter(Mandatory=$true)]
     [string]$outputdir,
     
-    [string]$calibfile = "",
-    
-    [switch]$skip_convert_manifold,
-    
-    [switch]$skip_lasermapping
+    [string]$calibfile,
+
+    [string]$trajectoryfile
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,10 +25,10 @@ Write-Host "=== Insta360 Migration Pipeline ===" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Input Dir:        $inputdir"
 Write-Host "INSV Path:        $insvpath"
+Write-Host "MOV Path:         $movpath"
 Write-Host "Calibration:      $calibfile"
 Write-Host "Output Dir:       $outputdir"
-Write-Host "Skip Convert-Manifold: $skip_convert_manifold"
-Write-Host "Skip LaserMapping: $skip_lasermapping"
+Write-Host "Trajectory File:  $trajectoryfile"
 Write-Host ""
 
 # Resolve paths to absolute
@@ -58,16 +58,10 @@ $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PROJECT_ROOT = Split-Path -Parent $SCRIPT_DIR
 $BUILD_PACK = Join-Path $PROJECT_ROOT "build-pack"
 
-# All executables are in build-pack directory
-$NATIVE_TOOLS = $BUILD_PACK
-$PYTHON_TOOLS = $BUILD_PACK
-
 $convert_manifold_exe = Join-Path $BUILD_PACK "convert_manifold.exe"
-$insta_extraction_exe = Join-Path $PYTHON_TOOLS "insta_data_extraction.exe"
-$insta_sync_exe = Join-Path $PYTHON_TOOLS "insta_time_sync.exe"
-$insta_poses_exe = Join-Path $PYTHON_TOOLS "insta_compute_poses.exe"
-$lasermapping_exe = Join-Path $NATIVE_TOOLS "slam.exe"
-$slam_post_exe = Join-Path $NATIVE_TOOLS "slam_post.exe"
+$insta_extraction_exe = Join-Path $BUILD_PACK "insta_data_extraction_ar.exe"
+$insta_sync_exe = Join-Path $BUILD_PACK "insta_time_sync.exe"
+$insta_poses_exe = Join-Path $BUILD_PACK "insta_compute_poses.exe"
 
 # Check if EXEs exist
 if (!(Test-Path $insta_extraction_exe)) {
@@ -76,36 +70,33 @@ if (!(Test-Path $insta_extraction_exe)) {
     exit 1
 }
 
-# Step 1: Convert Manifold Livox lidar and IMU data (optional)
-if (!$skip_convert_manifold) {
-    Write-Host "=== Step 1: Converting Manifold Livox/IMU data ===" -ForegroundColor Cyan
-    
-    if (Test-Path $convert_manifold_exe) {
-        if ($calibfile -and (Test-Path $calibfile)) {
-            Write-Host "Running: $convert_manifold_exe" -ForegroundColor Yellow
-            Write-Host "  Input Dir: $inputdir" -ForegroundColor Gray
-            Write-Host "  Calib: $calibfile" -ForegroundColor Gray
-            
-            & $convert_manifold_exe `
-                --project_dir $inputdir `
-                --calib_filename $calibfile `
-                --output_dir $outputdir
-            
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "[OK] Manifold conversion completed" -ForegroundColor Green
-            } else {
-                Write-Host "[WARN] Manifold conversion failed" -ForegroundColor Yellow
-            }
-        } else {
-            Write-Host "[WARN] Calibration file not found or not provided: $calibfile" -ForegroundColor Yellow
-            Write-Host "  Usage: -calibfile path/to/calib.yaml" -ForegroundColor Yellow
-        }
-    } else {
-        Write-Host "[WARN] convert_manifold.exe not found at: $convert_manifold_exe" -ForegroundColor Yellow
-    }
-} else {
-    Write-Host "=== Step 1: Skipping Manifold conversion ===" -ForegroundColor Yellow
+# Step 1: Convert Manifold Livox lidar and IMU data
+Write-Host "=== Step 1: Converting Manifold Livox/IMU data ===" -ForegroundColor Cyan
+
+if (!(Test-Path $convert_manifold_exe)) {
+    Write-Host "ERROR: convert_manifold.exe not found at: $convert_manifold_exe" -ForegroundColor Red
+    exit 1
 }
+
+if (-not ($calibfile -and (Test-Path $calibfile))) {
+    Write-Host "ERROR: Calibration file not found or not provided: $calibfile" -ForegroundColor Red
+    Write-Host "  Usage: -calibfile path/to/calibration.dat" -ForegroundColor Yellow
+    exit 1
+}
+
+Write-Host "Running: $convert_manifold_exe" -ForegroundColor Yellow
+Write-Host "  Input Dir: $inputdir" -ForegroundColor Gray
+Write-Host "  Calib: $calibfile" -ForegroundColor Gray
+
+& $convert_manifold_exe `
+    --project_dir $inputdir `
+    --output_dir $outputdir
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: Manifold conversion failed" -ForegroundColor Red
+    exit 1
+}
+Write-Host "[OK] Manifold conversion completed" -ForegroundColor Green
 
 # Step 2: Extract camera data from INSV
 Write-Host "`n=== Step 2: Extracting camera data ===" -ForegroundColor Cyan
@@ -199,6 +190,7 @@ if ($output_text -match 'final time delay \(s\):\s*([\d\-\.]+)') {
 # Step 4: Extract images with timestamp offsets (using extracted time delay)
 & $insta_extraction_exe `
     --input-video-filename $insvpath `
+    --input-cam2-video-filename $movpath `
     --output-dir $camera_dir `
     --time-offset $time_offset `
     --export-frames
@@ -208,71 +200,16 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# Step 5: Run lasermapping if not skipped
-if (!$skip_lasermapping) {
-    Write-Host "`n=== Step 5: Computing trajectory from lidar data ===" -ForegroundColor Yellow
-    Write-Host "[WARN] This step requires pre-processed lidar data from Manifold conversion" -ForegroundColor Yellow
-    Write-Host "  Note: slam needs pre-processed .dat files in $outputdir" -ForegroundColor Yellow
-    Write-Host "  - calibration.dat" -ForegroundColor Gray
-    Write-Host "  - imu.dat" -ForegroundColor Gray
-    Write-Host "  - encoder.dat" -ForegroundColor Gray
-    Write-Host "  - lidar.dat" -ForegroundColor Gray
-    
-    # If these files already exist, slam can process them
-    $has_dat_files = (Test-Path (Join-Path $outputdir "imu.dat")) -and `
-                     (Test-Path (Join-Path $outputdir "calibration.dat"))
-    
-    if ($has_dat_files) {
-        Write-Host "  Found data files, attempting to compute trajectory..." -ForegroundColor Green
-        if (Test-Path $lasermapping_exe) {
-            Write-Host "  Running: $lasermapping_exe --project_dir $outputdir" -ForegroundColor Gray
-            
-            # Try with = format first (gflags standard)
-            & $lasermapping_exe "-project_dirname=$outputdir" "-output_dir=$outputdir"
-            
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "[OK] Trajectory computed" -ForegroundColor Green
-            } else {
-                Write-Host "[WARN] Trajectory computation failed (may need ROS environment)" -ForegroundColor Yellow
-            }
-        } else {
-            Write-Host "[WARN] slam.exe not found" -ForegroundColor Yellow
-        }
-    } else {
-        Write-Host "  Data files not found, skipping trajectory computation" -ForegroundColor Yellow
-        Write-Host "  To process: Run Manifold conversion first or extract .dat files manually" -ForegroundColor Yellow
-    }
-}
+# remove images/cam0 and images/cam1 if they exist (from first extraction without time offset), keep only images/cam2
+Get-ChildItem -Path $camera_dir -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^cam[01]$' } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
-# Step 6: Run slam_post.exe to refine trajectory (if slam.exe succeeded)
-Write-Host "`n=== Step 6: Refining trajectory with slam_post.exe ===" -ForegroundColor Cyan
-if (Test-Path $slam_post_exe) {
-    $pgo_config_file = Join-Path $BUILD_PACK "pgo.json"
-    if (-not (Test-Path $pgo_config_file)) {
-        Write-Host "ERROR: pgo.json not found in build-pack. Please run .\ztools\build-pack.ps1" -ForegroundColor Red
-        exit 1
-    }
-
-    Write-Host "Running: $slam_post_exe --config_filename $pgo_config_file --project_input_path $outputdir --project_output_path $outputdir" -ForegroundColor Gray
-    
-    & $slam_post_exe "--config_filename=$pgo_config_file" "--project_input_path=$outputdir" "--project_output_path=$outputdir"
-    
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "[OK] Trajectory refined with slam_post.exe" -ForegroundColor Green
-    } else {
-        Write-Host "[WARN] slam_post.exe failed to refine trajectory" -ForegroundColor Yellow
-    }
-} else {
-    Write-Host "[WARN] slam_post.exe not found, skipping trajectory refinement" -ForegroundColor Yellow
-}
-
-# Step 7: Compute camera poses
-Write-Host "`n=== Step 7: Computing camera poses ===" -ForegroundColor Cyan
+# Step 5: Compute camera poses
+Write-Host "`n=== Step 5: Computing camera poses ===" -ForegroundColor Cyan
 
 if (Test-Path $insta_poses_exe) {
     # Look for pose file in laser mapping output directory
-    $traj_file = Join-Path $outputdir "trajectory_opt.txt"
-    $calib_file = Join-Path $outputdir "calibration.dat"
+    $traj_file = $trajectoryfile
+    $calib_file = $calibfile
     
     if ((Test-Path $traj_file) -and (Test-Path $calib_file)) {
         $img_pose_output = Join-Path $camera_dir "ImgPose.txt"
@@ -301,23 +238,6 @@ if (Test-Path $insta_poses_exe) {
     Write-Host "[WARN] insta_compute_poses.exe not found, skipping pose computation" -ForegroundColor Yellow
 }
 
-# Summary
-Write-Host "`n" + ("=" * 60) -ForegroundColor Cyan
-Write-Host "Pipeline Complete" -ForegroundColor Green
-Write-Host "=" * 60 -ForegroundColor Cyan
-Write-Host "`nOutput directory: $outputdir" -ForegroundColor Cyan
-
-# Show file tree
-if (Test-Path $outputdir) {
-    Write-Host "`nOutput files:" -ForegroundColor Yellow
-    Get-ChildItem -Path $outputdir -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-        $indent = ("  " * ($_.FullName -replace "[^\\]" | Measure-Object -Character).Characters)
-        if ($_.PSIsContainer) {
-            Write-Host "$indent[DIR] $($_.Name)/"
-        } else {
-            $size = if ($_.Length -gt 1MB) { "$([Math]::Round($_.Length/1MB, 2)) MB" } else { "$([Math]::Round($_.Length/1KB, 2)) KB" }
-            Write-Host "$indent[FILE] $($_.Name) ($size)"
-        }
-    }
-}
+Write-Host "`n=== Pipeline Complete ===" -ForegroundColor Green
+Write-Host "Output directory: $outputdir" -ForegroundColor Cyan
 

@@ -16,8 +16,16 @@ from spdlog_compat import init_spdlog_like_logger
 
 # LOGGER = init_spdlog_like_logger()
 SCRIPT_PATH = Path(__file__).resolve()
-REPO_ROOT = SCRIPT_PATH.parents[2]
-DEFAULT_MEDIASDK_EXE = REPO_ROOT / "build-pack" / "MediaSDK" / "MediaSDKTest.exe"
+# When running as a PyInstaller .exe, sys.executable is the .exe itself (inside build-pack/).
+# Use the exe's directory as the build-pack root so MediaSDK can be found at build-pack/MediaSDK/.
+# When running as a plain script, derive paths from the repo root via __file__.
+if getattr(sys, 'frozen', False):
+    _BUILD_PACK = Path(sys.executable).parent
+    REPO_ROOT = _BUILD_PACK.parent
+    DEFAULT_MEDIASDK_EXE = _BUILD_PACK / "MediaSDK" / "MediaSDKTest.exe"
+else:
+    REPO_ROOT = SCRIPT_PATH.parents[2]
+    DEFAULT_MEDIASDK_EXE = REPO_ROOT / "build-pack" / "MediaSDK" / "MediaSDKTest.exe"
 
 # ============================================================
 # 尝试导入ROS相关库（可选）
@@ -188,7 +196,7 @@ def extract_panorama_frames_from_mediasdk(
     if not media_sdk_exe.exists():
         raise FileNotFoundError(f"MediaSDK executable not found: {media_sdk_exe}")
 
-    build_pack_dir = REPO_ROOT / "build-pack"
+    build_pack_dir = media_sdk_exe.parent.parent  # build-pack/ is parent of MediaSDK/
     media_sdk_dir = media_sdk_exe.parent
 
     # 第一帧对应 all_timestamps[0]（即 exposure_data[0]），后续每帧 +0.5s

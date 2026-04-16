@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 # Run Insta360 Migration Pipeline
-# Usage: .\.run.ps1 -inputdir <input/dir> -insvpath <video.insv> -outputdir <output/dir> [-calibfile <calibration.dat>] [-skip-convert_manifold] [-skip-lasermapping]
+# Usage: .\run.ps1 -inputdir <input/dir> -insvpath <video.insv> -outputdir <output/dir> [-calibfile <calibration.dat>]
 
 param(
     [Parameter(Mandatory=$true)]
@@ -12,11 +12,7 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$outputdir,
     
-    [string]$calibfile = "",
-    
-    [switch]$skip_convert_manifold,
-    
-    [switch]$skip_lasermapping
+    [string]$calibfile = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,8 +23,6 @@ Write-Host "Input Dir:        $inputdir"
 Write-Host "INSV Path:        $insvpath"
 Write-Host "Calibration:      $calibfile"
 Write-Host "Output Dir:       $outputdir"
-Write-Host "Skip Convert-Manifold: $skip_convert_manifold"
-Write-Host "Skip LaserMapping: $skip_lasermapping"
 Write-Host ""
 
 # Resolve paths to absolute
@@ -89,9 +83,8 @@ if (!(Test-Path $insta_extraction_exe)) {
     exit 1
 }
 
-# Step 1: Convert Manifold Livox lidar and IMU data (optional)
-if (!$skip_convert_manifold) {
-    Write-Host "=== Step 1: Converting Manifold Livox/IMU data ===" -ForegroundColor Cyan
+# Step 1: Convert Manifold Livox lidar and IMU data
+Write-Host "=== Step 1: Converting Manifold Livox/IMU data ===" -ForegroundColor Cyan
     
     if (Test-Path $convert_manifold_exe) {
         if ($calibfile -and (Test-Path $calibfile)) {
@@ -112,11 +105,8 @@ if (!$skip_convert_manifold) {
             Write-Host "[WARN] Calibration file not found or not provided: $calibfile" -ForegroundColor Yellow
             Write-Host "  Usage: -calibfile path/to/calibration.dat" -ForegroundColor Yellow
         }
-    } else {
-        Write-Host "[WARN] convert_manifold.exe not found at: $convert_manifold_exe" -ForegroundColor Yellow
-    }
 } else {
-    Write-Host "=== Step 1: Skipping Manifold conversion ===" -ForegroundColor Yellow
+    Write-Host "[WARN] convert_manifold.exe not found at: $convert_manifold_exe" -ForegroundColor Yellow
 }
 
 # Step 2: Extract camera data from INSV
@@ -220,9 +210,8 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# Step 5: Run lasermapping if not skipped
-if (!$skip_lasermapping) {
-    Write-Host "`n=== Step 5: Computing trajectory from lidar data ===" -ForegroundColor Yellow
+# Step 5: Run lasermapping
+Write-Host "`n=== Step 5: Computing trajectory from lidar data ===" -ForegroundColor Yellow
     Write-Host "[WARN] This step requires pre-processed lidar data from Manifold conversion" -ForegroundColor Yellow
     Write-Host "  Note: slam needs pre-processed .dat files in $outputdir" -ForegroundColor Yellow
     Write-Host "  - calibration.dat" -ForegroundColor Gray
@@ -254,7 +243,6 @@ if (!$skip_lasermapping) {
         Write-Host "  Data files not found, skipping trajectory computation" -ForegroundColor Yellow
         Write-Host "  To process: Run Manifold conversion first or extract .dat files manually" -ForegroundColor Yellow
     }
-}
 
 # Step 6: Run slam_post.exe to refine trajectory (if slam.exe succeeded)
 Write-Host "`n=== Step 6: Refining trajectory with slam_post.exe ===" -ForegroundColor Cyan
