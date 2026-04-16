@@ -89,48 +89,51 @@ class LightGlueMatcher(object):
             raise RuntimeError("LightGlue not installed. Install with: pip install lightglue")
         self.device = device
         self.matcher = LightGlue(features='aliked').to(device).eval()
-        self.img_prev = None
         self.pts_prev = None
+        self.desc_prev = None
 
     def update(self, img, pts, desc):
         """Update tracker with new frame.
         Args:
             img: Image for visualization (H, W, 3) in BGR
             pts: Keypoints (N, 2)
-            desc: Descriptors (N, 128) - not used for LightGlue
+            desc: Descriptors (N, 128)
         """
         N_matches = 0
-        if self.img_prev is None:
-            self.img_prev = img.copy()
+        if self.pts_prev is None:
             self.pts_prev = pts
+            self.desc_prev = desc
 
             out = copy.deepcopy(img)
             for pt1 in pts:
                 p1 = (int(round(pt1[0])), int(round(pt1[1])))
                 cv2.circle(out, p1, 1, (0, 0, 255), -1, lineType=16)
         else:
-            # Convert BGR images to RGB tensors for LightGlue
-            img0_rgb = cv2.cvtColor(self.img_prev, cv2.COLOR_BGR2RGB)
-            img1_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            # Prepare data for LightGlue: nested dict format
+            # data0["keypoints"] should be (B, N, 2), data0["descriptors"] should be (B, N, D)
+            kpts0 = torch.from_numpy(self.pts_prev).float().unsqueeze(0).to(self.device)  # (1, N, 2)
+            desc0 = torch.from_numpy(self.desc_prev).float().unsqueeze(0).to(self.device)  # (1, N, 128)
             
-            img0_tensor = torch.from_numpy(img0_rgb).float().permute(2, 0, 1).unsqueeze(0) / 255.0
-            img1_tensor = torch.from_numpy(img1_rgb).float().permute(2, 0, 1).unsqueeze(0) / 255.0
+            kpts1 = torch.from_numpy(pts).float().unsqueeze(0).to(self.device)  # (1, M, 2)
+            desc1 = torch.from_numpy(desc).float().unsqueeze(0).to(self.device)  # (1, M, 128)
             
-            # LightGlue expects keypoints as (B, N, 2)
-            kpts0 = torch.from_numpy(self.pts_prev).float().unsqueeze(0).to(self.device)
-            kpts1 = torch.from_numpy(pts).float().unsqueeze(0).to(self.device)
-
             with torch.no_grad():
-                # LightGlue will extract descriptors internally
+                # LightGlue expects: {"image0": {...}, "image1": {...}}
+                # where each image dict has "keypoints" and "descriptors"
                 matches = self.matcher({
-                    'image0': img0_tensor.to(self.device),
-                    'image1': img1_tensor.to(self.device),
-                    'keypoints0': kpts0,
-                    'keypoints1': kpts1,
+                    'image0': {
+                        'keypoints': kpts0,
+                        'descriptors': desc0,
+                    },
+                    'image1': {
+                        'keypoints': kpts1,
+                        'descriptors': desc1,
+                    }
                 })
 
-            # Extract matches: (M, 2) where M is number of matches
-            match_indices = matches['matches0'].cpu().numpy()  # indices into kpts1
+            # Extract matches: matches0[i] is index in kpts1 for kpts0[i], or -1 if no match
+            match_indices = matches['matches0'].cpu().numpy()  # (1, N) -> indices into kpts1
+            match_indices = match_indices[0]  # Get first (and only) batch element: (N,)
             valid_matches = match_indices >= 0  # -1 indicates no match
             
             if valid_matches.sum() > 0:
@@ -150,8 +153,8 @@ class LightGlueMatcher(object):
                 cv2.line(out, p1, p2, (0, 255, 0), lineType=16)
                 cv2.circle(out, p2, 1, (0, 0, 255), -1, lineType=16)
 
-            self.img_prev = img.copy()
             self.pts_prev = pts
+            self.desc_prev = desc
 
         return out, N_matches
 
