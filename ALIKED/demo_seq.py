@@ -9,6 +9,11 @@ import argparse
 import numpy as np
 from tqdm import tqdm
 from nets.aliked import ALIKED
+try:
+    from lightglue import LightGlue
+    LIGHTGLUE_AVAILABLE = True
+except ImportError:
+    LIGHTGLUE_AVAILABLE = False
 
 class ImageLoader(object):
     def __init__(self, filepath: str):
@@ -75,6 +80,182 @@ def resize_by_max_edge(img, max_edge):
     resized = cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
     return resized, scale
 
+class LightGlueMatcher(object):
+    """Feature matcher using LightGlue neural network.
+    Most robust but requires network model download and GPU memory.
+    """
+    def __init__(self, device='cuda'):
+        if not LIGHTGLUE_AVAILABLE:
+            raise RuntimeError("LightGlue not installed. Install with: pip install lightglue")
+        self.device = device
+        self.matcher = LightGlue(features='aliked').to(device).eval()
+        self.img_prev = None
+        self.pts_prev = None
+
+    def update(self, img, pts, desc):
+        """Update tracker with new frame.
+        Args:
+            img: Image for visualization (H, W, 3) in BGR
+            pts: Keypoints (N, 2)
+            desc: Descriptors (N, 128) - not used for LightGlue
+        """
+        N_matches = 0
+        if self.img_prev is None:
+            self.img_prev = img.copy()
+            self.pts_prev = pts
+
+            out = copy.deepcopy(img)
+            for pt1 in pts:
+                p1 = (int(round(pt1[0])), int(round(pt1[1])))
+                cv2.circle(out, p1, 1, (0, 0, 255), -1, lineType=16)
+        else:
+            # Convert BGR images to RGB tensors for LightGlue
+            img0_rgb = cv2.cvtColor(self.img_prev, cv2.COLOR_BGR2RGB)
+            img1_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            
+            img0_tensor = torch.from_numpy(img0_rgb).float().permute(2, 0, 1).unsqueeze(0) / 255.0
+            img1_tensor = torch.from_numpy(img1_rgb).float().permute(2, 0, 1).unsqueeze(0) / 255.0
+            
+            # LightGlue expects keypoints as (B, N, 2)
+            kpts0 = torch.from_numpy(self.pts_prev).float().unsqueeze(0).to(self.device)
+            kpts1 = torch.from_numpy(pts).float().unsqueeze(0).to(self.device)
+
+            with torch.no_grad():
+                # LightGlue will extract descriptors internally
+                matches = self.matcher({
+                    'image0': img0_tensor.to(self.device),
+                    'image1': img1_tensor.to(self.device),
+                    'keypoints0': kpts0,
+                    'keypoints1': kpts1,
+                })
+
+            # Extract matches: (M, 2) where M is number of matches
+            match_indices = matches['matches0'].cpu().numpy()  # indices into kpts1
+            valid_matches = match_indices >= 0  # -1 indicates no match
+            
+            if valid_matches.sum() > 0:
+                idx0 = np.where(valid_matches)[0]
+                idx1 = match_indices[valid_matches]
+                mpts1 = self.pts_prev[idx0]
+                mpts2 = pts[idx1.astype(int)]
+                N_matches = len(idx0)
+            else:
+                mpts1 = np.array([]).reshape(0, 2)
+                mpts2 = np.array([]).reshape(0, 2)
+
+            out = copy.deepcopy(img)
+            for pt1, pt2 in zip(mpts1, mpts2):
+                p1 = (int(round(pt1[0])), int(round(pt1[1])))
+                p2 = (int(round(pt2[0])), int(round(pt2[1])))
+                cv2.line(out, p1, p2, (0, 255, 0), lineType=16)
+                cv2.circle(out, p2, 1, (0, 0, 255), -1, lineType=16)
+
+            self.img_prev = img.copy()
+            self.pts_prev = pts
+
+        return out, N_matches
+
+class RatioTestMatcher(object):
+    """Feature matcher using Lowe's Ratio Test.
+    More robust than simple MNN matching by comparing distances to nearest and second-nearest neighbors.
+    """
+    def __init__(self, ratio_threshold=0.8):
+        self.ratio_threshold = ratio_threshold
+        self.pts_prev = None
+        self.desc_prev = None
+
+    def update(self, img, pts, desc):
+        """
+        Update tracker with new frame.
+        Args:
+            img: Image for visualization
+            pts: Keypoints in original image coordinates (N, 2)
+            desc: Descriptors (N, 128), normalized
+        Returns:
+            out: Visualization image
+            N_matches: Number of matches found
+        """
+        N_matches = 0
+        if self.pts_prev is None:
+            self.pts_prev = pts
+            self.desc_prev = desc
+
+            out = copy.deepcopy(img)
+            for pt1 in pts:
+                p1 = (int(round(pt1[0])), int(round(pt1[1])))
+                cv2.circle(out, p1, 1, (0, 0, 255), -1, lineType=16)
+        else:
+            # Use ratio test for more robust matching
+            matches = self._ratio_test_match(self.desc_prev, desc)
+            if len(matches) > 0:
+                mpts1 = self.pts_prev[matches[:, 0]]
+                mpts2 = pts[matches[:, 1]]
+                N_matches = len(matches)
+            else:
+                mpts1 = np.array([]).reshape(0, 2)
+                mpts2 = np.array([]).reshape(0, 2)
+
+            out = copy.deepcopy(img)
+            for pt1, pt2 in zip(mpts1, mpts2):
+                p1 = (int(round(pt1[0])), int(round(pt1[1])))
+                p2 = (int(round(pt2[0])), int(round(pt2[1])))
+                cv2.line(out, p1, p2, (0, 255, 0), lineType=16)
+                cv2.circle(out, p2, 1, (0, 0, 255), -1, lineType=16)
+
+            self.pts_prev = pts
+            self.desc_prev = desc
+
+        return out, N_matches
+
+    def _ratio_test_match(self, desc1, desc2):
+        """
+        Apply Lowe's ratio test for robust matching.
+        For each feature in desc1, find the two nearest neighbors in desc2.
+        Keep match only if distance_to_nearest / distance_to_2nd_nearest < threshold.
+        """
+        # Compute similarity matrix (descriptors are already normalized)
+        sim = desc1 @ desc2.T  # (N1, N2), higher is better
+        
+        if sim.shape[1] < 2:
+            # Not enough points in desc2 for ratio test
+            return self._simple_match(desc1, desc2)
+        
+        # For each point in desc1, find the two best matches in desc2
+        # We use negative values to get top-k via partition
+        top_indices = np.argpartition(-sim, kth=[0, 1], axis=1)[:, :2]
+        top_sims = np.take_along_axis(sim, top_indices, axis=1)
+        
+        # Sort to get 1st and 2nd largest similarities
+        top_sims = np.sort(top_sims, axis=1)
+        sim_1st = top_sims[:, 1]  # Largest similarity (best match)
+        sim_2nd = top_sims[:, 0]  # 2nd largest similarity (second best)
+        
+        # Apply ratio test: keep match if 1st/2nd < threshold
+        # This filters out ambiguous matches
+        ratio = sim_2nd / (sim_1st + 1e-8)
+        valid_mask = ratio < self.ratio_threshold
+        
+        # Get best match indices for valid points
+        best_indices = np.argmax(sim, axis=1)
+        matched_from = np.where(valid_mask)[0]
+        matched_to = best_indices[matched_from]
+        
+        if len(matched_from) > 0:
+            matches = np.column_stack([matched_from, matched_to])
+        else:
+            matches = np.array([]).reshape(0, 2)
+        
+        return matches.astype(np.int32)
+
+    def _simple_match(self, desc1, desc2):
+        """Fallback to simple MNN matching when there are too few points."""
+        sim = desc1 @ desc2.T
+        nn12 = np.argmax(sim, axis=1)
+        nn21 = np.argmax(sim, axis=0)
+        ids1 = np.arange(0, sim.shape[0])
+        mask = (ids1 == nn21[nn12])
+        matches = np.stack([ids1[mask], nn12[mask]])
+        return matches.T.astype(np.int32)
 
 class SimpleTracker(object):
     def __init__(self):
@@ -140,6 +321,10 @@ if __name__ == '__main__':
                         help='Use torch.compile to optimize the model.')
     parser.add_argument('--n_frames', type=int, default=0,
                         help='Max number of frames to process. 0 for all. (default: 0)')
+    parser.add_argument('--matcher', type=str, choices=['lightglue', 'ratio_test', 'simple'], default='ratio_test',
+                        help='Feature matching: lightglue (neural network, best quality), ratio_test (Lowe ratio test, balanced), simple (MNN, fastest). (default: ratio_test)')
+    parser.add_argument('--ratio_threshold', type=float, default=0.8,
+                        help='Ratio threshold for ratio_test matcher. Lower = stricter filtering. (default: 0.8)')
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -153,7 +338,21 @@ if __name__ == '__main__':
     if args.compile:
         model = torch.compile(model, mode='reduce-overhead')
         logging.info('Using torch.compile (reduce-overhead mode)')
-    tracker = SimpleTracker()
+    
+    # Initialize tracker with selected matcher
+    if args.matcher == 'lightglue':
+        if not LIGHTGLUE_AVAILABLE:
+            logging.warning("LightGlue not available, falling back to RatioTestMatcher")
+            tracker = RatioTestMatcher(ratio_threshold=args.ratio_threshold)
+        else:
+            tracker = LightGlueMatcher(device=args.device)
+            logging.info('Using LightGlueMatcher (neural network)')
+    elif args.matcher == 'ratio_test':
+        tracker = RatioTestMatcher(ratio_threshold=args.ratio_threshold)
+        logging.info(f'Using RatioTestMatcher (threshold={args.ratio_threshold})')
+    else:
+        tracker = SimpleTracker()
+        logging.info('Using SimpleTracker (MNN matcher)')
 
     os.makedirs(args.output, exist_ok=True)
     logging.info(f'Saving results to: {os.path.abspath(args.output)}')
