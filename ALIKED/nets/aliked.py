@@ -111,6 +111,8 @@ class ALIKED(nn.Module):
                 self.load_state_dict(state_dict, strict=True)
                 self.to(self.device)
                 self.eval()
+                if self.device.startswith('cuda'):
+                    torch.backends.cudnn.benchmark = True
             else:
                 raise FileNotFoundError(f'cannot find pretrained model: {pretrained_path}')        
     
