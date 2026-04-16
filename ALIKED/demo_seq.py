@@ -1,5 +1,6 @@
 import copy
 import os
+import time
 import cv2
 import glob
 import torch
@@ -61,6 +62,20 @@ class ImageLoader(object):
         return self.N
 
 
+def resize_by_max_edge(img, max_edge):
+    if max_edge <= 0:
+        return img, 1.0
+
+    height, width = img.shape[:2]
+    scale = min(1.0, max_edge / max(height, width))
+    if scale == 1.0:
+        return img, scale
+
+    new_size = (int(round(width * scale)), int(round(height * scale)))
+    resized = cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
+    return resized, scale
+
+
 class SimpleTracker(object):
     def __init__(self):
         self.pts_prev = None
@@ -110,15 +125,21 @@ if __name__ == '__main__':
                         help='Image directory or movie file or "camera0" (for webcam0).')
     parser.add_argument('--model', choices=['aliked-t16', 'aliked-n16', 'aliked-n16rot', 'aliked-n32'], default="aliked-n32",
                         help="The model configuration")
-    parser.add_argument('--device', type=str, default='cuda', help="Running device (default: cuda).")
+    parser.add_argument('--device', type=str, default='cuda', help="Running device (default: cuda, falls back to cpu if unavailable).")
     parser.add_argument('--top_k', type=int, default=-1,
                         help='Detect top K keypoints. -1 for threshold based mode, >0 for top K mode. (default: -1)')
     parser.add_argument('--scores_th', type=float, default=0.2,
                         help='Detector score threshold (default: 0.2).')
     parser.add_argument('--n_limit', type=int, default=5000,
                         help='Maximum number of keypoints to be detected (default: 5000).')
-    parser.add_argument('--no_display', action='store_true',
-                        help='Do not display images to screen. Useful if running remotely (default: False).')
+    parser.add_argument('--output', type=str, default='output',
+                        help='Directory to save result images (default: output).')
+    parser.add_argument('--max_edge', type=int, default=1600,
+                        help='Resize input so the longest edge is at most this value before inference. Use <=0 to disable. (default: 1600)')
+    parser.add_argument('--compile', action='store_true',
+                        help='Use torch.compile to optimize the model.')
+    parser.add_argument('--n_frames', type=int, default=0,
+                        help='Max number of frames to process. 0 for all. (default: 0)')
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -129,48 +150,61 @@ if __name__ == '__main__':
                   top_k=args.top_k,
                   scores_th=args.scores_th,
                   n_limit=args.n_limit)
+    if args.compile:
+        model = torch.compile(model, mode='reduce-overhead')
+        logging.info('Using torch.compile (reduce-overhead mode)')
     tracker = SimpleTracker()
-    
-    if not args.no_display:
-        wait_time = 0
-        logging.info("Press 'space' to start. \nPress 'q' or 'ESC' to stop!")        
-            
-    runtime = []
+
+    os.makedirs(args.output, exist_ok=True)
+    logging.info(f'Saving results to: {os.path.abspath(args.output)}')
+
+    runtime_extract = []
+    runtime_match = []
+    resize_logged = False
     progress_bar = tqdm(image_loader)
-    for img in progress_bar:
+    for frame_idx, img in enumerate(progress_bar):
         if img is None:
             break
+        if args.n_frames > 0 and frame_idx >= args.n_frames:
+            break
+        img, resize_scale = resize_by_max_edge(img, args.max_edge)
+        if not resize_logged:
+            logging.info(f'Inference image size: {img.shape[1]}x{img.shape[0]} (scale={resize_scale:.3f})')
+            resize_logged = True
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         pred = model.run(img_rgb)
         kpts = pred['keypoints']
         desc = pred['descriptors']
-        runtime.append(pred['time'])
+        runtime_extract.append(pred['time'])
 
+        t_match0 = time.time()
         out, N_matches = tracker.update(img, kpts, desc)
+        t_match1 = time.time()
+        runtime_match.append(t_match1 - t_match0)
 
-        ave_fps = (1. / np.stack(runtime)).mean()
-        status = f"fps:{ave_fps:.1f}, matches/keypoints: {N_matches}/{len(kpts)}"
+        ave_extract_ms = np.mean(runtime_extract) * 1000
+        ave_match_ms = np.mean(runtime_match) * 1000
+        status = (f"extract:{ave_extract_ms:.1f}ms  match:{ave_match_ms:.1f}ms  "
+                  f"matches/kpts:{N_matches}/{len(kpts)}")
         progress_bar.set_description(status)
 
-        if not args.no_display:
-            score_map = (pred['score_map']*255).astype(np.uint8)
-            score_map_colorjet = cv2.applyColorMap(score_map, cv2.COLORMAP_JET)
-            vis_img = np.hstack((out, score_map_colorjet))
-            cv2.namedWindow(args.model)
-            cv2.setWindowTitle(args.model, args.model + ': ' + status)
-            cv2.putText(vis_img, "Press 'q' or 'ESC' to stop.", (10,30), cv2.FONT_HERSHEY_SIMPLEX,1, (0,0,255),2, cv2.LINE_AA)
-            if wait_time == 0:
-                cv2.putText(vis_img, "Press 'space' to start.", (10,70), cv2.FONT_HERSHEY_SIMPLEX,1, (0,0,255),2, cv2.LINE_AA)
-            cv2.imshow(args.model, vis_img)
-            c = cv2.waitKey(wait_time)
-            if c == ord('q') or c == 27:
-                break
-            elif c == ord(' '):
-                wait_time = 1
+        score_map = (pred['score_map']*255).astype(np.uint8)
+        score_map_colorjet = cv2.applyColorMap(score_map, cv2.COLORMAP_JET)
+        vis_img = np.hstack((out, score_map_colorjet))
+        save_path = os.path.join(args.output, f'frame_{frame_idx:06d}.jpg')
+        cv2.imwrite(save_path, vis_img)
 
     logging.info('Finished!')
-    if not args.no_display:
-        logging.info('Press any key to exit!')
-        cv2.putText(vis_img, "Finished! Press any key to exit.", (10,70), cv2.FONT_HERSHEY_SIMPLEX,1, (0,0,255),2, cv2.LINE_AA)
-        cv2.imshow(args.model, vis_img)
-        cv2.waitKey()
+    if len(runtime_extract) > 0:
+        logging.info(
+            f"[Timing summary over {len(runtime_extract)} frames]\n"
+            f"  Feature extraction : mean={np.mean(runtime_extract)*1000:.1f}ms  "
+            f"median={np.median(runtime_extract)*1000:.1f}ms  "
+            f"min={np.min(runtime_extract)*1000:.1f}ms  "
+            f"max={np.max(runtime_extract)*1000:.1f}ms\n"
+            f"  Feature matching   : mean={np.mean(runtime_match)*1000:.1f}ms  "
+            f"median={np.median(runtime_match)*1000:.1f}ms  "
+            f"min={np.min(runtime_match)*1000:.1f}ms  "
+            f"max={np.max(runtime_match)*1000:.1f}ms"
+        )
+    logging.info(f'Results saved to: {os.path.abspath(args.output)}')

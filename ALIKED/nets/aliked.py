@@ -40,6 +40,13 @@ ALIKED_CFGS = {'aliked-t16':{'c1': 8,
                              'K': 3,
                              'M': 32},}
 
+
+def _resolve_device(device: str) -> str:
+    if device.startswith('cuda') and not torch.cuda.is_available():
+        print('CUDA is not available, falling back to cpu')
+        return 'cpu'
+    return device
+
             
 class ALIKED(nn.Module):
 
@@ -59,7 +66,7 @@ class ALIKED(nn.Module):
         conv_types = ['conv','conv','dcn','dcn']
         conv2D = False
         mask = False
-        self.device = device
+        self.device = _resolve_device(device)
         
         # build model
         self.pool2 = nn.AvgPool2d(kernel_size=2, stride=2)
@@ -102,7 +109,7 @@ class ALIKED(nn.Module):
                 print(f'loading {pretrained_path}')
                 state_dict = torch.load(pretrained_path, 'cpu')
                 self.load_state_dict(state_dict, strict=True)
-                self.to(device)
+                self.to(self.device)
                 self.eval()
             else:
                 raise FileNotFoundError(f'cannot find pretrained model: {pretrained_path}')        
@@ -141,12 +148,14 @@ class ALIKED(nn.Module):
         return feature_map, score_map
 
     def forward(self, image):
-        torch.cuda.synchronize()
+        if image.is_cuda:
+            torch.cuda.synchronize(image.device)
         t0 = time.time() 
         feature_map, score_map = self.extract_dense_map(image)
         keypoints, kptscores, scoredispersitys = self.dkd(score_map)
         descriptors, offsets = self.desc_head(feature_map, keypoints)
-        torch.cuda.synchronize()
+        if image.is_cuda:
+            torch.cuda.synchronize(image.device)
         t1 = time.time()        
 
         return {'keypoints': keypoints,  # B N 2
@@ -160,7 +169,6 @@ class ALIKED(nn.Module):
     def run(self, img_rgb):
         img_tensor = ToTensor()(img_rgb)
         img_tensor = img_tensor.to(self.device).unsqueeze_(0)
-        
         
         with torch.no_grad():
             pred = self.forward(img_tensor)

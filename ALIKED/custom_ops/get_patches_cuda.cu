@@ -1,14 +1,21 @@
+#include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
+#include <ATen/ops/constant_pad_nd.h>
+#include <c10/cuda/CUDAException.h>
 #include <c10/macros/Macros.h>
 #include <cuda.h>
-#include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <limits>
 #include <stdio.h>
-#include <torch/torch.h>
 
-namespace F = torch::nn::functional;
+// Provide torch:: aliases so existing code compiles with ATen-only headers
+// (avoids pulling in torch/extension.h which breaks nvcc on Windows + PyTorch 2.11)
+namespace torch {
+    using namespace at;
+    namespace indexing = at::indexing;
+}
 
-#define CHECK_CUDA(x) TORCH_CHECK(x.type().is_cuda(), #x " must be a CUDA tensor")
+#define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x) TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
 #define CHECK_INPUT(x)                                                                                                                               \
     CHECK_CUDA(x);                                                                                                                                   \
@@ -83,9 +90,9 @@ __global__ void get_patches_forward_cuda_kernel(const int64_t n,
 
 template <typename scalar_t>
 __global__ void
-get_patches_forward_cuda_kernel1(const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> map_pad, // Cx(H+2*radius)x(W+2*radius)
-                                const torch::PackedTensorAccessor32<int64_t, 2, torch::RestrictPtrTraits> points,   // Nx2
-                                torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> patches,       // NxCxkernel_sizexkernel_size
+get_patches_forward_cuda_kernel1(const at::PackedTensorAccessor32<scalar_t, 3, at::RestrictPtrTraits> map_pad, // Cx(H+2*radius)x(W+2*radius)
+                                const at::PackedTensorAccessor32<int64_t, 2, at::RestrictPtrTraits> points,   // Nx2
+                                at::PackedTensorAccessor32<scalar_t, 4, at::RestrictPtrTraits> patches,       // NxCxkernel_sizexkernel_size
                                 int64_t kernel_size)
 {
     const int in = blockIdx.x * blockDim.x + threadIdx.x;
@@ -113,9 +120,9 @@ get_patches_forward_cuda_kernel1(const torch::PackedTensorAccessor32<scalar_t, 3
 
 template <typename scalar_t>
 __global__ void
-get_patches_backward_cuda_kernel(torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> d_map_pad,       // Cx(H+2*radius)x(W+2*radius)
-                                 const torch::PackedTensorAccessor32<int64_t, 2, torch::RestrictPtrTraits> points,     // Nx2
-                                 const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> d_patches, // NxCxkernel_sizexkernel_size
+get_patches_backward_cuda_kernel(at::PackedTensorAccessor32<scalar_t, 3, at::RestrictPtrTraits> d_map_pad,       // Cx(H+2*radius)x(W+2*radius)
+                                 const at::PackedTensorAccessor32<int64_t, 2, at::RestrictPtrTraits> points,     // Nx2
+                                 const at::PackedTensorAccessor32<scalar_t, 4, at::RestrictPtrTraits> d_patches, // NxCxkernel_sizexkernel_size
                                  int64_t kernel_size)
 {
     const int in = blockIdx.x * blockDim.x + threadIdx.x;
@@ -164,14 +171,18 @@ torch::Tensor get_patches_forward_cuda(const torch::Tensor &input, torch::Tensor
     // cuda kernel
     int64_t num_kernels = n_input_plane * n_points;
     auto stream = at::cuda::getCurrentCUDAStream();
-    AT_DISPATCH_FLOATING_TYPES(input.type(), "get_patches_forward_cuda",
-                               (
-                                   [&]
-                                   {
-                                       get_patches_forward_cuda_kernel<scalar_t><<<GET_BLOCKS(num_kernels), CUDA_NUM_THREADS, 0, stream>>>(
-                                           num_kernels, input.data_ptr<scalar_t>(), points.data_ptr<int64_t>(), n_input_plane, input_height,
-                                           input_width, n_points, pad_left_top, pad_right_bottom, kernel_size, patches.data_ptr<scalar_t>());
-                                   }));
+    // Manual dispatch to avoid AT_DISPATCH_FLOATING_TYPES macro (broken with nvcc + PyTorch 2.11)
+    if (input.scalar_type() == at::ScalarType::Float) {
+        get_patches_forward_cuda_kernel<float><<<GET_BLOCKS(num_kernels), CUDA_NUM_THREADS, 0, stream>>>(
+            num_kernels, input.data_ptr<float>(), points.data_ptr<int64_t>(), n_input_plane, input_height,
+            input_width, n_points, pad_left_top, pad_right_bottom, kernel_size, patches.data_ptr<float>());
+    } else if (input.scalar_type() == at::ScalarType::Double) {
+        get_patches_forward_cuda_kernel<double><<<GET_BLOCKS(num_kernels), CUDA_NUM_THREADS, 0, stream>>>(
+            num_kernels, input.data_ptr<double>(), points.data_ptr<int64_t>(), n_input_plane, input_height,
+            input_width, n_points, pad_left_top, pad_right_bottom, kernel_size, patches.data_ptr<double>());
+    } else {
+        TORCH_CHECK(false, "get_patches_forward_cuda: unsupported dtype, only float and double are supported");
+    }
 
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
@@ -194,8 +205,7 @@ torch::Tensor get_patches_forward_cuda1(const torch::Tensor &map, torch::Tensor 
     int pad_right_bottom = ceil(radius);
 
     // pad map
-    auto options = F::PadFuncOptions({pad_left_top, pad_right_bottom, pad_left_top, pad_right_bottom}).mode(torch::kConstant);
-    auto map_pad = F::pad(map.unsqueeze(0), options).squeeze(0); // Cx(H+2*radius)x(W+2*radius)
+    auto map_pad = at::constant_pad_nd(map.unsqueeze(0), {pad_left_top, pad_right_bottom, pad_left_top, pad_right_bottom}, 0).squeeze(0); // Cx(H+2*radius)x(W+2*radius)
 
     // create patches
     torch::Tensor patches = torch::empty({N, C, kernel_size, kernel_size}, map.options());
@@ -203,15 +213,20 @@ torch::Tensor get_patches_forward_cuda1(const torch::Tensor &map, torch::Tensor 
     // cuda kernel
     const int threads = CUDA_NUM_THREADS;
     const int blocks = (N + threads - 1) / threads;
-    AT_DISPATCH_FLOATING_TYPES(map_pad.type(), "get_patches_forward_cuda",
-                               (
-                                   [&]
-                                   {
-                                       get_patches_forward_cuda_kernel1<scalar_t>
-                                           <<<blocks, threads>>>(map_pad.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-                                                                 points.packed_accessor32<int64_t, 2, torch::RestrictPtrTraits>(),
-                                                                 patches.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(), kernel_size);
-                                   }));
+    // Manual dispatch
+    if (map_pad.scalar_type() == at::ScalarType::Float) {
+        get_patches_forward_cuda_kernel1<float>
+            <<<blocks, threads>>>(map_pad.packed_accessor32<float, 3, at::RestrictPtrTraits>(),
+                                  points.packed_accessor32<int64_t, 2, at::RestrictPtrTraits>(),
+                                  patches.packed_accessor32<float, 4, at::RestrictPtrTraits>(), kernel_size);
+    } else if (map_pad.scalar_type() == at::ScalarType::Double) {
+        get_patches_forward_cuda_kernel1<double>
+            <<<blocks, threads>>>(map_pad.packed_accessor32<double, 3, at::RestrictPtrTraits>(),
+                                  points.packed_accessor32<int64_t, 2, at::RestrictPtrTraits>(),
+                                  patches.packed_accessor32<double, 4, at::RestrictPtrTraits>(), kernel_size);
+    } else {
+        TORCH_CHECK(false, "get_patches_forward_cuda1: unsupported dtype, only float and double are supported");
+    }
 
     // get error
     cudaDeviceSynchronize();
@@ -243,15 +258,20 @@ torch::Tensor get_patches_backward_cuda(const torch::Tensor &d_patches, torch::T
     // cuda kernel
     const int threads = CUDA_NUM_THREADS;
     const int blocks = (N + threads - 1) / threads;
-    AT_DISPATCH_FLOATING_TYPES(d_map_pad.type(), "get_patches_backward_cuda",
-                               (
-                                   [&]
-                                   {
-                                       get_patches_backward_cuda_kernel<scalar_t>
-                                           <<<blocks, threads>>>(d_map_pad.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-                                                                 points.packed_accessor32<int64_t, 2, torch::RestrictPtrTraits>(),
-                                                                 d_patches.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(), kernel_size);
-                                   }));
+    // Manual dispatch
+    if (d_map_pad.scalar_type() == at::ScalarType::Float) {
+        get_patches_backward_cuda_kernel<float>
+            <<<blocks, threads>>>(d_map_pad.packed_accessor32<float, 3, at::RestrictPtrTraits>(),
+                                  points.packed_accessor32<int64_t, 2, at::RestrictPtrTraits>(),
+                                  d_patches.packed_accessor32<float, 4, at::RestrictPtrTraits>(), kernel_size);
+    } else if (d_map_pad.scalar_type() == at::ScalarType::Double) {
+        get_patches_backward_cuda_kernel<double>
+            <<<blocks, threads>>>(d_map_pad.packed_accessor32<double, 3, at::RestrictPtrTraits>(),
+                                  points.packed_accessor32<int64_t, 2, at::RestrictPtrTraits>(),
+                                  d_patches.packed_accessor32<double, 4, at::RestrictPtrTraits>(), kernel_size);
+    } else {
+        TORCH_CHECK(false, "get_patches_backward_cuda: unsupported dtype, only float and double are supported");
+    }
 
     // get error
     cudaDeviceSynchronize();

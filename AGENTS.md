@@ -6,6 +6,43 @@
 
 ## 常用命令
 
+### ALIKED 特征点检测
+
+#### 编译 custom_ops CUDA 扩展
+
+每次修改 `.cu` / `.cpp` 源码后需重新编译：
+
+```powershell
+cd D:\ProjectX\project-3d\reality-capture-toolkit\ALIKED\custom_ops
+& d:\ProjectX\project-3d\reality-capture-toolkit\.venv\Scripts\python.exe setup.py build_ext --inplace
+```
+
+编译成功后会生成 `get_patches.cp312-win_amd64.pyd`。
+
+#### 测试 demo（10 帧快速验证）
+
+```powershell
+cd D:\ProjectX\project-3d\reality-capture-toolkit\ALIKED
+& d:\ProjectX\project-3d\reality-capture-toolkit\.venv\Scripts\python.exe demo_seq.py `
+  D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\ground_undistort\fisheye_x5_VID_20251017_113930_00_052_cam0 `
+  --n_frames 10 `
+  --output output_test
+```
+
+预期输出：
+
+- 特征提取 median ≈ 104ms（第 1 帧因 GPU 冷启动约 4s，属正常）
+- 特征匹配 median ≈ 122ms
+- 每帧约 5000 个关键点，≥3000 个 matches
+
+#### 注意事项
+
+- 必须在 `ALIKED/` 目录下执行 `demo_seq.py`，否则找不到 `nets/` 模块
+- `custom_ops` 编译依赖 MSVC + CUDA 12.8，需在 VS 2022 Developer 环境下运行
+- 测试数据路径：`D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\ground_undistort\fisheye_x5_VID_20251017_113930_00_052_cam0`
+
+---
+
 ### run-ar — Insta360 点云重建流水线
 
 将 Insta360 录制的 INSV 视频 + 外置相机 MOV + 激光点云数据合并，完成轨迹对齐、颜色化、建图等全流程处理。

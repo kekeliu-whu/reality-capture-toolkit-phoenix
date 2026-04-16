@@ -30,7 +30,7 @@ torch::Tensor get_patches_forward_cpu(const torch::Tensor &map, torch::Tensor &p
 
     // get patches
     torch::Tensor patches = torch::zeros({N, C, kernel_size, kernel_size}, map.options());
-    auto a_points = points.accessor<long, 2>();    // Nx2
+    auto a_points = points.accessor<int64_t, 2>();    // Nx2
     auto a_map_pad = map_pad.accessor<float, 3>(); // Cx(H+2*radius)x(W+2*radius)
     auto a_patches = patches.accessor<float, 4>(); // N x C x kernel_size x kernel_size
 
@@ -79,7 +79,7 @@ torch::Tensor get_patches_backward_cpu(const torch::Tensor &d_patches, torch::Te
 
     torch::Tensor d_map_pad = torch::zeros({C, H + int(2 * radius), W + int(2 * radius)}, d_patches.options());
 
-    auto a_points = points.accessor<long, 2>();        // Nx2
+    auto a_points = points.accessor<int64_t, 2>();        // Nx2
     auto a_d_map_pad = d_map_pad.accessor<float, 3>(); // Cx(H+2*radius)x(W+2*radius)
     auto a_p_patches = d_patches.accessor<float, 4>(); // NxCxkernel_sizexkernel_size
     for (auto in = 0; in < N; in++)

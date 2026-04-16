@@ -91,7 +91,7 @@ if __name__ == '__main__':
                         help='Image directory.')
     parser.add_argument('--model', choices=['aliked-t16', 'aliked-n16', 'aliked-n16rot', 'aliked-n32'], default="aliked-n16rot",
                         help="The model configuration")
-    parser.add_argument('--device', type=str, default='cuda', help="Running device (default: cuda).")
+    parser.add_argument('--device', type=str, default='cuda', help="Running device (default: cuda, falls back to cpu if unavailable).")
     parser.add_argument('--top_k', type=int, default=-1,
                         help='Detect top K keypoints. -1 for threshold based mode, >0 for top K mode. (default: -1)')
     parser.add_argument('--scores_th', type=float, default=0.2,

@@ -37,11 +37,19 @@ If you use ALIKED in academic work, please cite:
 
 ## 1. Prerequisites
 
-The required packages are listed in the `requirements.txt` :
+Install the default Python dependencies:
 
 ```shell
 pip install -r requirements.txt
 ```
+
+If you want GPU inference with the CUDA 12.8 stack used by this repository, install the CUDA wheel set instead:
+
+```shell
+pip install -r requirements-gpu-cu128.txt
+```
+
+If your local CUDA runtime is not 12.8, keep the same file format and replace the PyTorch wheel index URL with the matching CUDA version.
 
 Build `custom_ops`:
 ```shell
@@ -89,7 +97,7 @@ options:
   -h, --help            show this help message and exit
   --model {aliked-t16,aliked-n16,aliked-n16rot,aliked-n32}
                         The model configuration
-  --device DEVICE       Running device (default: cuda).
+  --device DEVICE       Running device (default: cuda, falls back to cpu if unavailable).
   --top_k TOP_K         Detect top K keypoints. -1 for threshold based mode, >0 for top K mode. (default: -1)
   --scores_th SCORES_TH
                         Detector score threshold (default: 0.2).
@@ -119,7 +127,7 @@ options:
   -h, --help            show this help message and exit
   --model {aliked-t16,aliked-n16,aliked-n16rot,aliked-n32}
                         The model configuration
-  --device DEVICE       Running device (default: cuda).
+  --device DEVICE       Running device (default: cuda, falls back to cpu if unavailable).
   --top_k TOP_K         Detect top K keypoints. -1 for threshold based mode, >0 for top K mode. (default: -1)
   --scores_th SCORES_TH
                         Detector score threshold (default: 0.2).
