@@ -43,6 +43,11 @@ def build_engine(
     config = builder.create_builder_config()
     config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, int(workspace_gb * (1 << 30)))
 
+    # Use maximum optimization level for best kernel selection (0-5, default 3)
+    if hasattr(builder, 'builder_optimization_level'):
+        builder.builder_optimization_level = 5
+        print(f"  Builder optimization level: 5 (maximum)")
+
     if fp16 and builder.platform_has_fast_fp16:
         config.set_flag(trt.BuilderFlag.FP16)
         print(f"  FP16 enabled")
@@ -83,7 +88,7 @@ def build_aliked_backbone(input_dir: str, output_dir: str, fp16: bool):
     print(f"\n[aliked_backbone]")
     build_engine(onnx, engine, fp16=fp16, profiles=[
         # (input_name, min_shape, opt_shape, max_shape)
-        ('image', (1, 3, 320, 320), (1, 3, 640, 960), (1, 3, 1600, 1600)),
+        ('image', (1, 3, 320, 320), (1, 3, 1600, 1600), (1, 3, 1600, 1600)),
     ])
 
 
@@ -95,9 +100,9 @@ def build_aliked_sddh(input_dir: str, output_dir: str, fp16: bool):
         return
     print(f"\n[aliked_sddh]")
     build_engine(onnx, engine, fp16=fp16, profiles=[
-        ('feature_map',    (1, 128, 320, 320), (1, 128, 640, 960), (1, 128, 1600, 1600)),
-        ('keypoints_wh',   (100, 2),           (2000, 2),          (5000, 2)),
-        ('feature_map_hw', (2,),               (2,),               (2,)),
+        ('feature_map',    (1, 128, 320, 320), (1, 128, 1600, 1600), (1, 128, 1600, 1600)),
+        ('keypoints_wh',   (100, 2),           (5000, 2),            (5000, 2)),
+        ('feature_map_hw', (2,),               (2,),                 (2,)),
     ])
 
 
@@ -109,10 +114,10 @@ def build_lightglue(input_dir: str, output_dir: str, fp16: bool):
         return
     print(f"\n[lightglue]")
     build_engine(onnx, engine, fp16=fp16, profiles=[
-        ('kpts0', (1, 100, 2),  (1, 2000, 2),  (1, 5000, 2)),
-        ('desc0', (1, 100, 128),(1, 2000, 128), (1, 5000, 128)),
-        ('kpts1', (1, 100, 2),  (1, 2000, 2),  (1, 5000, 2)),
-        ('desc1', (1, 100, 128),(1, 2000, 128), (1, 5000, 128)),
+        ('kpts0', (1, 100, 2),  (1, 5000, 2),  (1, 5000, 2)),
+        ('desc0', (1, 100, 128),(1, 5000, 128), (1, 5000, 128)),
+        ('kpts1', (1, 100, 2),  (1, 5000, 2),  (1, 5000, 2)),
+        ('desc1', (1, 100, 128),(1, 5000, 128), (1, 5000, 128)),
     ])
 
 

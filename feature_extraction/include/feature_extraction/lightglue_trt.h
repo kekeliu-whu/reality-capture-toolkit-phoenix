@@ -32,21 +32,22 @@ public:
     /// Initialise with engine path.
     bool init(const LightGlueConfig& config);
 
-    /// Match two sets of features.
-    ///
-    /// @param kpts0   Keypoints of image 0 [N, 2] in pixel coords
-    /// @param desc0   Descriptors of image 0 [N, D] row-major
-    /// @param N0      Number of keypoints in image 0
-    /// @param kpts1   Keypoints of image 1 [M, 2] in pixel coords
-    /// @param desc1   Descriptors of image 1 [M, D] row-major
-    /// @param N1      Number of keypoints in image 1
+    /// Match two sets of features (host pointers, includes H2D copy).
     MatchResult match(const float* kpts0, const float* desc0, int N0,
                       const float* kpts1, const float* desc1, int N1);
+
+    /// Match two sets of features already on GPU (no H2D copy).
+    /// All device pointers must remain valid until this call returns.
+    MatchResult match_gpu(const void* d_kpts0, const void* d_desc0, int N0,
+                          const void* d_kpts1, const void* d_desc1, int N1);
 
 private:
     LightGlueConfig config_;
     TrtEngine engine_;
     cudaStream_t stream_ = nullptr;
+
+    /// Internal: run inference + decode output. Assumes inputs are set.
+    MatchResult run_and_decode(int N0, int N1);
 };
 
 }  // namespace feature_extraction

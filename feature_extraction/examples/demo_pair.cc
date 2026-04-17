@@ -74,34 +74,35 @@ static void process_pair(FeaturePipeline& pipeline,
         return;
     }
 
-    auto t0 = std::chrono::high_resolution_clock::now();
-    auto r0 = pipeline.detect(img0);
-    auto t1 = std::chrono::high_resolution_clock::now();
-    auto r1 = pipeline.detect(img1);
-    auto t2 = std::chrono::high_resolution_clock::now();
-    auto mr = pipeline.match(r0, r1);
-    auto t3 = std::chrono::high_resolution_clock::now();
+    bool need_dump = !dump_dir.empty();
 
-    auto ms = [](auto a, auto b) {
-        return std::chrono::duration<double, std::milli>(b - a).count();
-    };
+    if (need_dump) {
+        // Use the original CPU-path for dump (needs host-side data)
+        auto t0 = std::chrono::high_resolution_clock::now();
+        auto r0 = pipeline.detect(img0);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        auto r1 = pipeline.detect(img1);
+        auto t2 = std::chrono::high_resolution_clock::now();
+        auto mr = pipeline.match(r0, r1);
+        auto t3 = std::chrono::high_resolution_clock::now();
 
-    std::cout << "Image 0: " << r0.num_keypoints << " keypoints ("
-              << ms(t0, t1) << " ms)" << std::endl;
-    std::cout << "Image 1: " << r1.num_keypoints << " keypoints ("
-              << ms(t1, t2) << " ms)" << std::endl;
-    std::cout << "Matches: " << mr.num_matches << " (" << ms(t2, t3) << " ms)"
-              << std::endl;
+        auto ms = [](auto a, auto b) {
+            return std::chrono::duration<double, std::milli>(b - a).count();
+        };
 
-    // Dump binary data for comparison with Python
-    if (!dump_dir.empty()) {
+        std::cout << "Image 0: " << r0.num_keypoints << " keypoints ("
+                  << ms(t0, t1) << " ms)" << std::endl;
+        std::cout << "Image 1: " << r1.num_keypoints << " keypoints ("
+                  << ms(t1, t2) << " ms)" << std::endl;
+        std::cout << "Matches: " << mr.num_matches << " (" << ms(t2, t3)
+                  << " ms)" << std::endl;
+
+        // Dump binary data
         auto write_bin = [](const std::string& path, const void* data,
                             size_t bytes) {
             std::ofstream f(path, std::ios::binary);
             f.write(static_cast<const char*>(data), bytes);
         };
-
-        // Keypoints in padded/resized image space (matching Python)
         auto dump_kpts = [](const AlikedResult& r) {
             std::vector<float> kpts(r.num_keypoints * 2);
             for (int i = 0; i < r.num_keypoints; ++i) {
@@ -116,17 +117,14 @@ static void process_pair(FeaturePipeline& pipeline,
                   kpts0.size() * sizeof(float));
         write_bin(dump_dir + "/kpts1.bin", kpts1.data(),
                   kpts1.size() * sizeof(float));
-
         write_bin(dump_dir + "/scores0.bin", r0.scores.data(),
                   r0.scores.size() * sizeof(float));
         write_bin(dump_dir + "/scores1.bin", r1.scores.data(),
                   r1.scores.size() * sizeof(float));
-
         write_bin(dump_dir + "/desc0.bin", r0.descriptors.data(),
                   r0.descriptors.size() * sizeof(float));
         write_bin(dump_dir + "/desc1.bin", r1.descriptors.data(),
                   r1.descriptors.size() * sizeof(float));
-
         std::vector<int32_t> match_pairs(mr.num_matches * 2);
         for (int i = 0; i < mr.num_matches; ++i) {
             match_pairs[i * 2 + 0] = mr.matches[i].first;
@@ -136,7 +134,6 @@ static void process_pair(FeaturePipeline& pipeline,
                   match_pairs.size() * sizeof(int32_t));
         write_bin(dump_dir + "/mscores.bin", mr.scores.data(),
                   mr.scores.size() * sizeof(float));
-
         {
             std::ofstream f(dump_dir + "/meta.txt");
             f << "n0=" << r0.num_keypoints << "\n"
@@ -145,12 +142,28 @@ static void process_pair(FeaturePipeline& pipeline,
               << "scale0=" << r0.scale << "\n"
               << "scale1=" << r1.scale << "\n";
         }
-    }
 
-    if (!output_path.empty()) {
-        cv::Mat vis = draw_matches(img0, img1, r0, r1, mr);
-        cv::imwrite(output_path, vis);
-        std::cout << "Saved: " << output_path << std::endl;
+        if (!output_path.empty()) {
+            cv::Mat vis = draw_matches(img0, img1, r0, r1, mr);
+            cv::imwrite(output_path, vis);
+            std::cout << "Saved: " << output_path << std::endl;
+        }
+    } else {
+        // GPU-optimized path: no host round-trip between detect and match
+        auto t0 = std::chrono::high_resolution_clock::now();
+        auto pr = pipeline.detect_and_match_gpu(img0, img1);
+        auto t1 = std::chrono::high_resolution_clock::now();
+
+        auto ms = [](auto a, auto b) {
+            return std::chrono::duration<double, std::milli>(b - a).count();
+        };
+
+        std::cout << "Image 0: " << pr.det0.num_keypoints << " keypoints"
+                  << std::endl;
+        std::cout << "Image 1: " << pr.det1.num_keypoints << " keypoints"
+                  << std::endl;
+        std::cout << "Matches: " << pr.matches.num_matches << " ("
+                  << ms(t0, t1) << " ms total)" << std::endl;
     }
 }
 
@@ -221,20 +234,79 @@ int main(int argc, char** argv) {
             std::cerr << "Cannot open pair list: " << pair_list << std::endl;
             return 1;
         }
+
+        // Parse all pairs first for detection caching
+        struct PairEntry {
+            std::string p0, p1, dd;
+        };
+        std::vector<PairEntry> entries;
         std::string line;
-        int pair_idx = 0;
         while (std::getline(pf, line)) {
             if (line.empty() || line[0] == '#') continue;
             std::istringstream iss(line);
-            std::string p0, p1, dd;
-            if (!(iss >> p0 >> p1 >> dd)) {
-                std::cerr << "Bad line: " << line << std::endl;
-                continue;
+            PairEntry e;
+            iss >> e.p0 >> e.p1;
+            iss >> e.dd;
+            entries.push_back(std::move(e));
+        }
+
+        // Batch processing with detection caching.
+        // If consecutive pairs share an image (pair[i].p1 == pair[i+1].p0),
+        // reuse the detection result instead of recomputing.
+        GpuDetectResult cached_det;
+        std::string cached_path;
+        for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
+            auto& e = entries[i];
+            std::cout << "--- Pair " << i << ": " << e.p0 << " <-> "
+                      << e.p1 << " ---" << std::endl;
+
+            bool use_dump = !e.dd.empty();
+            if (use_dump) {
+                // Dump path: no caching (needs CPU-side AlikedResult)
+                process_pair(pipeline, e.p0, e.p1, "", e.dd);
+                cached_path.clear();
+            } else {
+                // GPU path with detection caching
+                cv::Mat img1 = cv::imread(e.p1);
+                if (img1.empty()) {
+                    std::cerr << "Cannot read: " << e.p1 << std::endl;
+                    cached_path.clear();
+                    continue;
+                }
+
+                PairResult pr;
+                auto t0 = std::chrono::high_resolution_clock::now();
+                if (!cached_path.empty() && cached_path == e.p0) {
+                    // Reuse cached detection for image0
+                    pr = pipeline.detect_and_match_gpu(
+                        std::move(cached_det), img1);
+                } else {
+                    cv::Mat img0 = cv::imread(e.p0);
+                    if (img0.empty()) {
+                        std::cerr << "Cannot read: " << e.p0 << std::endl;
+                        cached_path.clear();
+                        continue;
+                    }
+                    pr = pipeline.detect_and_match_gpu(img0, img1);
+                }
+                auto t1 = std::chrono::high_resolution_clock::now();
+
+                auto ms = [](auto a, auto b) {
+                    return std::chrono::duration<double, std::milli>(
+                               b - a)
+                        .count();
+                };
+                std::cout << "Image 0: " << pr.det0.num_keypoints
+                          << " keypoints" << std::endl;
+                std::cout << "Image 1: " << pr.det1.num_keypoints
+                          << " keypoints" << std::endl;
+                std::cout << "Matches: " << pr.matches.num_matches << " ("
+                          << ms(t0, t1) << " ms total)" << std::endl;
+
+                // Cache det1 for potential reuse as det0 of the next pair
+                cached_det = std::move(pr.det1);
+                cached_path = e.p1;
             }
-            std::cout << "--- Pair " << pair_idx << ": " << p0 << " <-> "
-                      << p1 << " ---" << std::endl;
-            process_pair(pipeline, p0, p1, "", dd);
-            ++pair_idx;
         }
     } else {
         process_pair(pipeline, image0_path, image1_path, output_path, dump_dir);

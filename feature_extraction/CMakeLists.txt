@@ -65,6 +65,7 @@ set(FE_SOURCES
 )
 set(FE_CUDA_SOURCES
     src/dkd_cuda.cu
+    src/preprocess_cuda.cu
 )
 
 add_library(feature_extraction STATIC ${FE_SOURCES} ${FE_CUDA_SOURCES})

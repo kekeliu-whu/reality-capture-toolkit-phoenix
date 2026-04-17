@@ -140,14 +140,28 @@ void TrtEngine::set_input_shape(const std::string& name,
 }
 
 void TrtEngine::set_input(const std::string& name, const void* host_data,
-                          size_t bytes) {
+                          size_t bytes, cudaStream_t stream) {
     ensure_buffer(name, bytes);
-    auto err = cudaMemcpy(buffers_[name].ptr, host_data, bytes,
-                          cudaMemcpyHostToDevice);
+    cudaError_t err;
+    if (stream) {
+        err = cudaMemcpyAsync(buffers_[name].ptr, host_data, bytes,
+                              cudaMemcpyHostToDevice, stream);
+    } else {
+        err = cudaMemcpy(buffers_[name].ptr, host_data, bytes,
+                         cudaMemcpyHostToDevice);
+    }
     if (err != cudaSuccess) {
         throw std::runtime_error(std::string("cudaMemcpy H2D failed: ") +
                                  cudaGetErrorString(err));
     }
+}
+
+void TrtEngine::set_device_input(const std::string& name, void* device_ptr) {
+    external_ptrs_[name] = device_ptr;
+}
+
+void TrtEngine::clear_device_inputs() {
+    external_ptrs_.clear();
 }
 
 bool TrtEngine::infer(cudaStream_t stream) {
@@ -155,8 +169,15 @@ bool TrtEngine::infer(cudaStream_t stream) {
     int nb = engine_->getNbIOTensors();
     for (int i = 0; i < nb; ++i) {
         const char* tname = engine_->getIOTensorName(i);
-        ensure_buffer(tname, tensor_bytes(tname));
-        context_->setTensorAddress(tname, buffers_[tname].ptr);
+        std::string sname(tname);
+        auto ext_it = external_ptrs_.find(sname);
+        if (ext_it != external_ptrs_.end()) {
+            // Use externally-managed device pointer
+            context_->setTensorAddress(tname, ext_it->second);
+        } else {
+            ensure_buffer(sname, tensor_bytes(sname));
+            context_->setTensorAddress(tname, buffers_[sname].ptr);
+        }
     }
 
     bool ok;
@@ -173,13 +194,19 @@ bool TrtEngine::infer(cudaStream_t stream) {
 }
 
 void TrtEngine::get_output(const std::string& name, void* host_data,
-                           size_t bytes) const {
+                           size_t bytes, cudaStream_t stream) const {
     auto it = buffers_.find(name);
     if (it == buffers_.end()) {
         throw std::runtime_error("Unknown tensor: " + name);
     }
-    auto err = cudaMemcpy(host_data, it->second.ptr, bytes,
-                          cudaMemcpyDeviceToHost);
+    cudaError_t err;
+    if (stream) {
+        err = cudaMemcpyAsync(host_data, it->second.ptr, bytes,
+                              cudaMemcpyDeviceToHost, stream);
+    } else {
+        err = cudaMemcpy(host_data, it->second.ptr, bytes,
+                         cudaMemcpyDeviceToHost);
+    }
     if (err != cudaSuccess) {
         throw std::runtime_error(std::string("cudaMemcpy D2H failed: ") +
                                  cudaGetErrorString(err));

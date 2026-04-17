@@ -11,10 +11,44 @@ namespace feature_extraction {
 namespace dkd {
 
 // --------------------------------------------------------------------------
+// DKDWorkspace — pre-allocated buffers
+// --------------------------------------------------------------------------
+
+DKDWorkspace::~DKDWorkspace() {
+    for (int i = 0; i < 4; ++i) {
+        if (buf[i]) cudaFree(buf[i]);
+    }
+    if (count_buf) cudaFree(count_buf);
+    if (cub_temp) cudaFree(cub_temp);
+}
+
+void DKDWorkspace::init(int max_H, int max_W) {
+    size_t max_HW = static_cast<size_t>(max_H) * max_W;
+    buf_elem_bytes = max_HW * sizeof(float);
+
+    for (int i = 0; i < 4; ++i) {
+        cudaMalloc(&buf[i], buf_elem_bytes);
+    }
+    cudaMalloc(&count_buf, sizeof(int));
+
+    // Query CUB radix sort temporary storage for max element count
+    cub_temp_bytes = 0;
+    cub::DeviceRadixSort::SortPairsDescending(
+        nullptr, cub_temp_bytes,
+        static_cast<float*>(nullptr), static_cast<float*>(nullptr),
+        static_cast<int*>(nullptr), static_cast<int*>(nullptr),
+        static_cast<int>(max_HW), 0, sizeof(float) * 8,
+        static_cast<cudaStream_t>(nullptr));
+    if (cub_temp_bytes > 0) {
+        cudaMalloc(&cub_temp, cub_temp_bytes);
+    }
+    ready = true;
+}
+
+// --------------------------------------------------------------------------
 // NMS kernel: max_pool2d-based non-maximum suppression
 // --------------------------------------------------------------------------
 
-/// Max-pool2d with kernel = 2*radius+1, stride=1, same-size output.
 __global__ void max_pool2d_kernel(const float* __restrict__ input,
                                   float* __restrict__ output,
                                   int H, int W, int radius) {
@@ -35,7 +69,6 @@ __global__ void max_pool2d_kernel(const float* __restrict__ input,
     output[y * W + x] = max_val;
 }
 
-/// Compute local-max mask: output[i] = (input[i] == pooled[i]) ? input[i] : 0
 __global__ void local_max_mask_kernel(const float* __restrict__ scores,
                                       const float* __restrict__ pooled,
                                       float* __restrict__ output,
@@ -45,12 +78,6 @@ __global__ void local_max_mask_kernel(const float* __restrict__ scores,
     output[idx] = (scores[idx] == pooled[idx]) ? scores[idx] : 0.0f;
 }
 
-/// One iteration of NMS suppression.
-/// supp_mask = max_pool2d(max_mask) > 0
-/// supp_scores = where(supp_mask, 0, scores)
-/// new_max_mask = (supp_scores == max_pool2d(supp_scores))
-/// max_mask = max_mask | (new_max_mask & !supp_mask)
-/// Output: nms_scores = where(final_max_mask, scores, 0)
 __global__ void nms_suppress_kernel(const float* __restrict__ scores,
                                     const float* __restrict__ max_mask_pooled,
                                     const float* __restrict__ supp_scores_pooled,
@@ -72,19 +99,19 @@ __global__ void nms_suppress_kernel(const float* __restrict__ scores,
 }
 
 void nms_cuda(const float* score_map, float* nms_out,
-              int H, int W, int radius, cudaStream_t stream) {
+              int H, int W, int radius,
+              DKDWorkspace& ws, cudaStream_t stream) {
     int HW = H * W;
     dim3 block2d(16, 16);
     dim3 grid2d((W + 15) / 16, (H + 15) / 16);
     int block1d = 256;
     int grid1d = (HW + block1d - 1) / block1d;
 
-    // Temporary buffers
-    float *pooled, *max_mask, *supp_scores, *tmp_pool;
-    cudaMalloc(&pooled, HW * sizeof(float));
-    cudaMalloc(&max_mask, HW * sizeof(float));
-    cudaMalloc(&supp_scores, HW * sizeof(float));
-    cudaMalloc(&tmp_pool, HW * sizeof(float));
+    // Use pre-allocated workspace buffers
+    float* pooled     = static_cast<float*>(ws.buf[0]);
+    float* max_mask   = static_cast<float*>(ws.buf[1]);
+    float* supp_scores = static_cast<float*>(ws.buf[2]);
+    float* tmp_pool   = static_cast<float*>(ws.buf[3]);
 
     // Step 1: initial max_mask = (scores == max_pool(scores)) ? scores : 0
     max_pool2d_kernel<<<grid2d, block2d, 0, stream>>>(
@@ -94,44 +121,27 @@ void nms_cuda(const float* score_map, float* nms_out,
 
     // Step 2-3: two iterations of suppression
     for (int iter = 0; iter < 2; ++iter) {
-        // Pool the max_mask
         max_pool2d_kernel<<<grid2d, block2d, 0, stream>>>(
-            max_mask, pooled, H, W, radius);  // pooled = max_pool(max_mask)
+            max_mask, pooled, H, W, radius);
 
-        // Compute supp_scores = where(pooled > 0, 0, scores)
-        // And new_max_mask, update max_mask
-        // We need max_pool(supp_scores), so compute supp_scores first
-        // supp_scores[i] = (pooled[i] > 0) ? 0 : scores[i]
         nms_suppress_kernel<<<grid1d, block1d, 0, stream>>>(
             score_map, pooled, tmp_pool, max_mask, supp_scores, HW);
 
-        // Pool supp_scores for next comparison
         max_pool2d_kernel<<<grid2d, block2d, 0, stream>>>(
             supp_scores, tmp_pool, H, W, radius);
 
-        // Final update: max_mask |= (supp_scores == pooled(supp_scores)) & !supp
         nms_suppress_kernel<<<grid1d, block1d, 0, stream>>>(
             score_map, pooled, tmp_pool, max_mask, supp_scores, HW);
     }
 
-    // Copy final max_mask to output
     cudaMemcpyAsync(nms_out, max_mask, HW * sizeof(float),
                     cudaMemcpyDeviceToDevice, stream);
-
-    // Apply border suppression
-    // (done in topk_cuda by checking coordinates)
-
-    cudaFree(pooled);
-    cudaFree(max_mask);
-    cudaFree(supp_scores);
-    cudaFree(tmp_pool);
 }
 
 // --------------------------------------------------------------------------
-// TopK selection (CUB radix sort)
+// TopK selection (CUB radix sort) with pre-allocated workspace
 // --------------------------------------------------------------------------
 
-/// Gather ALL candidate positions above threshold into flat arrays.
 __global__ void gather_candidates_kernel(
     const float* __restrict__ nms_scores,
     int H, int W, int border, float threshold,
@@ -157,7 +167,6 @@ __global__ void gather_candidates_kernel(
     }
 }
 
-/// Convert sorted flat indices to (x, y) coordinates for top-K results.
 __global__ void extract_topk_xy_kernel(
     const float* __restrict__ sorted_scores,
     const int* __restrict__ sorted_indices,
@@ -176,27 +185,21 @@ __global__ void extract_topk_xy_kernel(
 void topk_cuda(const float* nms_scores, int H, int W,
                int top_k, int border,
                float* kpts_xy, float* scores, int* count,
-               cudaStream_t stream) {
+               DKDWorkspace& ws, cudaStream_t stream) {
     int HW = H * W;
     int block = 256;
     int grid = (HW + block - 1) / block;
     float threshold = 0.001f;
 
-    // Allocate temp buffers for candidate gathering and sorting
-    float* d_cand_scores = nullptr;
-    int* d_cand_indices = nullptr;
-    float* d_sorted_scores = nullptr;
-    int* d_sorted_indices = nullptr;
-    int* d_count = nullptr;
+    // Reuse workspace buffers (NMS is done, these are now free)
+    float* d_cand_scores   = static_cast<float*>(ws.buf[0]);
+    int*   d_cand_indices  = static_cast<int*>(ws.buf[1]);
+    float* d_sorted_scores = static_cast<float*>(ws.buf[2]);
+    int*   d_sorted_indices = static_cast<int*>(ws.buf[3]);
+    int*   d_count         = static_cast<int*>(ws.count_buf);
 
-    cudaMalloc(&d_cand_scores, HW * sizeof(float));
-    cudaMalloc(&d_cand_indices, HW * sizeof(int));
-    cudaMalloc(&d_sorted_scores, HW * sizeof(float));
-    cudaMalloc(&d_sorted_indices, HW * sizeof(int));
-    cudaMalloc(&d_count, sizeof(int));
     cudaMemsetAsync(d_count, 0, sizeof(int), stream);
 
-    // Gather ALL candidates above threshold
     gather_candidates_kernel<<<grid, block, 0, stream>>>(
         nms_scores, H, W, border, threshold,
         d_cand_scores, d_cand_indices, d_count, HW);
@@ -209,25 +212,21 @@ void topk_cuda(const float* nms_scores, int H, int W,
 
     int K = 0;
     if (h_count > 0) {
-        // CUB radix sort descending by score
-        size_t temp_bytes = 0;
+        // CUB radix sort using pre-allocated temp storage
+        size_t needed = 0;
         cub::DeviceRadixSort::SortPairsDescending(
-            nullptr, temp_bytes,
+            nullptr, needed,
             d_cand_scores, d_sorted_scores,
             d_cand_indices, d_sorted_indices,
             h_count, 0, sizeof(float) * 8, stream);
 
-        void* d_temp = nullptr;
-        cudaMalloc(&d_temp, temp_bytes);
-
+        // Use pre-allocated cub_temp (sized for max elements)
         cub::DeviceRadixSort::SortPairsDescending(
-            d_temp, temp_bytes,
+            ws.cub_temp, ws.cub_temp_bytes,
             d_cand_scores, d_sorted_scores,
             d_cand_indices, d_sorted_indices,
             h_count, 0, sizeof(float) * 8, stream);
-        cudaFree(d_temp);
 
-        // Extract top-K into output arrays
         K = std::min(h_count, top_k);
         int ext_grid = (K + 255) / 256;
         extract_topk_xy_kernel<<<ext_grid, 256, 0, stream>>>(
@@ -237,12 +236,6 @@ void topk_cuda(const float* nms_scores, int H, int W,
 
     cudaMemcpyAsync(count, &K, sizeof(int),
                     cudaMemcpyHostToDevice, stream);
-
-    cudaFree(d_cand_scores);
-    cudaFree(d_cand_indices);
-    cudaFree(d_sorted_scores);
-    cudaFree(d_sorted_indices);
-    cudaFree(d_count);
 }
 
 // --------------------------------------------------------------------------
@@ -261,9 +254,6 @@ __global__ void subpixel_refine_kernel(
     int ix = __float2int_rn(cx);
     int iy = __float2int_rn(cy);
 
-    int ksize = 2 * radius + 1;
-
-    // Find max value in local patch (for numerical stability)
     float max_val = -FLT_MAX;
     for (int dy = -radius; dy <= radius; ++dy) {
         for (int dx = -radius; dx <= radius; ++dx) {
@@ -275,7 +265,6 @@ __global__ void subpixel_refine_kernel(
         }
     }
 
-    // Compute soft-argmax
     float sum_exp = 0.0f;
     float sum_x = 0.0f;
     float sum_y = 0.0f;
@@ -317,19 +306,19 @@ void subpixel_refine_cuda(const float* score_map, float* kpts_xy,
 void detect_keypoints(const float* score_map, int H, int W,
                       const DKDParams& params,
                       float* kpts_xy, float* kpt_scores, int* num_kpts,
-                      void* workspace, size_t /*workspace_bytes*/,
+                      void* nms_buf, DKDWorkspace& workspace,
                       cudaStream_t stream) {
-    float* nms_out = static_cast<float*>(workspace);
+    float* nms_out = static_cast<float*>(nms_buf);
 
     // 1. NMS
-    nms_cuda(score_map, nms_out, H, W, params.nms_radius, stream);
+    nms_cuda(score_map, nms_out, H, W, params.nms_radius, workspace, stream);
 
     // 2. TopK / threshold selection
     topk_cuda(nms_out, H, W, params.top_k, params.border,
-              kpts_xy, kpt_scores, num_kpts, stream);
+              kpts_xy, kpt_scores, num_kpts, workspace, stream);
 
     // 3. Sub-pixel refinement
-    // We need to sync to know the count for the kernel launch
+    // topk_cuda already synced to get h_count; read num_kpts from device
     int h_count = 0;
     cudaMemcpyAsync(&h_count, num_kpts, sizeof(int),
                     cudaMemcpyDeviceToHost, stream);
@@ -346,8 +335,7 @@ void detect_keypoints(const float* score_map, int H, int W,
                     cudaMemcpyHostToDevice, stream);
 }
 
-size_t workspace_size(int H, int W) {
-    // NMS output buffer
+size_t nms_buf_size(int H, int W) {
     return static_cast<size_t>(H) * W * sizeof(float);
 }
 

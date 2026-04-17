@@ -3,9 +3,9 @@ import torch
 from torch import nn
 from torchvision.models import resnet
 
-from nets.soft_detect import DKD
-from nets.padder import InputPadder
-from nets.blocks import *
+from feature_extraction.raw.ALIKED.nets.soft_detect import DKD
+from feature_extraction.raw.ALIKED.nets.padder import InputPadder
+from feature_extraction.raw.ALIKED.nets.blocks import *
 import time
 from torchvision.transforms import ToTensor
 

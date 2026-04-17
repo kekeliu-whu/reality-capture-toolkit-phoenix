@@ -34,13 +34,17 @@ import numpy as np
 # ---------------------------------------------------------------------------
 # Python ALIKED + LightGlue
 # ---------------------------------------------------------------------------
-ALIKED_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'ALIKED')
+ALIKED_DIR = os.path.join(os.path.dirname(__file__), '..', 'raw', 'ALIKED')
+# Ensure repo root is on sys.path for absolute imports in ALIKED code
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.abspath(ALIKED_DIR))
 
 
 def load_python_models(device='cuda'):
     import torch
-    from nets.aliked import ALIKED
+    from feature_extraction.raw.ALIKED.nets.aliked import ALIKED
     from lightglue import LightGlue
 
     model = ALIKED(model_name='aliked-n32', device=device,
@@ -311,6 +315,8 @@ def main():
                         help='Path to demo_feature_matching.exe')
     parser.add_argument('--engine-dir', default='feature_extraction/engines',
                         help='Directory containing TRT engine files')
+    parser.add_argument('--lightglue-engine', default=None,
+                        help='Override LightGlue engine path (e.g. lightglue_fp16.engine)')
     parser.add_argument('--max-edge', type=int, default=1600)
     parser.add_argument('--device', default='cuda')
     args = parser.parse_args()
@@ -360,10 +366,13 @@ def main():
         print(f"C++ exe not found: {cpp_exe}")
         return
 
+    lg_engine = (args.lightglue_engine
+                  if args.lightglue_engine
+                  else os.path.join(args.engine_dir, 'lightglue.engine'))
     engine_paths = {
         'backbone': os.path.join(args.engine_dir, 'aliked_backbone.engine'),
         'sddh': os.path.join(args.engine_dir, 'aliked_sddh.engine'),
-        'lightglue': os.path.join(args.engine_dir, 'lightglue.engine'),
+        'lightglue': lg_engine,
     }
     for k, v in engine_paths.items():
         if not os.path.isfile(v):

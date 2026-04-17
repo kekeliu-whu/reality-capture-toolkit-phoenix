@@ -45,15 +45,25 @@ public:
                          const std::vector<int>& shape);
 
     /// Copy host data to a named input tensor's GPU buffer.
+    /// If stream is provided, uses async copy (caller must keep data alive).
     void set_input(const std::string& name, const void* host_data,
-                   size_t bytes);
+                   size_t bytes, cudaStream_t stream = nullptr);
+
+    /// Set a named input tensor to an externally-managed device pointer.
+    /// The pointer must remain valid until after infer() completes.
+    /// Avoids the D2D/H2D copy when data is already on GPU.
+    void set_device_input(const std::string& name, void* device_ptr);
+
+    /// Clear all external device input overrides.
+    void clear_device_inputs();
 
     /// Run inference synchronously on the given CUDA stream.
     bool infer(cudaStream_t stream = nullptr);
 
     /// Copy a named output tensor's GPU buffer to host memory.
+    /// If stream is provided, uses async copy (caller must sync before use).
     void get_output(const std::string& name, void* host_data,
-                    size_t bytes) const;
+                    size_t bytes, cudaStream_t stream = nullptr) const;
 
     /// Get the raw GPU pointer for a named tensor (input or output).
     void* device_ptr(const std::string& name);
@@ -73,6 +83,9 @@ private:
 
     // Tensor name → GPU buffer.
     std::unordered_map<std::string, CudaBuffer> buffers_;
+
+    // Tensor name → externally-managed device pointer (overrides buffers_).
+    std::unordered_map<std::string, void*> external_ptrs_;
 
     void ensure_buffer(const std::string& name, size_t bytes);
     size_t tensor_bytes(const std::string& name) const;

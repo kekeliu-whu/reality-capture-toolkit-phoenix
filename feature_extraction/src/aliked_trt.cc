@@ -1,10 +1,13 @@
 #include "feature_extraction/aliked_trt.h"
+#include "feature_extraction/preprocess_cuda.h"
 
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <vector>
 
@@ -34,11 +37,22 @@ bool AlikedDetector::init(const AlikedConfig& config) {
     dkd_scores_.resize(max_kpts * sizeof(float));
     dkd_count_.resize(sizeof(int));
 
+    // Pre-allocate NMS output buffer for max image size
+    int max_dim = config_.max_edge > 0 ? config_.max_edge : 1600;
+    int max_padded = ((max_dim + 31) / 32) * 32;
+    dkd_nms_buf_.resize(dkd::nms_buf_size(max_padded, max_padded));
+
+    // Pre-allocate DKD workspace (eliminates per-frame cudaMalloc/cudaFree)
+    dkd_workspace_.init(max_padded, max_padded);
+
+    // Pre-allocate GPU buffer for preprocess upload (max BGR uint8)
+    size_t max_img_bytes = static_cast<size_t>(max_dim) * max_dim * 3;
+    preprocess_buf_.resize(max_img_bytes);
+
     return true;
 }
 
 void AlikedDetector::preprocess(const cv::Mat& image_bgr,
-                                std::vector<float>& out,
                                 int& padded_h, int& padded_w) {
     cv::Mat img = image_bgr;
 
@@ -67,132 +81,188 @@ void AlikedDetector::preprocess(const cv::Mat& image_bgr,
     pad_h_ = padded_h;
     pad_w_ = padded_w;
 
-    // BGR → RGB, float32, [0, 1]
-    cv::Mat rgb;
-    cv::cvtColor(img, rgb, cv::COLOR_BGR2RGB);
-    cv::Mat rgb_f;
-    rgb.convertTo(rgb_f, CV_32FC3, 1.0 / 255.0);
-
-    // Pad with border replication (matches PyTorch's replicate padding)
+    // Pad with border replication (on CPU, BGR uint8)
     int pad_bottom = padded_h - orig_h_;
     int pad_right = padded_w - orig_w_;
     if (pad_bottom > 0 || pad_right > 0) {
-        cv::copyMakeBorder(rgb_f, rgb_f, 0, pad_bottom, 0, pad_right,
+        cv::copyMakeBorder(img, img, 0, pad_bottom, 0, pad_right,
                            cv::BORDER_REPLICATE);
     }
 
-    // HWC → CHW (NCHW with N=1)
-    out.resize(3 * padded_h * padded_w);
-    int hw = padded_h * padded_w;
-    const float* src = reinterpret_cast<const float*>(rgb_f.data);
-    for (int i = 0; i < hw; ++i) {
-        out[0 * hw + i] = src[i * 3 + 0];  // R
-        out[1 * hw + i] = src[i * 3 + 1];  // G
-        out[2 * hw + i] = src[i * 3 + 2];  // B
-    }
+    if (!img.isContinuous()) img = img.clone();
+
+    // Upload BGR uint8 to GPU and convert to CHW RGB float [0,1]
+    size_t img_bytes = static_cast<size_t>(padded_h) * padded_w * 3;
+    preprocess_buf_.resize(img_bytes);
+    cudaMemcpyAsync(preprocess_buf_.ptr, img.data, img_bytes,
+                    cudaMemcpyHostToDevice, stream_);
+
+    backbone_.set_input_shape("image", {1, 3, padded_h, padded_w});
+    float* dst_gpu = static_cast<float*>(backbone_.device_ptr("image"));
+
+    bgr_hwc_to_rgb_chw_gpu(
+        static_cast<const unsigned char*>(preprocess_buf_.ptr),
+        dst_gpu, padded_h, padded_w, stream_);
 }
 
-int AlikedDetector::run_dkd(int H, int W) {
-    // Allocate workspace
-    size_t ws_bytes = dkd::workspace_size(H, W);
-    dkd_workspace_.resize(ws_bytes);
+int AlikedDetector::run_pipeline(const cv::Mat& image_bgr) {
+    static bool profile = (std::getenv("PROFILE") != nullptr);
+    std::chrono::high_resolution_clock::time_point tp[5];
 
-    // score_map is on GPU in backbone output buffer
+    if (profile) tp[0] = std::chrono::high_resolution_clock::now();
+
+    // 1. Preprocess
+    int padded_h, padded_w;
+    preprocess(image_bgr, padded_h, padded_w);
+
+    if (profile) {
+        cudaStreamSynchronize(stream_);
+        tp[1] = std::chrono::high_resolution_clock::now();
+    }
+
+    // 2. Run backbone (async)
+    backbone_.infer(stream_);
+
+    if (profile) {
+        cudaStreamSynchronize(stream_);
+        tp[2] = std::chrono::high_resolution_clock::now();
+    }
+
+    // 3. Run DKD on score_map (still on GPU)
     const float* score_map_gpu =
         static_cast<const float*>(backbone_.device_ptr("score_map"));
 
     dkd::detect_keypoints(
-        score_map_gpu, H, W, config_.dkd,
+        score_map_gpu, padded_h, padded_w, config_.dkd,
         static_cast<float*>(dkd_kpts_.ptr),
         static_cast<float*>(dkd_scores_.ptr),
         static_cast<int*>(dkd_count_.ptr),
-        dkd_workspace_.ptr, ws_bytes, stream_);
+        dkd_nms_buf_.ptr, dkd_workspace_, stream_);
 
+    // detect_keypoints already synced internally to get keypoint count.
+    // Read the count from device.
+    int num_kpts = 0;
+    cudaMemcpyAsync(&num_kpts, dkd_count_.ptr, sizeof(int),
+                    cudaMemcpyDeviceToHost, stream_);
     cudaStreamSynchronize(stream_);
 
-    int count = 0;
-    cudaMemcpy(&count, dkd_count_.ptr, sizeof(int), cudaMemcpyDeviceToHost);
-    return count;
+    if (profile) tp[3] = std::chrono::high_resolution_clock::now();
+
+    int max_kpts = config_.dkd.top_k > 0 ? config_.dkd.top_k : config_.dkd.n_limit;
+    num_kpts = std::min(num_kpts, max_kpts);
+    if (num_kpts <= 0) return 0;
+
+    // 4. Run SDDH: use pointer aliasing for feature_map (no D2D copy!)
+    sddh_.set_input_shape("feature_map",
+                          {1, config_.descriptor_dim, padded_h, padded_w});
+    sddh_.set_input_shape("keypoints_wh", {num_kpts, 2});
+    sddh_.set_input_shape("feature_map_hw", {2});
+
+    // Alias SDDH feature_map input directly to backbone feature_map output
+    sddh_.set_device_input("feature_map",
+                           backbone_.device_ptr("feature_map"));
+
+    // Alias SDDH keypoints input directly to DKD output
+    sddh_.set_device_input("keypoints_wh", dkd_kpts_.ptr);
+
+    // feature_map_hw: small H2D for [H, W]
+    float fm_hw[2] = {static_cast<float>(padded_h),
+                      static_cast<float>(padded_w)};
+    sddh_.set_input("feature_map_hw", fm_hw, 2 * sizeof(float), stream_);
+
+    sddh_.infer(stream_);
+
+    if (profile) {
+        cudaStreamSynchronize(stream_);
+        tp[4] = std::chrono::high_resolution_clock::now();
+        auto ms = [](auto a, auto b) {
+            return std::chrono::duration<double, std::milli>(b - a).count();
+        };
+        std::cerr << "  [PROFILE] preproc=" << ms(tp[0], tp[1])
+                  << "ms backbone=" << ms(tp[1], tp[2])
+                  << "ms dkd=" << ms(tp[2], tp[3])
+                  << "ms sddh=" << ms(tp[3], tp[4]) << "ms"
+                  << std::endl;
+    }
+    // Don't sync here — let the caller decide when to sync.
+
+    return num_kpts;
+}
+
+GpuDetectResult AlikedDetector::detect_gpu(const cv::Mat& image_bgr) {
+    GpuDetectResult result;
+    result.descriptor_dim = config_.descriptor_dim;
+
+    int num_kpts = run_pipeline(image_bgr);
+    if (num_kpts <= 0) return result;
+
+    result.num_keypoints = num_kpts;
+    result.scale = scale_;
+    int D = config_.descriptor_dim;
+
+    // D2D copies from internal buffers to result buffers (very fast, ~3μs)
+    result.kpts.resize(num_kpts * 2 * sizeof(float));
+    result.scores.resize(num_kpts * sizeof(float));
+    result.descs.resize(num_kpts * D * sizeof(float));
+
+    cudaMemcpyAsync(result.kpts.ptr, dkd_kpts_.ptr,
+                    num_kpts * 2 * sizeof(float),
+                    cudaMemcpyDeviceToDevice, stream_);
+    cudaMemcpyAsync(result.scores.ptr, dkd_scores_.ptr,
+                    num_kpts * sizeof(float),
+                    cudaMemcpyDeviceToDevice, stream_);
+    cudaMemcpyAsync(result.descs.ptr, sddh_.device_ptr("descriptors"),
+                    num_kpts * D * sizeof(float),
+                    cudaMemcpyDeviceToDevice, stream_);
+
+    // Clear external pointer aliases before next call
+    sddh_.clear_device_inputs();
+
+    cudaStreamSynchronize(stream_);
+    return result;
 }
 
 AlikedResult AlikedDetector::detect(const cv::Mat& image_bgr) {
     AlikedResult result;
     result.descriptor_dim = config_.descriptor_dim;
 
-    // 1. Preprocess
-    std::vector<float> input_data;
-    int padded_h, padded_w;
-    preprocess(image_bgr, input_data, padded_h, padded_w);
-
-    // 2. Run backbone
-    backbone_.set_input_shape("image", {1, 3, padded_h, padded_w});
-    backbone_.set_input("image", input_data.data(),
-                        input_data.size() * sizeof(float));
-    backbone_.infer(stream_);
-
-    // 3. Run DKD on score_map (still on GPU)
-    int num_kpts = run_dkd(padded_h, padded_w);
+    int num_kpts = run_pipeline(image_bgr);
     if (num_kpts <= 0) return result;
 
-    // Clamp to actual limit
-    int max_kpts = config_.dkd.top_k > 0 ? config_.dkd.top_k : config_.dkd.n_limit;
-    num_kpts = std::min(num_kpts, max_kpts);
     result.num_keypoints = num_kpts;
+    result.scale = scale_;
+    int D = config_.descriptor_dim;
 
-    // 4. Run SDDH: feature_map (on GPU) + keypoints → descriptors
-    // Set SDDH inputs
-    sddh_.set_input_shape("feature_map",
-                          {1, config_.descriptor_dim, padded_h, padded_w});
-    sddh_.set_input_shape("keypoints_wh", {num_kpts, 2});
-    sddh_.set_input_shape("feature_map_hw", {2});
-
-    // feature_map: copy GPU→GPU from backbone output to SDDH input
-    size_t fm_bytes = static_cast<size_t>(config_.descriptor_dim) * padded_h *
-                      padded_w * sizeof(float);
-    cudaMemcpyAsync(sddh_.device_ptr("feature_map"),
-                    backbone_.device_ptr("feature_map"), fm_bytes,
-                    cudaMemcpyDeviceToDevice, stream_);
-
-    // keypoints: already on GPU in dkd_kpts_
-    cudaMemcpyAsync(sddh_.device_ptr("keypoints_wh"), dkd_kpts_.ptr,
-                    num_kpts * 2 * sizeof(float), cudaMemcpyDeviceToDevice,
-                    stream_);
-
-    // feature_map_hw: [H, W] as float
-    float fm_hw[2] = {static_cast<float>(padded_h), static_cast<float>(padded_w)};
-    sddh_.set_input("feature_map_hw", fm_hw, 2 * sizeof(float));
-
-    sddh_.infer(stream_);
+    // Sync to ensure SDDH is done before D2H copies
     cudaStreamSynchronize(stream_);
 
-    // 5. Copy results to host
-    // Keypoints
+    // D2H copies
     std::vector<float> kpts_flat(num_kpts * 2);
-    cudaMemcpy(kpts_flat.data(), dkd_kpts_.ptr,
-               num_kpts * 2 * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpyAsync(kpts_flat.data(), dkd_kpts_.ptr,
+                    num_kpts * 2 * sizeof(float),
+                    cudaMemcpyDeviceToHost, stream_);
+
+    result.scores.resize(num_kpts);
+    cudaMemcpyAsync(result.scores.data(), dkd_scores_.ptr,
+                    num_kpts * sizeof(float),
+                    cudaMemcpyDeviceToHost, stream_);
+
+    result.descriptors.resize(num_kpts * D);
+    sddh_.get_output("descriptors", result.descriptors.data(),
+                     num_kpts * D * sizeof(float), stream_);
+
+    // Clear external pointer aliases
+    sddh_.clear_device_inputs();
+
+    cudaStreamSynchronize(stream_);
 
     result.keypoints.resize(num_kpts);
     for (int i = 0; i < num_kpts; ++i) {
-        float x = kpts_flat[i * 2 + 0];
-        float y = kpts_flat[i * 2 + 1];
-        // Keep in padded image space (for SDDH / LightGlue)
-        result.keypoints[i] = cv::Point2f(x, y);
+        result.keypoints[i] = cv::Point2f(kpts_flat[i * 2 + 0],
+                                          kpts_flat[i * 2 + 1]);
     }
-    result.scale = scale_;
 
-    // Scores
-    result.scores.resize(num_kpts);
-    cudaMemcpy(result.scores.data(), dkd_scores_.ptr,
-               num_kpts * sizeof(float), cudaMemcpyDeviceToHost);
-
-    // Descriptors
-    int D = config_.descriptor_dim;
-    result.descriptors.resize(num_kpts * D);
-    sddh_.get_output("descriptors", result.descriptors.data(),
-                     num_kpts * D * sizeof(float));
-
-    // Sanitize NaN descriptors (FP16 precision can produce NaN in SDDH).
-    // Replace NaN with 0 so they don't poison LightGlue's attention.
+    // Sanitize NaN descriptors
     for (int i = 0; i < num_kpts * D; ++i) {
         if (std::isnan(result.descriptors[i])) {
             result.descriptors[i] = 0.0f;

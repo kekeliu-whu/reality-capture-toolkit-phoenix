@@ -4,7 +4,7 @@ import glob
 import logging
 import argparse
 import numpy as np
-from nets.aliked import ALIKED
+from feature_extraction.raw.ALIKED.nets.aliked import ALIKED
 from copy import deepcopy
 
 class ImageLoader(object):

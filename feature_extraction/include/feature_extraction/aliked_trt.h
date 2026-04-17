@@ -21,6 +21,16 @@ struct AlikedResult {
     float scale = 1.0f;                      // resize scale (padded→original: x/scale)
 };
 
+/// GPU-resident detection result.  Keeps keypoints/descriptors on device.
+struct GpuDetectResult {
+    CudaBuffer kpts;         // [N, 2] float on device
+    CudaBuffer descs;        // [N, D] float on device
+    CudaBuffer scores;       // [N] float on device
+    int num_keypoints = 0;
+    int descriptor_dim = 128;
+    float scale = 1.0f;
+};
+
 /// Configuration for the ALIKED TensorRT pipeline.
 struct AlikedConfig {
     std::string backbone_engine;   // Path to aliked_backbone.engine
@@ -44,8 +54,12 @@ public:
     /// Initialise with engine paths and parameters.
     bool init(const AlikedConfig& config);
 
-    /// Extract features from a BGR image.
+    /// Extract features from a BGR image (copies results to host).
     AlikedResult detect(const cv::Mat& image_bgr);
+
+    /// Extract features, keeping results on GPU (no D2H copy).
+    /// Much faster when results will be passed directly to LightGlue.
+    GpuDetectResult detect_gpu(const cv::Mat& image_bgr);
 
 private:
     AlikedConfig config_;
@@ -54,10 +68,12 @@ private:
     cudaStream_t stream_ = nullptr;
 
     // Pre-allocated GPU workspace for DKD
-    CudaBuffer dkd_workspace_;
+    CudaBuffer dkd_nms_buf_;     // NMS output buffer
     CudaBuffer dkd_kpts_;        // [max_kpts, 2]
     CudaBuffer dkd_scores_;      // [max_kpts]
     CudaBuffer dkd_count_;       // [1]
+    dkd::DKDWorkspace dkd_workspace_;  // Pre-allocated DKD temp buffers
+    CudaBuffer preprocess_buf_;  // GPU staging for BGR uint8 upload
 
     // Padding bookkeeping
     int pad_h_ = 0, pad_w_ = 0;  // Padded dimensions (divisible by 32)
@@ -65,11 +81,12 @@ private:
     float scale_ = 1.0f;
 
     /// Pre-process: BGR → RGB float, resize, pad to 32-multiple.
-    void preprocess(const cv::Mat& image_bgr, std::vector<float>& out,
+    void preprocess(const cv::Mat& image_bgr,
                     int& padded_h, int& padded_w);
 
-    /// Run DKD on score_map already on GPU.
-    int run_dkd(int H, int W);
+    /// Run backbone + DKD + SDDH, leaving results on GPU.
+    /// Returns the actual keypoint count.
+    int run_pipeline(const cv::Mat& image_bgr);
 };
 
 }  // namespace feature_extraction
