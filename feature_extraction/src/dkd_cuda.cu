@@ -2,6 +2,7 @@
 
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
+#include <cub/cub.cuh>
 #include <cfloat>
 #include <cmath>
 #include <algorithm>
@@ -127,19 +128,17 @@ void nms_cuda(const float* score_map, float* nms_out,
 }
 
 // --------------------------------------------------------------------------
-// TopK selection
+// TopK selection (CUB radix sort)
 // --------------------------------------------------------------------------
 
-/// Simple selection kernel: gather top K scores via sorting.
-/// For production, consider radix sort (CUB) or partial sort.
-/// This version uses a simplified approach with atomicAdd for counting.
-__global__ void threshold_and_gather_kernel(
+/// Gather ALL candidate positions above threshold into flat arrays.
+__global__ void gather_candidates_kernel(
     const float* __restrict__ nms_scores,
     int H, int W, int border, float threshold,
-    float* __restrict__ kpts_xy,
-    float* __restrict__ scores_out,
+    float* __restrict__ cand_scores,
+    int* __restrict__ cand_indices,
     int* __restrict__ count,
-    int max_count) {
+    int max_candidates) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int HW = H * W;
     if (idx >= HW) return;
@@ -149,16 +148,29 @@ __global__ void threshold_and_gather_kernel(
 
     int y = idx / W;
     int x = idx % W;
-
-    // Border exclusion
     if (x < border || x >= W - border || y < border || y >= H - border) return;
 
     int pos = atomicAdd(count, 1);
-    if (pos < max_count) {
-        kpts_xy[pos * 2 + 0] = static_cast<float>(x);
-        kpts_xy[pos * 2 + 1] = static_cast<float>(y);
-        scores_out[pos] = score;
+    if (pos < max_candidates) {
+        cand_scores[pos] = score;
+        cand_indices[pos] = idx;
     }
+}
+
+/// Convert sorted flat indices to (x, y) coordinates for top-K results.
+__global__ void extract_topk_xy_kernel(
+    const float* __restrict__ sorted_scores,
+    const int* __restrict__ sorted_indices,
+    int K, int W,
+    float* __restrict__ kpts_xy,
+    float* __restrict__ kpt_scores) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= K) return;
+
+    int flat = sorted_indices[i];
+    kpts_xy[i * 2 + 0] = static_cast<float>(flat % W);
+    kpts_xy[i * 2 + 1] = static_cast<float>(flat / W);
+    kpt_scores[i] = sorted_scores[i];
 }
 
 void topk_cuda(const float* nms_scores, int H, int W,
@@ -168,21 +180,69 @@ void topk_cuda(const float* nms_scores, int H, int W,
     int HW = H * W;
     int block = 256;
     int grid = (HW + block - 1) / block;
-
-    // Reset count
-    cudaMemsetAsync(count, 0, sizeof(int), stream);
-
-    // Gather all above-threshold points
-    // Using a low threshold to gather more than needed, then we'll sort on CPU
     float threshold = 0.001f;
-    threshold_and_gather_kernel<<<grid, block, 0, stream>>>(
-        nms_scores, H, W, border, threshold,
-        kpts_xy, scores, count, top_k);
 
-    // Note: For true TopK on GPU, use cub::DeviceRadixSort.
-    // The current implementation gathers up to top_k points above threshold.
-    // A proper TopK would sort all scores and take the top K.
-    // For production, integrate CUB sort here.
+    // Allocate temp buffers for candidate gathering and sorting
+    float* d_cand_scores = nullptr;
+    int* d_cand_indices = nullptr;
+    float* d_sorted_scores = nullptr;
+    int* d_sorted_indices = nullptr;
+    int* d_count = nullptr;
+
+    cudaMalloc(&d_cand_scores, HW * sizeof(float));
+    cudaMalloc(&d_cand_indices, HW * sizeof(int));
+    cudaMalloc(&d_sorted_scores, HW * sizeof(float));
+    cudaMalloc(&d_sorted_indices, HW * sizeof(int));
+    cudaMalloc(&d_count, sizeof(int));
+    cudaMemsetAsync(d_count, 0, sizeof(int), stream);
+
+    // Gather ALL candidates above threshold
+    gather_candidates_kernel<<<grid, block, 0, stream>>>(
+        nms_scores, H, W, border, threshold,
+        d_cand_scores, d_cand_indices, d_count, HW);
+
+    int h_count = 0;
+    cudaMemcpyAsync(&h_count, d_count, sizeof(int),
+                    cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+    h_count = std::min(h_count, HW);
+
+    int K = 0;
+    if (h_count > 0) {
+        // CUB radix sort descending by score
+        size_t temp_bytes = 0;
+        cub::DeviceRadixSort::SortPairsDescending(
+            nullptr, temp_bytes,
+            d_cand_scores, d_sorted_scores,
+            d_cand_indices, d_sorted_indices,
+            h_count, 0, sizeof(float) * 8, stream);
+
+        void* d_temp = nullptr;
+        cudaMalloc(&d_temp, temp_bytes);
+
+        cub::DeviceRadixSort::SortPairsDescending(
+            d_temp, temp_bytes,
+            d_cand_scores, d_sorted_scores,
+            d_cand_indices, d_sorted_indices,
+            h_count, 0, sizeof(float) * 8, stream);
+        cudaFree(d_temp);
+
+        // Extract top-K into output arrays
+        K = std::min(h_count, top_k);
+        int ext_grid = (K + 255) / 256;
+        extract_topk_xy_kernel<<<ext_grid, 256, 0, stream>>>(
+            d_sorted_scores, d_sorted_indices, K, W,
+            kpts_xy, scores);
+    }
+
+    cudaMemcpyAsync(count, &K, sizeof(int),
+                    cudaMemcpyHostToDevice, stream);
+
+    cudaFree(d_cand_scores);
+    cudaFree(d_cand_indices);
+    cudaFree(d_sorted_scores);
+    cudaFree(d_sorted_indices);
+    cudaFree(d_count);
 }
 
 // --------------------------------------------------------------------------

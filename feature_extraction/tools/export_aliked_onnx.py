@@ -50,11 +50,12 @@ def _deform_conv2d_symbolic(g, input, weight, offset, mask, bias,
     n_weight_grps = symbolic_helper._parse_arg(n_weight_grps, "i")
     n_offset_grps = symbolic_helper._parse_arg(n_offset_grps, "i")
 
+    # ONNX DeformConv spec input order: X, W, offset, [B], [mask]
     return g.op(
         "DeformConv",
         input,
-        offset,
         weight,
+        offset,
         bias,
         dilations_i=[dil_h, dil_w],
         group_i=n_weight_grps,
@@ -189,24 +190,27 @@ class ALIKEDSddh(nn.Module):
             'agg_w',
             sddh.agg_weights.reshape(-1, dim))  # [P*C, D]
 
-    def forward(self, feature_map: torch.Tensor, keypoints_wh: torch.Tensor):
+    def forward(self, feature_map: torch.Tensor, keypoints_wh: torch.Tensor,
+                feature_map_hw: torch.Tensor):
         """
         Args:
-            feature_map:  [1, C, H, W]  from backbone.
-            keypoints_wh: [N, 2]  pixel coordinates (x, y).
+            feature_map:    [1, C, H, W]  from backbone.
+            keypoints_wh:   [N, 2]  pixel coordinates (x, y).
+            feature_map_hw: [2]  float tensor containing [H, W] of feature_map.
         Returns:
             descriptors:  [N, D]  L2-normalised descriptors.
         """
-        C = feature_map.shape[1]
-        H = feature_map.shape[2]
-        W = feature_map.shape[3]
         N = keypoints_wh.shape[0]
         K = self.kernel_size
+        C = feature_map.shape[1]
 
-        # Normalisation constants
-        w_norm = float(W - 1)
-        h_norm = float(H - 1)
-        max_offset = float(max(H, W)) / 4.0
+        # Normalisation constants — derived from explicit input to avoid
+        # JIT-tracing baking concrete values into the ONNX graph.
+        H_val = feature_map_hw[0]
+        W_val = feature_map_hw[1]
+        w_norm = W_val - 1.0
+        h_norm = H_val - 1.0
+        max_offset = torch.max(H_val, W_val) / 4.0
 
         # --- 1. Extract KxK patches via grid_sample ---
         # patch_coords: [N, K*K, 2] in pixel coordinates
@@ -284,7 +288,8 @@ def validate_sddh(model_orig: ALIKED, sddh_export: ALIKEDSddh, device: str):
         # Convert to pixel coords for export model
         wh = torch.tensor([[W - 1.0, H - 1.0]], device=device)
         kpts_wh = (kpts_norm / 2 + 0.5) * wh
-        descs_new = sddh_export(fm, kpts_wh)
+        fm_hw = torch.tensor([float(H), float(W)], dtype=torch.float32, device=device)
+        descs_new = sddh_export(fm, kpts_wh, fm_hw)
 
     cos_sim = (descs_orig * descs_new).sum(dim=1)
     print(f"  SDDH validation: cosine similarity mean={cos_sim.mean():.4f}, min={cos_sim.min():.4f}")
@@ -330,14 +335,15 @@ def export_sddh(model: ALIKED, output_dir: str, device: str, opset: int = 16):
     H, W, N = 480, 640, 500
     dummy_fm = torch.randn(1, C, H, W, device=device)
     dummy_kpts = torch.rand(N, 2, device=device) * torch.tensor([[W - 1.0, H - 1.0]], device=device)
+    dummy_hw = torch.tensor([float(H), float(W)], dtype=torch.float32, device=device)
     path = os.path.join(output_dir, 'aliked_sddh.onnx')
 
     torch.onnx.export(
         sddh,
-        (dummy_fm, dummy_kpts),
+        (dummy_fm, dummy_kpts, dummy_hw),
         path,
         opset_version=opset,
-        input_names=['feature_map', 'keypoints_wh'],
+        input_names=['feature_map', 'keypoints_wh', 'feature_map_hw'],
         output_names=['descriptors'],
         dynamic_axes={
             'feature_map':  {2: 'H', 3: 'W'},

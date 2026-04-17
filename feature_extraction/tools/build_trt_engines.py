@@ -18,6 +18,7 @@ except ImportError:
     sys.exit(1)
 
 TRT_LOGGER = trt.Logger(trt.Logger.INFO)
+trt.init_libnvinfer_plugins(TRT_LOGGER, "")
 
 
 def build_engine(
@@ -49,11 +50,12 @@ def build_engine(
     network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
     parser = trt.OnnxParser(network, TRT_LOGGER)
 
-    with open(onnx_path, 'rb') as f:
-        if not parser.parse(f.read()):
-            for i in range(parser.num_errors):
-                print(f"  ONNX parse error: {parser.get_error(i)}")
-            raise RuntimeError(f"Failed to parse {onnx_path}")
+    # Use parse_from_file so TRT resolves external data relative to the ONNX file
+    onnx_abs = os.path.abspath(onnx_path)
+    if not parser.parse_from_file(onnx_abs):
+        for i in range(parser.num_errors):
+            print(f"  ONNX parse error: {parser.get_error(i)}")
+        raise RuntimeError(f"Failed to parse {onnx_path}")
 
     # Set up dynamic shape optimization profiles
     if profiles:
@@ -81,7 +83,7 @@ def build_aliked_backbone(input_dir: str, output_dir: str, fp16: bool):
     print(f"\n[aliked_backbone]")
     build_engine(onnx, engine, fp16=fp16, profiles=[
         # (input_name, min_shape, opt_shape, max_shape)
-        ('image', (1, 3, 320, 320), (1, 3, 640, 960), (1, 3, 1024, 1920)),
+        ('image', (1, 3, 320, 320), (1, 3, 640, 960), (1, 3, 1600, 1600)),
     ])
 
 
@@ -93,8 +95,9 @@ def build_aliked_sddh(input_dir: str, output_dir: str, fp16: bool):
         return
     print(f"\n[aliked_sddh]")
     build_engine(onnx, engine, fp16=fp16, profiles=[
-        ('feature_map',  (1, 128, 320, 320), (1, 128, 640, 960), (1, 128, 1024, 1920)),
-        ('keypoints_wh', (100, 2),           (2000, 2),          (5000, 2)),
+        ('feature_map',    (1, 128, 320, 320), (1, 128, 640, 960), (1, 128, 1600, 1600)),
+        ('keypoints_wh',   (100, 2),           (2000, 2),          (5000, 2)),
+        ('feature_map_hw', (2,),               (2,),               (2,)),
     ])
 
 

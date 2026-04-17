@@ -1,6 +1,7 @@
 #include "feature_extraction/trt_engine.h"
 
 #include <NvInfer.h>
+#include <NvInferPlugin.h>
 
 #include <cassert>
 #include <fstream>
@@ -23,6 +24,12 @@ public:
 };
 
 static TrtLoggerImpl g_trt_logger;
+
+// Ensure TRT plugins are registered (one-time init)
+static bool g_plugins_initialized = []() {
+    initLibNvInferPlugins(&g_trt_logger, "");
+    return true;
+}();
 
 // --------------------------------------------------------------------------
 // CudaBuffer
@@ -59,7 +66,7 @@ void CudaBuffer::resize(size_t bytes) {
 }
 
 // --------------------------------------------------------------------------
-// TrtEngine
+// TrtEngine (TensorRT 10.x: tensor-name API, enqueueV3)
 // --------------------------------------------------------------------------
 bool TrtEngine::load(const std::string& engine_path) {
     // Read serialised engine
@@ -88,64 +95,54 @@ bool TrtEngine::load(const std::string& engine_path) {
     context_.reset(engine_->createExecutionContext());
     if (!context_) return false;
 
-    // Build binding index map
-    int nb = engine_->getNbBindings();
-    buffers_.resize(nb);
-    shapes_.resize(nb);
-    for (int i = 0; i < nb; ++i) {
-        const char* name = engine_->getBindingName(i);
-        binding_index_[name] = i;
-        shapes_[i] = engine_->getBindingDimensions(i);
-    }
-
+    int nb = engine_->getNbIOTensors();
     std::cout << "Loaded TRT engine: " << engine_path << " (" << nb
-              << " bindings)" << std::endl;
+              << " IO tensors)" << std::endl;
     return true;
 }
 
-int TrtEngine::get_index(const std::string& name) const {
-    auto it = binding_index_.find(name);
-    if (it == binding_index_.end()) {
-        throw std::runtime_error("Unknown binding: " + name);
-    }
-    return it->second;
-}
-
-size_t TrtEngine::binding_bytes(int idx) const {
-    auto dims = context_->getBindingDimensions(idx);
+size_t TrtEngine::tensor_bytes(const std::string& name) const {
+    auto dims = context_->getTensorShape(name.c_str());
     int64_t count = 1;
     for (int d = 0; d < dims.nbDims; ++d) {
         count *= dims.d[d];
     }
-    // Assume float32
-    return static_cast<size_t>(count) * sizeof(float);
+    // Determine element size from data type
+    auto dtype = engine_->getTensorDataType(name.c_str());
+    size_t elem_size = sizeof(float);  // default float32
+    switch (dtype) {
+        case nvinfer1::DataType::kFLOAT: elem_size = 4; break;
+        case nvinfer1::DataType::kHALF:  elem_size = 2; break;
+        case nvinfer1::DataType::kINT32: elem_size = 4; break;
+        case nvinfer1::DataType::kINT64: elem_size = 8; break;
+        case nvinfer1::DataType::kINT8:  elem_size = 1; break;
+        case nvinfer1::DataType::kBOOL:  elem_size = 1; break;
+        default: elem_size = 4; break;
+    }
+    return static_cast<size_t>(count) * elem_size;
 }
 
-void TrtEngine::ensure_buffer(int idx) {
-    size_t bytes = binding_bytes(idx);
+void TrtEngine::ensure_buffer(const std::string& name, size_t bytes) {
     if (bytes > 0) {
-        buffers_[idx].resize(bytes);
+        buffers_[name].resize(bytes);
     }
 }
 
 void TrtEngine::set_input_shape(const std::string& name,
                                 const std::vector<int>& shape) {
-    int idx = get_index(name);
     nvinfer1::Dims dims;
     dims.nbDims = static_cast<int>(shape.size());
     for (int i = 0; i < dims.nbDims; ++i) {
         dims.d[i] = shape[i];
     }
-    context_->setBindingDimensions(idx, dims);
-    shapes_[idx] = dims;
-    ensure_buffer(idx);
+    context_->setInputShape(name.c_str(), dims);
+    ensure_buffer(name, tensor_bytes(name));
 }
 
 void TrtEngine::set_input(const std::string& name, const void* host_data,
                           size_t bytes) {
-    int idx = get_index(name);
-    ensure_buffer(idx);
-    auto err = cudaMemcpy(buffers_[idx].ptr, host_data, bytes,
+    ensure_buffer(name, bytes);
+    auto err = cudaMemcpy(buffers_[name].ptr, host_data, bytes,
                           cudaMemcpyHostToDevice);
     if (err != cudaSuccess) {
         throw std::runtime_error(std::string("cudaMemcpy H2D failed: ") +
@@ -154,21 +151,21 @@ void TrtEngine::set_input(const std::string& name, const void* host_data,
 }
 
 bool TrtEngine::infer(cudaStream_t stream) {
-    // Collect device pointers
-    std::vector<void*> ptrs(buffers_.size());
-    for (size_t i = 0; i < buffers_.size(); ++i) {
-        ensure_buffer(static_cast<int>(i));
-        ptrs[i] = buffers_[i].ptr;
+    // Set tensor addresses for all IO tensors
+    int nb = engine_->getNbIOTensors();
+    for (int i = 0; i < nb; ++i) {
+        const char* tname = engine_->getIOTensorName(i);
+        ensure_buffer(tname, tensor_bytes(tname));
+        context_->setTensorAddress(tname, buffers_[tname].ptr);
     }
 
     bool ok;
     if (stream) {
-        ok = context_->enqueueV2(ptrs.data(), stream, nullptr);
+        ok = context_->enqueueV3(stream);
     } else {
-        // Create a temporary stream
         cudaStream_t tmp;
         cudaStreamCreate(&tmp);
-        ok = context_->enqueueV2(ptrs.data(), tmp, nullptr);
+        ok = context_->enqueueV3(tmp);
         cudaStreamSynchronize(tmp);
         cudaStreamDestroy(tmp);
     }
@@ -177,8 +174,11 @@ bool TrtEngine::infer(cudaStream_t stream) {
 
 void TrtEngine::get_output(const std::string& name, void* host_data,
                            size_t bytes) const {
-    int idx = get_index(name);
-    auto err = cudaMemcpy(host_data, buffers_[idx].ptr, bytes,
+    auto it = buffers_.find(name);
+    if (it == buffers_.end()) {
+        throw std::runtime_error("Unknown tensor: " + name);
+    }
+    auto err = cudaMemcpy(host_data, it->second.ptr, bytes,
                           cudaMemcpyDeviceToHost);
     if (err != cudaSuccess) {
         throw std::runtime_error(std::string("cudaMemcpy D2H failed: ") +
@@ -187,26 +187,26 @@ void TrtEngine::get_output(const std::string& name, void* host_data,
 }
 
 void* TrtEngine::device_ptr(const std::string& name) {
-    int idx = get_index(name);
-    return buffers_[idx].ptr;
+    return buffers_[name].ptr;
 }
 
 const void* TrtEngine::device_ptr(const std::string& name) const {
-    int idx = get_index(name);
-    return buffers_[idx].ptr;
+    auto it = buffers_.find(name);
+    if (it == buffers_.end()) {
+        throw std::runtime_error("Unknown tensor: " + name);
+    }
+    return it->second.ptr;
 }
 
 std::vector<int> TrtEngine::shape(const std::string& name) const {
-    int idx = get_index(name);
-    auto dims = context_->getBindingDimensions(idx);
+    auto dims = context_->getTensorShape(name.c_str());
     std::vector<int> s(dims.nbDims);
     for (int i = 0; i < dims.nbDims; ++i) s[i] = dims.d[i];
     return s;
 }
 
 int64_t TrtEngine::element_count(const std::string& name) const {
-    int idx = get_index(name);
-    auto dims = context_->getBindingDimensions(idx);
+    auto dims = context_->getTensorShape(name.c_str());
     int64_t count = 1;
     for (int d = 0; d < dims.nbDims; ++d) count *= dims.d[d];
     return count;

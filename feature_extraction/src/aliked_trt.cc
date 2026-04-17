@@ -144,6 +144,7 @@ AlikedResult AlikedDetector::detect(const cv::Mat& image_bgr) {
     sddh_.set_input_shape("feature_map",
                           {1, config_.descriptor_dim, padded_h, padded_w});
     sddh_.set_input_shape("keypoints_wh", {num_kpts, 2});
+    sddh_.set_input_shape("feature_map_hw", {2});
 
     // feature_map: copy GPU→GPU from backbone output to SDDH input
     size_t fm_bytes = static_cast<size_t>(config_.descriptor_dim) * padded_h *
@@ -156,6 +157,10 @@ AlikedResult AlikedDetector::detect(const cv::Mat& image_bgr) {
     cudaMemcpyAsync(sddh_.device_ptr("keypoints_wh"), dkd_kpts_.ptr,
                     num_kpts * 2 * sizeof(float), cudaMemcpyDeviceToDevice,
                     stream_);
+
+    // feature_map_hw: [H, W] as float
+    float fm_hw[2] = {static_cast<float>(padded_h), static_cast<float>(padded_w)};
+    sddh_.set_input("feature_map_hw", fm_hw, 2 * sizeof(float));
 
     sddh_.infer(stream_);
     cudaStreamSynchronize(stream_);
@@ -170,9 +175,10 @@ AlikedResult AlikedDetector::detect(const cv::Mat& image_bgr) {
     for (int i = 0; i < num_kpts; ++i) {
         float x = kpts_flat[i * 2 + 0];
         float y = kpts_flat[i * 2 + 1];
-        // Unpad and unscale back to original image coordinates
-        result.keypoints[i] = cv::Point2f(x / scale_, y / scale_);
+        // Keep in padded image space (for SDDH / LightGlue)
+        result.keypoints[i] = cv::Point2f(x, y);
     }
+    result.scale = scale_;
 
     // Scores
     result.scores.resize(num_kpts);
@@ -184,6 +190,14 @@ AlikedResult AlikedDetector::detect(const cv::Mat& image_bgr) {
     result.descriptors.resize(num_kpts * D);
     sddh_.get_output("descriptors", result.descriptors.data(),
                      num_kpts * D * sizeof(float));
+
+    // Sanitize NaN descriptors (FP16 precision can produce NaN in SDDH).
+    // Replace NaN with 0 so they don't poison LightGlue's attention.
+    for (int i = 0; i < num_kpts * D; ++i) {
+        if (std::isnan(result.descriptors[i])) {
+            result.descriptors[i] = 0.0f;
+        }
+    }
 
     return result;
 }

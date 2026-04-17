@@ -13,11 +13,12 @@ namespace feature_extraction {
 
 /// Result of ALIKED feature extraction for a single image.
 struct AlikedResult {
-    std::vector<cv::Point2f> keypoints;      // Pixel coordinates
+    std::vector<cv::Point2f> keypoints;      // Pixel coordinates (padded image space)
     std::vector<float> scores;               // Keypoint confidence
     std::vector<float> descriptors;          // Row-major [N, 128]
     int descriptor_dim = 128;
     int num_keypoints = 0;
+    float scale = 1.0f;                      // resize scale (padded→original: x/scale)
 };
 
 /// Configuration for the ALIKED TensorRT pipeline.

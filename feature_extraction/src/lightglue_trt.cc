@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdint>
 #include <iostream>
 #include <vector>
 
@@ -51,27 +52,19 @@ MatchResult LightGlueMatcher::match(const float* kpts0, const float* desc0,
     cudaStreamSynchronize(stream_);
 
     // Read outputs
-    // matches0: [1, N0] — index into kpts1, -1 = unmatched
-    // mscores0: [1, N0] — confidence
-    std::vector<int> matches0_raw(N0);
+    // matches0: [1, N0] — index into kpts1, -1 = unmatched  (Int64 from ONNX)
+    // mscores0: [1, N0] — confidence (float32)
+    std::vector<int64_t> matches0_i64(N0);
     std::vector<float> mscores0_raw(N0);
 
-    // LightGlue outputs matches as int64 or int32 depending on export
-    // Try reading as float first (ONNX often exports indices as float)
-    std::vector<float> matches0_float(N0);
-    engine_.get_output("matches0", matches0_float.data(),
-                       N0 * sizeof(float));
+    engine_.get_output("matches0", matches0_i64.data(),
+                       N0 * sizeof(int64_t));
     engine_.get_output("mscores0", mscores0_raw.data(),
                        N0 * sizeof(float));
 
-    // Convert float indices to int
-    for (int i = 0; i < N0; ++i) {
-        matches0_raw[i] = static_cast<int>(matches0_float[i]);
-    }
-
     // Extract valid matches
     for (int i = 0; i < N0; ++i) {
-        int j = matches0_raw[i];
+        int j = static_cast<int>(matches0_i64[i]);
         if (j >= 0 && j < N1) {
             result.matches.emplace_back(i, j);
             result.scores.push_back(mscores0_raw[i]);

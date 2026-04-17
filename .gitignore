@@ -4,3 +4,4 @@ build
 /build-*
 migration/scripts/proto/
 Voxel-SLAM-main
+*.pyc

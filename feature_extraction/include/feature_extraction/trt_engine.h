@@ -11,17 +11,6 @@
 
 namespace feature_extraction {
 
-// Custom deleter for TensorRT objects.
-struct TrtDeleter {
-    template <typename T>
-    void operator()(T* ptr) const {
-        if (ptr) ptr->destroy();
-    }
-};
-
-template <typename T>
-using TrtUniquePtr = std::unique_ptr<T, TrtDeleter>;
-
 /// RAII wrapper for a CUDA device buffer.
 struct CudaBuffer {
     void* ptr = nullptr;
@@ -38,7 +27,7 @@ struct CudaBuffer {
     void resize(size_t bytes);
 };
 
-/// TensorRT engine wrapper.
+/// TensorRT engine wrapper (TensorRT 10.x API).
 ///
 /// Manages loading a serialised engine, creating an execution context, and
 /// running inference with GPU buffers.
@@ -78,20 +67,15 @@ public:
 
 private:
     nvinfer1::ILogger* logger_ = nullptr;
-    TrtUniquePtr<nvinfer1::IRuntime> runtime_;
-    TrtUniquePtr<nvinfer1::ICudaEngine> engine_;
-    TrtUniquePtr<nvinfer1::IExecutionContext> context_;
+    std::unique_ptr<nvinfer1::IRuntime> runtime_;
+    std::unique_ptr<nvinfer1::ICudaEngine> engine_;
+    std::unique_ptr<nvinfer1::IExecutionContext> context_;
 
-    // Binding name → index in the engine.
-    std::unordered_map<std::string, int> binding_index_;
-    // Binding index → GPU buffer.
-    std::vector<CudaBuffer> buffers_;
-    // Binding index → current shape.
-    std::vector<nvinfer1::Dims> shapes_;
+    // Tensor name → GPU buffer.
+    std::unordered_map<std::string, CudaBuffer> buffers_;
 
-    int get_index(const std::string& name) const;
-    size_t binding_bytes(int idx) const;
-    void ensure_buffer(int idx);
+    void ensure_buffer(const std::string& name, size_t bytes);
+    size_t tensor_bytes(const std::string& name) const;
 };
 
 }  // namespace feature_extraction
