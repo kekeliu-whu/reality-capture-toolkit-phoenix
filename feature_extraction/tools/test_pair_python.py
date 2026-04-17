@@ -12,10 +12,13 @@ import cv2
 import torch
 import numpy as np
 
-ALIKED_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'ALIKED')
+ALIKED_DIR = os.path.join(os.path.dirname(__file__), '..', 'raw', 'ALIKED')
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.abspath(ALIKED_DIR))
 
-from nets.aliked import ALIKED
+from feature_extraction.raw.ALIKED.nets.aliked import ALIKED
 
 try:
     from lightglue import LightGlue

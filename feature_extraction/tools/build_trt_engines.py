@@ -127,15 +127,23 @@ def main():
                         help='Directory containing ONNX models')
     parser.add_argument('--output', default='feature_extraction/engines/',
                         help='Output directory for TRT engines')
-    parser.add_argument('--no-fp16', action='store_true', help='Disable FP16')
+    parser.add_argument('--no-fp16', action='store_true', help='Disable FP16 for all engines')
+    parser.add_argument('--no-fp16-backbone', action='store_true',
+                        help='Disable FP16 for backbone only (DeformConv plugin is FP16-sensitive)')
+    parser.add_argument('--only', choices=['backbone', 'sddh', 'lightglue'],
+                        help='Build only the specified engine')
     args = parser.parse_args()
 
     os.makedirs(args.output, exist_ok=True)
     fp16 = not args.no_fp16
+    fp16_backbone = fp16 and not args.no_fp16_backbone
 
-    build_aliked_backbone(args.input, args.output, fp16)
-    build_aliked_sddh(args.input, args.output, fp16)
-    build_lightglue(args.input, args.output, fp16)
+    if not args.only or args.only == 'backbone':
+        build_aliked_backbone(args.input, args.output, fp16_backbone)
+    if not args.only or args.only == 'sddh':
+        build_aliked_sddh(args.input, args.output, fp16)
+    if not args.only or args.only == 'lightglue':
+        build_lightglue(args.input, args.output, fp16)
 
     print("\nAll engines built. Ready for C++ inference.")
 

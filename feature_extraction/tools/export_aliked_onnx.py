@@ -24,7 +24,7 @@ from torch.onnx import register_custom_op_symbolic
 from torch.onnx import symbolic_helper
 
 # Add ALIKED directory to path
-ALIKED_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'ALIKED')
+ALIKED_DIR = os.path.join(os.path.dirname(__file__), '..', 'raw', 'ALIKED')
 sys.path.insert(0, os.path.abspath(ALIKED_DIR))
 
 from nets.aliked import ALIKED
@@ -94,6 +94,14 @@ def _patched_deform_forward(self, x):
     return x
 
 DeformableConv2d.forward = _patched_deform_forward
+
+# Also patch the version imported via the fully-qualified module path,
+# in case Python resolved it as a separate module object.
+try:
+    from feature_extraction.raw.ALIKED.nets.blocks import DeformableConv2d as _DC2
+    _DC2.forward = _patched_deform_forward
+except ImportError:
+    pass
 
 
 # ---------------------------------------------------------------------------
