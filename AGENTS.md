@@ -101,3 +101,64 @@ cd D:\ProjectX\project-3d\reality-capture-toolkit\ALIKED
 
 - `run.ps1`：无外置相机，不做颜色化，适用于**标定采集场景**
 - `run-ar.ps1`：含外置相机 MOV + 颜色化，适用于**实际建图场景**
+
+---
+
+### hloc SfM（ALIKED + LightGlue）
+
+用于新建 SfM 工程，执行局部特征提取、全局检索配对、时序配对融合、
+LightGlue 匹配，并导出 COLMAP 格式重建结果。
+
+#### 环境安装（Windows + Python 3.12）
+
+在项目根目录执行：
+
+```powershell
+cd D:\ProjectX\project-3d\reality-capture-toolkit
+& .\.venv\Scripts\python.exe -m pip install --upgrade pip
+& .\.venv\Scripts\python.exe -m pip install "git+https://github.com/cvg/Hierarchical-Localization.git"
+& .\.venv\Scripts\python.exe -m pip install pycolmap
+```
+
+说明：`hloc` 会自动安装 `lightglue` 依赖。
+
+#### 代理设置（模型下载）
+
+首次运行会下载 ALIKED / LightGlue / NetVLAD 权重。网络受限时需设置代理：
+
+```powershell
+$env:HTTP_PROXY="http://127.0.0.1:7890"
+$env:HTTPS_PROXY="http://127.0.0.1:7890"
+```
+
+若手动下载模型，Windows 下可用：
+
+```powershell
+curl.exe -k -L "<MODEL_URL>" -o "<OUTPUT_FILE>"
+```
+
+#### 关键权重缓存路径
+
+- `C:\Users\rick\.cache\torch\hub\checkpoints\aliked-n16.pth`
+- `C:\Users\rick\.cache\torch\hub\checkpoints\aliked_lightglue.pth`
+- `C:\Users\rick\.cache\torch\hub\netvlad\VGG16-NetVLAD-Pitts30K.mat`
+
+#### 运行命令（示例）
+
+```powershell
+cd D:\ProjectX\project-3d\reality-capture-toolkit
+$env:HTTP_PROXY="http://127.0.0.1:7890"
+$env:HTTPS_PROXY="http://127.0.0.1:7890"
+& .\.venv\Scripts\python.exe feature_extraction\hloc_sfm.py `
+  --image_dir "D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\ground_undistort\fisheye_x5_VID_20251017_113930_00_052_cam0" `
+  --output_dir "D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\ground_undistort\fisheye_x5_VID_20251017_113930_00_052_cam0\hloc_output"
+```
+
+#### 输出说明
+
+- 局部特征：`hloc_output/feats-aliked-n16.h5`
+- 全局描述子：`hloc_output/global-feats-netvlad.h5`
+- 配对文件：`hloc_output/pairs-retrieval-netvlad20.txt`、
+  `hloc_output/pairs-seq.txt`、`hloc_output/pairs-merged.txt`
+- 匹配结果：`hloc_output/matches-aliked-lightglue.h5`
+- COLMAP 重建：`hloc_output/sfm/`
