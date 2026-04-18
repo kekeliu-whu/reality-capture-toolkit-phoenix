@@ -1,3 +1,5 @@
 /models
 engines
 compare_output
+raw/ALIKED/custom_ops/get_patches*.exp
+raw/ALIKED/custom_ops/get_patches*.lib

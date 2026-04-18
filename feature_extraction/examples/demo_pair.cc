@@ -172,6 +172,7 @@ int main(int argc, char** argv) {
     std::string image0_path, image1_path, output_path = "matches.jpg";
     std::string dump_dir;
     std::string pair_list;  // batch mode: file with lines "img0 img1 dump_dir"
+    int max_edge = 1600;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -191,6 +192,8 @@ int main(int argc, char** argv) {
             dump_dir = argv[++i];
         else if (arg == "--pair-list" && i + 1 < argc)
             pair_list = argv[++i];
+        else if (arg == "--max-edge" && i + 1 < argc)
+            max_edge = std::stoi(argv[++i]);
     }
 
     bool single_mode = !image0_path.empty() && !image1_path.empty();
@@ -218,7 +221,7 @@ int main(int argc, char** argv) {
     config.aliked.sddh_engine = sddh_path;
     config.aliked.dkd.top_k = 5000;
     config.aliked.dkd.scores_th = 0.2f;
-    config.aliked.max_edge = 1600;
+    config.aliked.max_edge = max_edge;
     config.lightglue.engine_path = lightglue_path;
 
     FeaturePipeline pipeline;

@@ -11,6 +11,7 @@ for _pattern in ('get_patches*.so', 'get_patches*.pyd'):
     for _f in file_path.parent.glob(_pattern):
         torch.ops.load_library(_f)
         _loaded = True
+
 if not _loaded:
     raise FileNotFoundError(f'custom_ops shared library not found in {file_path.parent}')
 

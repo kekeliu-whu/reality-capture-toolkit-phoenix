@@ -127,7 +127,7 @@ def run_python_pair(model, lg, device, img0_bgr, img1_bgr, max_edge=1600):
 # ---------------------------------------------------------------------------
 # C++ TRT pipeline (batch mode: single process, loads engines once)
 # ---------------------------------------------------------------------------
-def run_cpp_batch(exe_path, engine_paths, pairs, output_dir):
+def run_cpp_batch(exe_path, engine_paths, pairs, output_dir, max_edge=1600):
     """Run C++ in batch mode via --pair-list. Returns list of result dicts."""
     pair_list_path = os.path.join(output_dir, 'pair_list.txt')
     dump_dirs = []
@@ -144,6 +144,7 @@ def run_cpp_batch(exe_path, engine_paths, pairs, output_dir):
         '--sddh', engine_paths['sddh'],
         '--lightglue', engine_paths['lightglue'],
         '--pair-list', pair_list_path,
+        '--max-edge', str(max_edge),
     ]
 
     env = os.environ.copy()
@@ -305,6 +306,8 @@ def main():
                         help='Directory with numbered JPG images')
     parser.add_argument('--n-pairs', type=int, default=10,
                         help='Number of consecutive pairs to test')
+    parser.add_argument('--warmup', type=int, default=2,
+                        help='Number of initial pairs to exclude from summary')
     parser.add_argument('--start', type=int, default=None,
                         help='Starting image number (default: first found)')
     parser.add_argument('--step', type=int, default=1,
@@ -409,7 +412,8 @@ def main():
 
     # --- Run all C++ pairs in batch ---
     print("\nRunning C++ pipeline in batch mode...")
-    cpp_results = run_cpp_batch(cpp_exe, engine_paths, pairs, args.output_dir)
+    cpp_results = run_cpp_batch(cpp_exe, engine_paths, pairs, args.output_dir,
+                                max_edge=args.max_edge)
     if cpp_results is None:
         print("C++ batch failed!")
         return
@@ -488,12 +492,13 @@ def main():
               f"{py_total_ms:>7.0f} {cpp_total_ms:>7.0f}")
 
     # Aggregate
-    if results:
+    measured_results = results[args.warmup:] if len(results) > args.warmup else []
+    if measured_results:
         print(f"{'='*80}")
-        n = len(results)
-        avg = lambda key: sum(r[key] for r in results) / n
+        n = len(measured_results)
+        avg = lambda key: sum(r[key] for r in measured_results) / n
 
-        print(f"\n{'SUMMARY':>20s}   (over {n} pairs)")
+        print(f"\n{'SUMMARY':>20s}   (over {n} pairs, after {args.warmup} warmup)")
         print(f"  Avg keypoints:      Py={avg('py_n0'):.0f}/{avg('py_n1'):.0f}  "
               f"C++={avg('cpp_n0'):.0f}/{avg('cpp_n1'):.0f}")
         print(f"  Keypoint overlap:   {avg('kpt_overlap'):.1%}  "
@@ -509,11 +514,32 @@ def main():
         print(f"    Matching:         Py={avg('py_match_ms'):.0f}ms  "
               f"C++={avg('cpp_match_ms'):.0f}ms")
 
+        py_extract_per_image_ms = (avg('py_det0_ms') + avg('py_det1_ms')) / 2.0
+        py_match_per_pair_ms = avg('py_match_ms')
+        py_pair_total_ms = avg('py_total_ms')
+        py_extract_tps = 1000.0 / py_extract_per_image_ms
+        py_match_tps = 1000.0 / py_match_per_pair_ms
+        py_pair_tps = 1000.0 / py_pair_total_ms
+
+        cpp_extract_per_image_ms = (avg('cpp_det0_ms') + avg('cpp_det1_ms')) / 2.0
+        cpp_match_per_pair_ms = avg('cpp_match_ms')
+        cpp_pair_total_ms = avg('cpp_total_ms')
+        cpp_extract_tps = 1000.0 / cpp_extract_per_image_ms
+        cpp_match_tps = 1000.0 / cpp_match_per_pair_ms
+        cpp_pair_tps = 1000.0 / cpp_pair_total_ms
+
+        print(f"  Stage TPS (Python): extract={py_extract_tps:.2f} img/s  "
+              f"match={py_match_tps:.2f} pair/s  total={py_pair_tps:.2f} pair/s")
+        print(f"  Stage TPS (C++):    extract={cpp_extract_tps:.2f} img/s  "
+              f"match={cpp_match_tps:.2f} pair/s  total={cpp_pair_tps:.2f} pair/s")
+
         # Save JSON
         json_path = os.path.join(args.output_dir, 'comparison_results.json')
         with open(json_path, 'w') as f:
             json.dump(results, f, indent=2)
         print(f"\nDetailed results saved to {json_path}")
+    elif results:
+        print(f"Need more than {args.warmup} pairs to compute summary")
 
 
 if __name__ == '__main__':

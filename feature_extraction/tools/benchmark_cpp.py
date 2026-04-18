@@ -1,4 +1,4 @@
-"""Benchmark C++ TRT pipeline: run N pairs, parse timing, report statistics."""
+"""Benchmark C++ TRT pipeline and report extraction / matching throughput."""
 import argparse
 import glob
 import os
@@ -19,6 +19,7 @@ def main():
     parser.add_argument('--step', type=int, default=1)
     parser.add_argument('--cpp-exe', default=None)
     parser.add_argument('--engine-dir', default='feature_extraction/engines')
+    parser.add_argument('--max-edge', type=int, default=1600)
     args = parser.parse_args()
 
     images = sorted(glob.glob(os.path.join(args.image_dir, '*.jpg')))
@@ -74,11 +75,13 @@ def main():
             '--sddh', engine_paths['sddh'],
             '--lightglue', engine_paths['lightglue'],
             '--pair-list', pair_list_path,
+            '--max-edge', str(args.max_edge),
         ]
 
         env = os.environ.copy()
         trt_bin = r'C:\Program Files\TensorRT-10.16.1.11\bin'
         env['PATH'] = trt_bin + ';' + env.get('PATH', '')
+        env['PROFILE'] = '1'
 
         print("Running C++ pipeline...")
         proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
@@ -87,7 +90,7 @@ def main():
         print(f"FAILED:\n{proc.stderr}")
         return
 
-    # Parse timing per pair — handles both GPU-optimized and legacy output
+    # Parse timing per pair — handles both GPU-optimized and legacy output.
     records = []
     cur = {}
     for line in proc.stdout.splitlines():
@@ -124,6 +127,47 @@ def main():
     if cur:
         records.append(cur)
 
+    # Parse PROFILE lines from stderr. In GPU batch mode, steady-state pairs use
+    # the cached-left-image path, so per-pair extraction is det1 only.
+    profile_records = []
+    for line in proc.stderr.splitlines():
+        line = line.strip()
+        if '[PROFILE]' not in line:
+            continue
+
+        cached = 'det0=cached' in line
+        if cached:
+            match = re.search(
+                r'det0=cached det1=([\d.]+)ms match=([\d.]+)ms '
+                r'total=([\d.]+)ms', line)
+            if not match:
+                continue
+            profile_records.append({
+                'cached': True,
+                'det1_profile_ms': float(match.group(1)),
+                'match_profile_ms': float(match.group(2)),
+                'total_profile_ms': float(match.group(3)),
+            })
+            continue
+
+        match = re.search(
+            r'det0=([\d.]+)ms det1=([\d.]+)ms match=([\d.]+)ms '
+            r'total=([\d.]+)ms', line)
+        if not match:
+            continue
+        profile_records.append({
+            'cached': False,
+            'det0_profile_ms': float(match.group(1)),
+            'det1_profile_ms': float(match.group(2)),
+            'match_profile_ms': float(match.group(3)),
+            'total_profile_ms': float(match.group(4)),
+        })
+
+    for idx, prof in enumerate(profile_records):
+        if idx >= len(records):
+            break
+        records[idx].update(prof)
+
     if len(records) < args.warmup + 1:
         print(f"Only {len(records)} pairs parsed, need > {args.warmup}")
         return
@@ -136,6 +180,7 @@ def main():
     # Detect whether GPU-optimized or legacy format
     has_split = 'det0' in measured[0]
     has_total = 'total_ms' in measured[0]
+    has_profile = 'match_profile_ms' in measured[0]
 
     n0 = np.array([r.get('n0', 0) for r in measured])
     n1 = np.array([r.get('n1', 0) for r in measured])
@@ -159,7 +204,14 @@ def main():
     print("=" * 72)
     print()
 
-    if has_split:
+    if has_profile:
+        extract_ms = np.array([r['det1_profile_ms'] for r in measured])
+        match_ms = np.array([r['match_profile_ms'] for r in measured])
+        total = np.array([r['total_profile_ms'] for r in measured])
+        print(f"{'Extraction (per image)':>25s}:  {fmt_stats(extract_ms)}")
+        print(f"{'Matching (per pair)':>25s}:  {fmt_stats(match_ms)}")
+        print(f"{'Total (per pair)':>25s}:  {fmt_stats(total)}")
+    elif has_split:
         det0 = np.array([r['det0'] for r in measured])
         det1 = np.array([r['det1'] for r in measured])
         det_all = np.concatenate([det0, det1])
@@ -181,13 +233,35 @@ def main():
 
     # FPS
     mean_total = np.mean(total)
-    fps = 1000.0 / mean_total if mean_total > 0 else 0
-    print(f"Throughput: {fps:.2f} pairs/sec  "
+    pair_tps = 1000.0 / mean_total if mean_total > 0 else 0
+    print(f"Pair throughput: {pair_tps:.2f} pairs/sec  "
           f"({mean_total:.1f} ms/pair)")
+
+    if has_profile:
+        mean_extract = np.mean(extract_ms)
+        mean_match = np.mean(match_ms)
+        extract_tps = 1000.0 / mean_extract if mean_extract > 0 else 0
+        match_tps = 1000.0 / mean_match if mean_match > 0 else 0
+        print(f"Extract TPS: {extract_tps:.2f} images/sec  "
+              f"({mean_extract:.2f} ms/image)")
+        print(f"Match TPS:   {match_tps:.2f} pairs/sec  "
+              f"({mean_match:.2f} ms/pair)")
     print()
 
     # Per-pair table
-    if has_split:
+    if has_profile:
+        hdr = (f"{'#':>4s} | {'Extract':>8s} {'Match':>8s} {'Total':>8s} | "
+               f"{'Kpts0':>5s} {'Kpts1':>5s} {'Matches':>7s} {'Cached':>6s}")
+        print(hdr)
+        print('-' * len(hdr))
+        for i, r in enumerate(measured):
+            print(f"{i:>4d} | {r['det1_profile_ms']:>8.1f} "
+                  f"{r['match_profile_ms']:>8.1f} "
+                  f"{r['total_profile_ms']:>8.1f} | "
+                  f"{r.get('n0',0):>5d} {r.get('n1',0):>5d} "
+                  f"{r.get('matches',0):>7d} "
+                  f"{str(r.get('cached', False)):>6s}")
+    elif has_split:
         hdr = (f"{'#':>4s} | {'Det0':>8s} {'Det1':>8s} {'Match':>8s} "
                f"{'Total':>8s} | {'Kpts0':>5s} {'Kpts1':>5s} {'Matches':>7s}")
         print(hdr)
