@@ -1,4 +1,4 @@
-from feature_extraction.raw.ALIKED.nets.aliked import *
+from nets.aliked import *
 from copy import deepcopy
 from thop import profile
 from thop.vision.calc_func import calculate_conv2d_flops, l_prod

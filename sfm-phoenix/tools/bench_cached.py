@@ -6,7 +6,7 @@ import glob
 imgdir = sys.argv[1] if len(sys.argv) > 1 else r'D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\ground_undistort\fisheye_x5_VID_20251017_113930_00_052_cam0'
 n_pairs = int(sys.argv[2]) if len(sys.argv) > 2 else 22
 warmup = int(sys.argv[3]) if len(sys.argv) > 3 else 2
-lg_engine = sys.argv[4] if len(sys.argv) > 4 else 'feature_extraction/engines/lightglue_fp16.engine'
+lg_engine = sys.argv[4] if len(sys.argv) > 4 else 'sfm-phoenix/engines/lightglue_fp16.engine'
 
 images = sorted(glob.glob(os.path.join(imgdir, '*.jpg')),
                 key=lambda p: int(re.search(r'(\d+)\.jpg$', p).group(1)))
@@ -14,7 +14,7 @@ start_idx = next(i for i, p in enumerate(images) if '000006.jpg' in p)
 pairs = [(images[start_idx + i], images[start_idx + i + 1])
          for i in range(n_pairs)]
 
-exe = r'feature_extraction\build\Release\demo_feature_matching.exe'
+exe = r'sfm-phoenix\build\Release\demo_feature_matching.exe'
 
 with tempfile.TemporaryDirectory() as tmp:
     pf = os.path.join(tmp, 'pairs.txt')
@@ -22,8 +22,8 @@ with tempfile.TemporaryDirectory() as tmp:
         for a, b in pairs:
             f.write(f'{a} {b}\n')
     cmd = [exe,
-           '--backbone', 'feature_extraction/engines/aliked_backbone.engine',
-           '--sddh', 'feature_extraction/engines/aliked_sddh.engine',
+            '--backbone', 'sfm-phoenix/engines/aliked_backbone.engine',
+            '--sddh', 'sfm-phoenix/engines/aliked_sddh.engine',
            '--lightglue', lg_engine,
            '--pair-list', pf]
     env = os.environ.copy()

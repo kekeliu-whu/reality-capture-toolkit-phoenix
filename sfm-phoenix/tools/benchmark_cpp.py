@@ -18,7 +18,7 @@ def main():
     parser.add_argument('--start', type=int, default=6)
     parser.add_argument('--step', type=int, default=1)
     parser.add_argument('--cpp-exe', default=None)
-    parser.add_argument('--engine-dir', default='feature_extraction/engines')
+    parser.add_argument('--engine-dir', default='sfm-phoenix/engines')
     parser.add_argument('--max-edge', type=int, default=1600)
     args = parser.parse_args()
 
@@ -50,7 +50,7 @@ def main():
     if args.cpp_exe:
         cpp_exe = args.cpp_exe
     else:
-        cpp_exe = os.path.join('feature_extraction', 'build', 'Release',
+        cpp_exe = os.path.join('sfm-phoenix', 'build', 'Release',
                                'demo_feature_matching.exe')
     if not os.path.isfile(cpp_exe):
         print(f"C++ exe not found: {cpp_exe}")

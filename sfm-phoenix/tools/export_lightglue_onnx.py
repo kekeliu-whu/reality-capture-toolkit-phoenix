@@ -7,8 +7,8 @@ LightGlue requires modifications for static-graph export:
   - Flatten dict-based I/O to plain tensors
 
 Usage:
-    python feature_extraction/tools/export_lightglue_onnx.py \
-        --output feature_extraction/models/
+    python sfm-phoenix/tools/export_lightglue_onnx.py \
+        --output sfm-phoenix/models/
 """
 
 import os
@@ -146,7 +146,7 @@ def main():
     parser = argparse.ArgumentParser(description='Export LightGlue to ONNX')
     parser.add_argument('--features', default='aliked', choices=['aliked', 'superpoint', 'disk'])
     parser.add_argument('--device', default='cuda')
-    parser.add_argument('--output', default='feature_extraction/models/')
+    parser.add_argument('--output', default='sfm-phoenix/models/')
     parser.add_argument('--opset', type=int, default=17)
     args = parser.parse_args()
 

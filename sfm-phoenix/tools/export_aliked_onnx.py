@@ -7,9 +7,9 @@ Exports two ONNX models:
 
 Usage:
     cd ALIKED
-    python ../feature_extraction/tools/export_aliked_onnx.py \
+    python ../sfm-phoenix/tools/export_aliked_onnx.py \
         --model aliked-n16rot \
-        --output ../feature_extraction/models/
+        --output ../sfm-phoenix/models/
 """
 
 import os
@@ -372,7 +372,7 @@ def main():
     parser.add_argument('--model', default='aliked-n16rot',
                         choices=['aliked-t16', 'aliked-n16', 'aliked-n16rot', 'aliked-n32'])
     parser.add_argument('--device', default='cuda')
-    parser.add_argument('--output', default='../feature_extraction/models/',
+    parser.add_argument('--output', default='../sfm-phoenix/models/',
                         help='Output directory for ONNX models')
     parser.add_argument('--opset', type=int, default=19)
     args = parser.parse_args()

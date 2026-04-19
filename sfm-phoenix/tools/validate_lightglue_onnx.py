@@ -92,7 +92,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--image0', required=True)
     parser.add_argument('--image1', required=True)
-    parser.add_argument('--engine', default='feature_extraction/engines/lightglue.engine')
+    parser.add_argument('--engine', default='sfm-phoenix/engines/lightglue.engine')
     parser.add_argument('--max-edge', type=int, default=1600)
     parser.add_argument('--top-k', type=int, default=5000)
     parser.add_argument('--device', default='cuda')

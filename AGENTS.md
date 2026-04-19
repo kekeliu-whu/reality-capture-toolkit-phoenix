@@ -8,38 +8,91 @@
 
 ### ALIKED 特征点检测
 
+> 当前仓库中的 ALIKED 代码位于 `sfm-phoenix/raw/ALIKED/`，不是顶层 `ALIKED/`。
+> Python 侧实际验证通过的环境为 `C:\Users\rick\miniconda3\envs\cusfm\python.exe`。
+
 #### 编译 custom_ops CUDA 扩展
 
 每次修改 `.cu` / `.cpp` 源码后需重新编译：
 
 ```powershell
-cd D:\ProjectX\project-3d\reality-capture-toolkit\ALIKED\custom_ops
-& d:\ProjectX\project-3d\reality-capture-toolkit\.venv\Scripts\python.exe setup.py build_ext --inplace
+cd D:\codes\reality-capture-toolkit\sfm-phoenix\raw\ALIKED\custom_ops
+$env:DISTUTILS_USE_SDK = "1"
+& C:\Users\rick\miniconda3\envs\cusfm\python.exe setup.py build_ext --inplace
 ```
 
 编译成功后会生成 `get_patches.cp312-win_amd64.pyd`。
 
-#### 测试 demo（10 帧快速验证）
+#### 推荐测试命令
+
+先设置运行环境，避免 `torch` 导入时缺少 `shm.dll` / `cudnn64_9.dll`：
 
 ```powershell
-cd D:\ProjectX\project-3d\reality-capture-toolkit\ALIKED
-& d:\ProjectX\project-3d\reality-capture-toolkit\.venv\Scripts\python.exe demo_seq.py `
-  D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\ground_undistort\fisheye_x5_VID_20251017_113930_00_052_cam0 `
-  --n_frames 10 `
-  --output output_test
+$env:KMP_DUPLICATE_LIB_OK = "TRUE"
+$env:PYTHONPATH = "D:\codes\reality-capture-toolkit"
+$env:PATH = "d:\codes\tmp\colmap-x64-windows-cuda\bin;" +
+            "C:\Program Files\NVIDIA\CUDNN\v9.21\bin\12.9\x64;" +
+            "C:\Users\rick\miniconda3\envs\cusfm;" +
+            "C:\Users\rick\miniconda3\envs\cusfm\Library\bin;" +
+            "C:\Users\rick\miniconda3\envs\cusfm\Scripts;" +
+            "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\bin;" +
+            "C:\Program Files\TensorRT-10.16.1.11\bin;" +
+            $env:PATH
 ```
 
-预期输出：
+#### Python 单对参考
 
-- 特征提取 median ≈ 104ms（第 1 帧因 GPU 冷启动约 4s，属正常）
-- 特征匹配 median ≈ 122ms
-- 每帧约 5000 个关键点，≥3000 个 matches
+```powershell
+& C:\Users\rick\miniconda3\envs\cusfm\python.exe sfm-phoenix\tools\test_pair_python.py `
+  --image0 d:\codes\tmp\images\00006_5.jpg `
+  --image1 d:\codes\tmp\images\00007_6.jpg `
+  --output sfm-phoenix\compare_output\matches_py.jpg
+```
+
+#### Python / C++ 对比测试
+
+```powershell
+& C:\Users\rick\miniconda3\envs\cusfm\python.exe sfm-phoenix\tools\compare_py_cpp.py `
+  --image-dir d:\codes\tmp\images `
+  --n-pairs 12 `
+  --warmup 2 `
+  --start 6 `
+  --max-edge 1024 `
+  --output-dir sfm-phoenix\compare_output
+```
+
+2026-04-19 实测结果：
+
+- Python / C++ 都稳定输出约 5000 个关键点
+- 关键点重叠率约 94.2%，median dist 约 0.07 px
+- 描述子余弦相似度约 0.9856
+- 匹配数约为 Py 3421 / C++ 3618
+- 匹配重叠率约 91.4%
+- 总耗时约为 Py 188 ms / pair，C++ compare 模式 110 ms / pair
+
+#### C++ 纯性能测试
+
+```powershell
+& C:\Users\rick\miniconda3\envs\cusfm\python.exe sfm-phoenix\tools\benchmark_cpp.py `
+  --image-dir d:\codes\tmp\images `
+  --n-pairs 12 `
+  --warmup 2 `
+  --start 6 `
+  --max-edge 1024
+```
+
+2026-04-19 实测结果：
+
+- 单图提取约 33.0 ms
+- 单对匹配约 40.0 ms
+- 单对总耗时约 72.9 ms
+- 稳态吞吐约 13.72 pairs/s
 
 #### 注意事项
 
-- 必须在 `ALIKED/` 目录下执行 `demo_seq.py`，否则找不到 `nets/` 模块
+- Python 入口现已统一按 `sfm-phoenix/raw/ALIKED` 作为包根导入；不要再使用旧的 `feature_extraction.raw.ALIKED` 包路径
 - `custom_ops` 编译依赖 MSVC + CUDA 12.8，需在 VS 2022 Developer 环境下运行
-- 测试数据路径：`D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\ground_undistort\fisheye_x5_VID_20251017_113930_00_052_cam0`
+- 当前快速测试数据路径：`d:\codes\tmp\images`
 
 ---
 
@@ -114,10 +167,10 @@ LightGlue 匹配，并导出 COLMAP 格式重建结果。
 在项目根目录执行：
 
 ```powershell
-cd D:\ProjectX\project-3d\reality-capture-toolkit
-& .\.venv\Scripts\python.exe -m pip install --upgrade pip
-& .\.venv\Scripts\python.exe -m pip install "git+https://github.com/cvg/Hierarchical-Localization.git"
-& .\.venv\Scripts\python.exe -m pip install pycolmap
+cd D:\codes\reality-capture-toolkit
+& C:\Users\rick\miniconda3\envs\cusfm\python.exe -m pip install --upgrade pip
+& C:\Users\rick\miniconda3\envs\cusfm\python.exe -m pip install "git+https://github.com/cvg/Hierarchical-Localization.git"
+& C:\Users\rick\miniconda3\envs\cusfm\python.exe -m pip install pycolmap
 ```
 
 说明：`hloc` 会自动安装 `lightglue` 依赖。
@@ -146,10 +199,10 @@ curl.exe -k -L "<MODEL_URL>" -o "<OUTPUT_FILE>"
 #### 运行命令（示例）
 
 ```powershell
-cd D:\ProjectX\project-3d\reality-capture-toolkit
+cd D:\codes\reality-capture-toolkit
 $env:HTTP_PROXY="http://127.0.0.1:7890"
 $env:HTTPS_PROXY="http://127.0.0.1:7890"
-& .\.venv\Scripts\python.exe feature_extraction\hloc_sfm.py `
+& C:\Users\rick\miniconda3\envs\cusfm\python.exe sfm-phoenix\hloc_sfm.py `
   --image_dir "D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\ground_undistort\fisheye_x5_VID_20251017_113930_00_052_cam0" `
   --output_dir "D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\ground_undistort\fisheye_x5_VID_20251017_113930_00_052_cam0\hloc_output"
 ```

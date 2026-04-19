@@ -8,7 +8,7 @@ import logging
 import argparse
 import numpy as np
 from tqdm import tqdm
-from feature_extraction.raw.ALIKED.nets.aliked import ALIKED
+from nets.aliked import ALIKED
 try:
     from lightglue import LightGlue
     LIGHTGLUE_AVAILABLE = True

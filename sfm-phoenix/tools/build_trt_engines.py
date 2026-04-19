@@ -2,9 +2,9 @@
 Convert ONNX models to TensorRT engines with FP16 optimisation.
 
 Usage:
-    python feature_extraction/tools/build_trt_engines.py \
-        --input feature_extraction/models/ \
-        --output feature_extraction/engines/
+    python sfm-phoenix/tools/build_trt_engines.py \
+        --input sfm-phoenix/models/ \
+        --output sfm-phoenix/engines/
 """
 
 import os
@@ -123,9 +123,9 @@ def build_lightglue(input_dir: str, output_dir: str, fp16: bool):
 
 def main():
     parser = argparse.ArgumentParser(description='Build TensorRT engines from ONNX')
-    parser.add_argument('--input', default='feature_extraction/models/',
+    parser.add_argument('--input', default='sfm-phoenix/models/',
                         help='Directory containing ONNX models')
-    parser.add_argument('--output', default='feature_extraction/engines/',
+    parser.add_argument('--output', default='sfm-phoenix/engines/',
                         help='Output directory for TRT engines')
     parser.add_argument('--no-fp16', action='store_true', help='Disable FP16 for all engines')
     parser.add_argument('--no-fp16-backbone', action='store_true',

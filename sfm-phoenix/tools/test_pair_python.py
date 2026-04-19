@@ -3,7 +3,7 @@ Run ALIKED + LightGlue on an image pair (Python reference) for comparison with C
 
 Usage:
     cd ALIKED
-    python ../feature_extraction/tools/test_pair_python.py \
+    python ../sfm-phoenix/tools/test_pair_python.py \
         --image0 path/to/img0.jpg --image1 path/to/img1.jpg \
         --output matches_py.jpg
 """
@@ -18,7 +18,7 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.abspath(ALIKED_DIR))
 
-from feature_extraction.raw.ALIKED.nets.aliked import ALIKED
+from nets.aliked import ALIKED
 
 try:
     from lightglue import LightGlue

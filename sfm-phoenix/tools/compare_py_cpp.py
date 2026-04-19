@@ -11,12 +11,12 @@ Outputs per-pair and aggregate statistics for:
 
 Usage:
     cd <repo_root>
-    python feature_extraction/tools/compare_py_cpp.py \
+    python sfm-phoenix/tools/compare_py_cpp.py \
         --image-dir <dir_with_numbered_jpgs> \
         --n-pairs 10 \
         [--start 6] \
         [--step 1] \
-        [--output-dir feature_extraction/compare_output]
+        [--output-dir sfm-phoenix/compare_output]
 """
 
 import argparse
@@ -44,7 +44,7 @@ sys.path.insert(0, os.path.abspath(ALIKED_DIR))
 
 def load_python_models(device='cuda'):
     import torch
-    from feature_extraction.raw.ALIKED.nets.aliked import ALIKED
+    from nets.aliked import ALIKED
     from lightglue import LightGlue
 
     model = ALIKED(model_name='aliked-n32', device=device,
@@ -312,11 +312,11 @@ def main():
                         help='Starting image number (default: first found)')
     parser.add_argument('--step', type=int, default=1,
                         help='Step between consecutive frames')
-    parser.add_argument('--output-dir', default='feature_extraction/compare_output',
+    parser.add_argument('--output-dir', default='sfm-phoenix/compare_output',
                         help='Output directory for results')
     parser.add_argument('--cpp-exe', default=None,
                         help='Path to demo_feature_matching.exe')
-    parser.add_argument('--engine-dir', default='feature_extraction/engines',
+    parser.add_argument('--engine-dir', default='sfm-phoenix/engines',
                         help='Directory containing TRT engine files')
     parser.add_argument('--lightglue-engine', default=None,
                         help='Override LightGlue engine path (e.g. lightglue_fp16.engine)')
@@ -363,7 +363,7 @@ def main():
     if args.cpp_exe:
         cpp_exe = args.cpp_exe
     else:
-        cpp_exe = os.path.join('feature_extraction', 'build', 'Release',
+        cpp_exe = os.path.join('sfm-phoenix', 'build', 'Release',
                                'demo_feature_matching.exe')
     if not os.path.isfile(cpp_exe):
         print(f"C++ exe not found: {cpp_exe}")
