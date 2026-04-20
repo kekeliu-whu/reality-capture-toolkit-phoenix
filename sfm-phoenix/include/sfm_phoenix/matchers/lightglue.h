@@ -1,11 +1,11 @@
 #pragma once
 
-#include "feature_extraction/trt_engine.h"
+#include "sfm_phoenix/internal/trt_engine.h"
 
 #include <vector>
 #include <string>
 
-namespace feature_extraction {
+namespace sfm_phoenix {
 
 /// Result of LightGlue matching between two keypoint sets.
 struct MatchResult {
@@ -18,6 +18,7 @@ struct MatchResult {
 struct LightGlueConfig {
     std::string engine_path;   // Path to lightglue.engine
     int descriptor_dim = 128;
+    int max_matches = 4000;
 };
 
 /// LightGlue feature matcher using TensorRT.
@@ -50,4 +51,4 @@ private:
     MatchResult run_and_decode(int N0, int N1);
 };
 
-}  // namespace feature_extraction
+}  // namespace sfm_phoenix

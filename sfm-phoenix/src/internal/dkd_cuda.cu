@@ -1,4 +1,4 @@
-#include "feature_extraction/dkd_cuda.h"
+#include "sfm_phoenix/internal/dkd_cuda.h"
 
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
@@ -7,7 +7,7 @@
 #include <cmath>
 #include <algorithm>
 
-namespace feature_extraction {
+namespace sfm_phoenix {
 namespace dkd {
 
 // --------------------------------------------------------------------------
@@ -340,4 +340,4 @@ size_t nms_buf_size(int H, int W) {
 }
 
 }  // namespace dkd
-}  // namespace feature_extraction
+}  // namespace sfm_phoenix

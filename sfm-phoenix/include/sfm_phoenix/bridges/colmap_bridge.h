@@ -1,14 +1,14 @@
 #pragma once
 
-#include "feature_extraction/aliked_trt.h"
-#include "feature_extraction/lightglue_trt.h"
+#include "sfm_phoenix/extractors/aliked.h"
+#include "sfm_phoenix/matchers/lightglue.h"
 
 #include <colmap/feature/types.h>
 #include <colmap/scene/camera.h>
 
 #include <vector>
 
-namespace feature_extraction {
+namespace sfm_phoenix {
 
 colmap::FeatureKeypoints ToColmapKeypoints(const AlikedResult& result);
 
@@ -26,4 +26,4 @@ colmap::FeatureMatches ToColmapMatches(const MatchResult& result);
 
 float ComputeExtractionScale(const colmap::Camera& camera, int max_edge);
 
-}  // namespace feature_extraction
+}  // namespace sfm_phoenix

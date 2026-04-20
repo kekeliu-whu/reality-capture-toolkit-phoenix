@@ -1,7 +1,7 @@
 #pragma once
 
-#include "feature_extraction/dkd_cuda.h"
-#include "feature_extraction/trt_engine.h"
+#include "sfm_phoenix/internal/dkd_cuda.h"
+#include "sfm_phoenix/internal/trt_engine.h"
 
 #include <opencv2/core.hpp>
 
@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace feature_extraction {
+namespace sfm_phoenix {
 
 /// Result of ALIKED feature extraction for a single image.
 struct AlikedResult {
@@ -89,4 +89,4 @@ private:
     int run_pipeline(const cv::Mat& image_bgr);
 };
 
-}  // namespace feature_extraction
+}  // namespace sfm_phoenix

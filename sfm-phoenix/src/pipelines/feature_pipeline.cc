@@ -1,10 +1,10 @@
-#include "feature_extraction/feature_pipeline.h"
+#include "sfm_phoenix/pipelines/feature_pipeline.h"
 
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
 
-namespace feature_extraction {
+namespace sfm_phoenix {
 
 bool FeaturePipeline::init(const PipelineConfig& config) {
     if (!detector_.init(config.aliked)) {
@@ -129,4 +129,4 @@ MatchResult FeaturePipeline::detect_and_match(const cv::Mat& image0_bgr,
     return match(r0, r1);
 }
 
-}  // namespace feature_extraction
+}  // namespace sfm_phoenix

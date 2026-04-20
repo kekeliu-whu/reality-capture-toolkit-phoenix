@@ -98,7 +98,7 @@ DeformableConv2d.forward = _patched_deform_forward
 # Also patch the version imported via the fully-qualified module path,
 # in case Python resolved it as a separate module object.
 try:
-    from feature_extraction.raw.ALIKED.nets.blocks import DeformableConv2d as _DC2
+    from sfm_phoenix.raw.ALIKED.nets.blocks import DeformableConv2d as _DC2
     _DC2.forward = _patched_deform_forward
 except ImportError:
     pass

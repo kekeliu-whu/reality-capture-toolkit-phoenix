@@ -1,15 +1,16 @@
-#include "feature_extraction/trt_engine.h"
+#include "sfm_phoenix/internal/trt_engine.h"
 
 #include <NvInfer.h>
 #include <NvInferPlugin.h>
 
 #include <cassert>
 #include <fstream>
-#include <iostream>
+#include <sstream>
 #include <numeric>
+#include <spdlog/spdlog.h>
 #include <stdexcept>
 
-namespace feature_extraction {
+namespace sfm_phoenix {
 
 // --------------------------------------------------------------------------
 // Simple TRT logger
@@ -18,12 +19,29 @@ class TrtLoggerImpl : public nvinfer1::ILogger {
 public:
     void log(Severity severity, const char* msg) noexcept override {
         if (severity <= Severity::kWARNING) {
-            std::cerr << "[TRT] " << msg << std::endl;
+            spdlog::warn("[TRT] {}", msg);
         }
     }
 };
 
 static TrtLoggerImpl g_trt_logger;
+
+namespace {
+
+std::string DimsToString(const nvinfer1::Dims& dims) {
+    std::ostringstream stream;
+    stream << '[';
+    for (int i = 0; i < dims.nbDims; ++i) {
+        if (i > 0) {
+            stream << ',';
+        }
+        stream << dims.d[i];
+    }
+    stream << ']';
+    return stream.str();
+}
+
+}  // namespace
 
 // Ensure TRT plugins are registered (one-time init)
 static bool g_plugins_initialized = []() {
@@ -72,7 +90,7 @@ bool TrtEngine::load(const std::string& engine_path) {
     // Read serialised engine
     std::ifstream file(engine_path, std::ios::binary | std::ios::ate);
     if (!file.is_open()) {
-        std::cerr << "Cannot open engine: " << engine_path << std::endl;
+        spdlog::error("Cannot open engine: {}", engine_path);
         return false;
     }
     auto fsize = file.tellg();
@@ -87,8 +105,7 @@ bool TrtEngine::load(const std::string& engine_path) {
 
     engine_.reset(runtime_->deserializeCudaEngine(data.data(), data.size()));
     if (!engine_) {
-        std::cerr << "Failed to deserialise engine: " << engine_path
-                  << std::endl;
+        spdlog::error("Failed to deserialise engine: {}", engine_path);
         return false;
     }
 
@@ -96,8 +113,7 @@ bool TrtEngine::load(const std::string& engine_path) {
     if (!context_) return false;
 
     int nb = engine_->getNbIOTensors();
-    std::cout << "Loaded TRT engine: " << engine_path << " (" << nb
-              << " IO tensors)" << std::endl;
+    spdlog::info("Loaded TRT engine: {} ({} IO tensors)", engine_path, nb);
     return true;
 }
 
@@ -135,7 +151,16 @@ void TrtEngine::set_input_shape(const std::string& name,
     for (int i = 0; i < dims.nbDims; ++i) {
         dims.d[i] = shape[i];
     }
-    context_->setInputShape(name.c_str(), dims);
+    if (!context_->setInputShape(name.c_str(), dims)) {
+        const auto max_dims =
+            engine_->getProfileShape(name.c_str(),
+                                     0,
+                                     nvinfer1::OptProfileSelector::kMAX);
+        throw std::runtime_error("TensorRT input shape for '" + name +
+                                 "'=" + DimsToString(dims) +
+                                 " exceeds profile max " +
+                                 DimsToString(max_dims));
+    }
     ensure_buffer(name, tensor_bytes(name));
 }
 
@@ -232,6 +257,17 @@ std::vector<int> TrtEngine::shape(const std::string& name) const {
     return s;
 }
 
+std::vector<int> TrtEngine::max_profile_shape(const std::string& name) const {
+    auto dims = engine_->getProfileShape(name.c_str(),
+                                         0,
+                                         nvinfer1::OptProfileSelector::kMAX);
+    std::vector<int> s(dims.nbDims);
+    for (int i = 0; i < dims.nbDims; ++i) {
+        s[i] = dims.d[i];
+    }
+    return s;
+}
+
 int64_t TrtEngine::element_count(const std::string& name) const {
     auto dims = context_->getTensorShape(name.c_str());
     int64_t count = 1;
@@ -239,4 +275,4 @@ int64_t TrtEngine::element_count(const std::string& name) const {
     return count;
 }
 
-}  // namespace feature_extraction
+}  // namespace sfm_phoenix

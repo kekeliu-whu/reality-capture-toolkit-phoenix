@@ -1,12 +1,12 @@
-#include "feature_extraction/lightglue_trt.h"
+#include "sfm_phoenix/matchers/lightglue.h"
 
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
-#include <iostream>
+#include <spdlog/spdlog.h>
 #include <vector>
 
-namespace feature_extraction {
+namespace sfm_phoenix {
 
 LightGlueMatcher::~LightGlueMatcher() {
     if (stream_) cudaStreamDestroy(stream_);
@@ -16,7 +16,24 @@ bool LightGlueMatcher::init(const LightGlueConfig& config) {
     config_ = config;
 
     if (!engine_.load(config.engine_path)) {
-        std::cerr << "Failed to load LightGlue engine" << std::endl;
+        spdlog::error("Failed to load LightGlue engine: {}",
+                      config.engine_path);
+        return false;
+    }
+
+    const auto kpts0_max_shape = engine_.max_profile_shape("kpts0");
+    const auto kpts1_max_shape = engine_.max_profile_shape("kpts1");
+    const int supported_keypoints =
+        (kpts0_max_shape.size() >= 2 && kpts1_max_shape.size() >= 2)
+            ? std::min(kpts0_max_shape[1], kpts1_max_shape[1])
+            : 0;
+    if (supported_keypoints > 0 && config_.max_matches > supported_keypoints) {
+        spdlog::error(
+            "Configured Phoenix max_matches={} exceeds LightGlue engine "
+            "profile max {}. Rebuild {} with a larger keypoint profile.",
+            config_.max_matches,
+            supported_keypoints,
+            config.engine_path);
         return false;
     }
 
@@ -28,7 +45,7 @@ MatchResult LightGlueMatcher::run_and_decode(int N0, int N1) {
     MatchResult result;
 
     if (!engine_.infer(stream_)) {
-        std::cerr << "LightGlue inference failed" << std::endl;
+        spdlog::error("LightGlue inference failed");
         return result;
     }
     cudaStreamSynchronize(stream_);
@@ -42,14 +59,43 @@ MatchResult LightGlueMatcher::run_and_decode(int N0, int N1) {
     engine_.get_output("mscores0", mscores0_raw.data(),
                        N0 * sizeof(float));
 
+    struct ScoredMatch {
+        int index0;
+        int index1;
+        float score;
+    };
+    std::vector<ScoredMatch> valid_matches;
+    valid_matches.reserve(N0);
+
     // Extract valid matches
     for (int i = 0; i < N0; ++i) {
         int j = static_cast<int>(matches0_i64[i]);
         if (j >= 0 && j < N1) {
-            result.matches.emplace_back(i, j);
-            result.scores.push_back(mscores0_raw[i]);
+            valid_matches.push_back({i, j, mscores0_raw[i]});
         }
     }
+
+    if (config_.max_matches > 0 &&
+        static_cast<int>(valid_matches.size()) > config_.max_matches) {
+        auto by_score_desc = [](const ScoredMatch& lhs, const ScoredMatch& rhs) {
+            return lhs.score > rhs.score;
+        };
+        auto cutoff = valid_matches.begin() + config_.max_matches;
+        std::nth_element(valid_matches.begin(),
+                         cutoff,
+                         valid_matches.end(),
+                         by_score_desc);
+        valid_matches.resize(config_.max_matches);
+        std::sort(valid_matches.begin(), valid_matches.end(), by_score_desc);
+    }
+
+    result.matches.reserve(valid_matches.size());
+    result.scores.reserve(valid_matches.size());
+    for (const auto& match : valid_matches) {
+        result.matches.emplace_back(match.index0, match.index1);
+        result.scores.push_back(match.score);
+    }
+
     result.num_matches = static_cast<int>(result.matches.size());
     return result;
 }
@@ -99,4 +145,4 @@ MatchResult LightGlueMatcher::match_gpu(const void* d_kpts0,
     return result;
 }
 
-}  // namespace feature_extraction
+}  // namespace sfm_phoenix

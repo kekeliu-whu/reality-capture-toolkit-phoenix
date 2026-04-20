@@ -1,11 +1,14 @@
-#include "feature_extraction/aliked_trt.h"
-#include "feature_extraction/colmap_bridge.h"
+#include "sfm_phoenix/bridges/colmap_bridge.h"
+#include "sfm_phoenix/extractors/aliked.h"
 
 #include <colmap/controllers/image_reader.h>
 #include <colmap/controllers/option_manager.h>
 #include <colmap/scene/database.h>
 
+#include <migration/logging.h>
+
 #include <opencv2/imgcodecs.hpp>
+#include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -74,8 +77,15 @@ void ImportImages(const colmap::ImageReaderOptions& reader_options,
     colmap::Bitmap bitmap;
     const auto status =
         image_reader.Next(&rig, &camera, &image, &pose_prior, &bitmap, nullptr);
-    if (status == colmap::ImageReader::Status::SUCCESS ||
-        status == colmap::ImageReader::Status::IMAGE_EXISTS) {
+    if (status == colmap::ImageReader::Status::SUCCESS) {
+      const auto image_id = database->WriteImage(image);
+      if (pose_prior.IsValid()) {
+        database->WritePosePrior(image_id, pose_prior);
+      }
+      continue;
+    }
+
+    if (status == colmap::ImageReader::Status::IMAGE_EXISTS) {
       continue;
     }
 
@@ -121,6 +131,9 @@ std::vector<colmap::Image> CollectTargetImages(
 
 int main(int argc, char** argv) {
   try {
+    InitSpdLog();
+
+    constexpr int kMaxExtractedFeatures = 5000;
     std::filesystem::path image_list_path;
     int camera_mode = -1;
     std::string backbone_engine;
@@ -143,6 +156,13 @@ int main(int argc, char** argv) {
     options.AddDefaultOption("Phoenix.scores_th", &scores_th);
     options.AddDefaultOption("Phoenix.skip_existing", &skip_existing);
     options.Parse(argc, argv);
+
+    if (top_k > kMaxExtractedFeatures) {
+      spdlog::warn("Phoenix.top_k={} exceeds hard cap {}, clamping",
+                   top_k,
+                   kMaxExtractedFeatures);
+      top_k = kMaxExtractedFeatures;
+    }
 
     colmap::ImageReaderOptions reader_options = *options.image_reader;
     reader_options.image_path = *options.image_path;
@@ -167,16 +187,17 @@ int main(int argc, char** argv) {
     const std::vector<colmap::Image> images =
         CollectTargetImages(*database, reader_options.image_names);
 
-    feature_extraction::AlikedConfig detector_config;
+    sfm_phoenix::AlikedConfig detector_config;
     detector_config.backbone_engine = backbone_engine;
     detector_config.sddh_engine = sddh_engine;
     detector_config.max_edge = max_edge;
     detector_config.dkd.top_k = top_k;
+    detector_config.dkd.n_limit = kMaxExtractedFeatures;
     detector_config.dkd.scores_th = static_cast<float>(scores_th);
 
-    feature_extraction::AlikedDetector detector;
+    sfm_phoenix::AlikedDetector detector;
     if (!detector.init(detector_config)) {
-      std::cerr << "Failed to initialize Phoenix ALIKED detector" << std::endl;
+      spdlog::error("Failed to initialize Phoenix ALIKED detector");
       return EXIT_FAILURE;
     }
 
@@ -189,11 +210,12 @@ int main(int argc, char** argv) {
       const bool has_descriptors = database->ExistsDescriptors(image_id);
       if (has_keypoints || has_descriptors) {
         if (skip_existing) {
+          spdlog::info("Skip existing image: {}", image.Name());
           ++num_skipped;
           continue;
         }
-        std::cerr << "Image already has features in database: "
-                  << image.Name() << std::endl;
+        spdlog::error("Image already has features in database: {}",
+                      image.Name());
         database->EndTransaction();
         return EXIT_FAILURE;
       }
@@ -203,29 +225,31 @@ int main(int argc, char** argv) {
       const cv::Mat image_bgr =
           cv::imread(image_path.string(), cv::IMREAD_COLOR);
       if (image_bgr.empty()) {
-        std::cerr << "Cannot read image: " << image_path << std::endl;
+        spdlog::error("Cannot read image: {}", image_path.string());
         database->EndTransaction();
         return EXIT_FAILURE;
       }
 
       const auto result = detector.detect(image_bgr);
-      const auto keypoints = feature_extraction::ToColmapKeypoints(result);
-      const auto descriptors = feature_extraction::ToColmapDescriptors(result);
+      const auto keypoints = sfm_phoenix::ToColmapKeypoints(result);
+      const auto descriptors = sfm_phoenix::ToColmapDescriptors(result);
 
       database->WriteKeypoints(image_id, keypoints);
       database->WriteDescriptors(image_id, descriptors);
       ++num_extracted;
 
-      std::cout << "Extracted " << result.num_keypoints << " features for "
-                << image.Name() << std::endl;
+      spdlog::info("Extracted {} features for {}",
+                   result.num_keypoints,
+                   image.Name());
     }
     database->EndTransaction();
 
-    std::cout << "Phoenix feature extraction finished. extracted="
-              << num_extracted << " skipped=" << num_skipped << std::endl;
+    spdlog::info("Phoenix feature extraction finished. extracted={} skipped={}",
+                 num_extracted,
+                 num_skipped);
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {
-    std::cerr << error.what() << std::endl;
+    spdlog::error("{}", error.what());
     return EXIT_FAILURE;
   }
 }

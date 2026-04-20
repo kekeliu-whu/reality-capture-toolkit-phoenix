@@ -1,6 +1,6 @@
-#include "feature_extraction/preprocess_cuda.h"
+#include "sfm_phoenix/internal/preprocess_cuda.h"
 
-namespace feature_extraction {
+namespace sfm_phoenix {
 
 __global__ void bgr_hwc_to_rgb_chw_kernel(const unsigned char* __restrict__ src,
                                            float* __restrict__ dst,
@@ -30,4 +30,4 @@ void bgr_hwc_to_rgb_chw_gpu(const unsigned char* src_bgr_hwc,
         src_bgr_hwc, dst_chw_gpu, H, W);
 }
 
-}  // namespace feature_extraction
+}  // namespace sfm_phoenix

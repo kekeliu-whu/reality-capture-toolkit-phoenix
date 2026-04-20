@@ -211,7 +211,7 @@ void InitSpdLog() {
   auto file_sink    = std::make_shared<rsa_encrypt_base64_sink<std::mutex>>();
 
   std::vector<spdlog::sink_ptr> sinks;
-#ifndef NDEBUG
+#if !defined(NDEBUG) || defined(MIGRATION_PLAINTEXT_LOGGING)
   sinks.push_back(console_sink);
 #else
   sinks.push_back(file_sink);

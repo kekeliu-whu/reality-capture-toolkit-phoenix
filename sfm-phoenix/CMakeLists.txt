@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(feature_extraction VERSION 0.1.0 LANGUAGES CXX CUDA)
+project(sfm_phoenix VERSION 0.1.0 LANGUAGES C CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -56,6 +56,8 @@ find_package(gflags CONFIG REQUIRED)
 find_package(OpenCV CONFIG REQUIRED)
 find_package(Eigen3 3.4 REQUIRED)
 find_package(COLMAP CONFIG REQUIRED)
+find_package(spdlog CONFIG REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 # TensorRT — search common install locations
 # Set TensorRT_ROOT via cmake -DTensorRT_ROOT=... or environment variable
@@ -99,31 +101,32 @@ if(NOT NVINFER_LIB)
 endif()
 
 # --------------------------------------------------------------------------
-# Library: feature_extraction
+# Library: sfm_phoenix
 # --------------------------------------------------------------------------
 set(FE_SOURCES
-    src/trt_engine.cc
-    src/aliked_trt.cc
-    src/colmap_bridge.cc
-    src/lightglue_trt.cc
-    src/feature_pipeline.cc
+    src/internal/trt_engine.cc
+    src/extractors/aliked.cc
+    src/bridges/colmap_bridge.cc
+    src/matchers/lightglue.cc
+    src/pipelines/feature_pipeline.cc
 )
 set(FE_CUDA_SOURCES
-    src/dkd_cuda.cu
-    src/preprocess_cuda.cu
+    src/internal/dkd_cuda.cu
+    src/internal/preprocess_cuda.cu
 )
 
-add_library(feature_extraction STATIC ${FE_SOURCES} ${FE_CUDA_SOURCES})
+add_library(sfm_phoenix STATIC ${FE_SOURCES} ${FE_CUDA_SOURCES})
 
-target_include_directories(feature_extraction PUBLIC
+target_include_directories(sfm_phoenix PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../migration/include
     ${TRT_INCLUDE_DIR}
     ${CUDA_INCLUDE_DIRS}
     ${COLMAP_INCLUDE_DIRS}
     ${OpenCV_INCLUDE_DIRS}
 )
 
-target_link_libraries(feature_extraction PUBLIC
+target_link_libraries(sfm_phoenix PUBLIC
     colmap::colmap
     OpenMP::OpenMP_CXX
     gflags::gflags
@@ -137,33 +140,50 @@ target_link_libraries(feature_extraction PUBLIC
 )
 
 if(MSVC)
-    target_compile_options(feature_extraction PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/MP /utf-8 /W3>)
-    target_compile_options(feature_extraction PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>)
+    target_compile_options(sfm_phoenix PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/MP /utf-8 /W3>)
+    target_compile_options(sfm_phoenix PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>)
 else()
-    target_compile_options(feature_extraction PRIVATE -Wall -Wextra)
+    target_compile_options(sfm_phoenix PRIVATE -Wall -Wextra)
 endif()
 
 # --------------------------------------------------------------------------
 # Demo executable
 # --------------------------------------------------------------------------
+add_library(phoenix_logging STATIC ../migration/src/logging.cc)
+target_include_directories(phoenix_logging PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/../migration/include
+)
+target_compile_definitions(phoenix_logging PRIVATE
+    $<$<CONFIG:RelWithDebInfo>:MIGRATION_PLAINTEXT_LOGGING=1>
+)
+target_link_libraries(phoenix_logging PUBLIC
+    spdlog::spdlog_header_only
+    OpenSSL::Crypto
+)
+
+if(MSVC)
+    target_compile_options(phoenix_logging PRIVATE /utf-8 /W3)
+endif()
+
 add_executable(demo_feature_matching examples/demo_pair.cc)
-target_link_libraries(demo_feature_matching PRIVATE feature_extraction)
+target_link_libraries(demo_feature_matching PRIVATE sfm_phoenix phoenix_logging)
 
 add_executable(phoenix_feature_extractor tools/phoenix_feature_extractor.cc)
-target_link_libraries(phoenix_feature_extractor PRIVATE feature_extraction)
+target_link_libraries(phoenix_feature_extractor PRIVATE sfm_phoenix phoenix_logging)
 
 add_executable(phoenix_matcher tools/phoenix_matcher.cc)
-target_link_libraries(phoenix_matcher PRIVATE feature_extraction)
+target_link_libraries(phoenix_matcher PRIVATE sfm_phoenix phoenix_logging)
 
 # --------------------------------------------------------------------------
 # Install
 # --------------------------------------------------------------------------
 install(TARGETS
-    feature_extraction
+    sfm_phoenix
+    phoenix_logging
     demo_feature_matching
     phoenix_feature_extractor
     phoenix_matcher
     ARCHIVE DESTINATION lib
     RUNTIME DESTINATION bin
 )
-install(DIRECTORY include/feature_extraction DESTINATION include)
+install(DIRECTORY include/sfm_phoenix DESTINATION include)

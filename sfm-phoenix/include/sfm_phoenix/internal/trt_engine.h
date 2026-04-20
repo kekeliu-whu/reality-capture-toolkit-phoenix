@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace feature_extraction {
+namespace sfm_phoenix {
 
 /// RAII wrapper for a CUDA device buffer.
 struct CudaBuffer {
@@ -72,6 +72,9 @@ public:
     /// Get the current shape of a binding (after set_input_shape / infer).
     std::vector<int> shape(const std::string& name) const;
 
+    /// Get the max shape allowed by optimization profile 0 for a tensor.
+    std::vector<int> max_profile_shape(const std::string& name) const;
+
     /// Get the element count of a binding.
     int64_t element_count(const std::string& name) const;
 
@@ -91,4 +94,4 @@ private:
     size_t tensor_bytes(const std::string& name) const;
 };
 
-}  // namespace feature_extraction
+}  // namespace sfm_phoenix

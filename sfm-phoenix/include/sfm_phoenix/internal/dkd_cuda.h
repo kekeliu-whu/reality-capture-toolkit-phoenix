@@ -4,7 +4,7 @@
 
 #include <vector>
 
-namespace feature_extraction {
+namespace sfm_phoenix {
 namespace dkd {
 
 /// Parameters for the DKD (Differentiable Keypoint Detector) post-processing.
@@ -84,4 +84,4 @@ void detect_keypoints(const float* score_map, int H, int W,
 size_t nms_buf_size(int H, int W);
 
 }  // namespace dkd
-}  // namespace feature_extraction
+}  // namespace sfm_phoenix

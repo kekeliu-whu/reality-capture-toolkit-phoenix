@@ -1,14 +1,16 @@
-#include "feature_extraction/colmap_bridge.h"
-#include "feature_extraction/lightglue_trt.h"
+#include "sfm_phoenix/bridges/colmap_bridge.h"
+#include "sfm_phoenix/matchers/lightglue.h"
 
 #include <colmap/controllers/option_manager.h>
 #include <colmap/estimators/two_view_geometry.h>
 #include <colmap/scene/database.h>
 
+#include <migration/logging.h>
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
+#include <spdlog/spdlog.h>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -126,7 +128,7 @@ const CachedFeatures& LoadFeatures(
     throw std::runtime_error("Keypoint / descriptor count mismatch for image: " +
                              image_it->second.Name());
   }
-  if (feature_extraction::DescriptorDim(descriptors) != 128) {
+  if (sfm_phoenix::DescriptorDim(descriptors) != 128) {
     throw std::runtime_error(
         "Image does not contain Phoenix 128D float descriptors: " +
         image_it->second.Name());
@@ -136,9 +138,9 @@ const CachedFeatures& LoadFeatures(
   loaded.num_keypoints = static_cast<int>(keypoints.size());
   loaded.colmap_keypoints = keypoints;
   const float scale =
-      feature_extraction::ComputeExtractionScale(camera_it->second, max_edge);
-  loaded.keypoints = feature_extraction::ToMatcherKeypoints(keypoints, scale);
-  loaded.descriptors = feature_extraction::ToMatcherDescriptors(descriptors);
+      sfm_phoenix::ComputeExtractionScale(camera_it->second, max_edge);
+  loaded.keypoints = sfm_phoenix::ToMatcherKeypoints(keypoints, scale);
+  loaded.descriptors = sfm_phoenix::ToMatcherDescriptors(descriptors);
 
   const auto [it, inserted] = cache->emplace(image_id, std::move(loaded));
   return it->second;
@@ -148,9 +150,13 @@ const CachedFeatures& LoadFeatures(
 
 int main(int argc, char** argv) {
   try {
+    InitSpdLog();
+
+    constexpr int kMaxMatchedFeatures = 4000;
     std::filesystem::path pair_list_path;
     std::string lightglue_engine;
     int max_edge = 1600;
+    int max_matches = kMaxMatchedFeatures;
     bool skip_existing = true;
     bool overwrite_existing = false;
 
@@ -159,9 +165,17 @@ int main(int argc, char** argv) {
     options.AddDefaultOption("pair_list_path", &pair_list_path);
     options.AddRequiredOption("Phoenix.lightglue_engine", &lightglue_engine);
     options.AddDefaultOption("Phoenix.max_edge", &max_edge);
+    options.AddDefaultOption("Phoenix.max_matches", &max_matches);
     options.AddDefaultOption("Phoenix.skip_existing", &skip_existing);
     options.AddDefaultOption("Phoenix.overwrite_existing", &overwrite_existing);
     options.Parse(argc, argv);
+
+    if (max_matches > kMaxMatchedFeatures) {
+      spdlog::warn("Phoenix.max_matches={} exceeds hard cap {}, clamping",
+                   max_matches,
+                   kMaxMatchedFeatures);
+      max_matches = kMaxMatchedFeatures;
+    }
 
     auto database = colmap::Database::Open(*options.database_path);
     const std::vector<colmap::Image> all_images = LoadImages(*database);
@@ -186,13 +200,13 @@ int main(int argc, char** argv) {
       pairs = ReadPairs(pair_list_path, image_ids);
     }
 
-    feature_extraction::LightGlueConfig matcher_config;
+    sfm_phoenix::LightGlueConfig matcher_config;
     matcher_config.engine_path = lightglue_engine;
+    matcher_config.max_matches = max_matches;
 
-    feature_extraction::LightGlueMatcher matcher;
+    sfm_phoenix::LightGlueMatcher matcher;
     if (!matcher.init(matcher_config)) {
-      std::cerr << "Failed to initialize Phoenix LightGlue matcher"
-                << std::endl;
+      spdlog::error("Failed to initialize Phoenix LightGlue matcher");
       return EXIT_FAILURE;
     }
 
@@ -206,6 +220,9 @@ int main(int argc, char** argv) {
       const bool has_geometry =
           database->ExistsInlierMatches(image_id1, image_id2);
       if ((has_matches || has_geometry) && skip_existing && !overwrite_existing) {
+        spdlog::info("Skip existing pair: {} <-> {}",
+                     images_by_id.at(image_id1).Name(),
+                     images_by_id.at(image_id2).Name());
         ++num_skipped_pairs;
         continue;
       }
@@ -245,7 +262,7 @@ int main(int argc, char** argv) {
                                          features2.keypoints.data(),
                                          features2.descriptors.data(),
                                          features2.num_keypoints);
-      const auto colmap_matches = feature_extraction::ToColmapMatches(matches);
+      const auto colmap_matches = sfm_phoenix::ToColmapMatches(matches);
       if (matches.num_matches > 0) {
         database->WriteMatches(image_id1, image_id2, colmap_matches);
 
@@ -263,18 +280,19 @@ int main(int argc, char** argv) {
       }
       ++num_matched_pairs;
 
-      std::cout << "Matched " << images_by_id.at(image_id1).Name() << " <-> "
-                << images_by_id.at(image_id2).Name() << ": "
-                << matches.num_matches << std::endl;
+      spdlog::info("Matched {} <-> {}: {}",
+                   images_by_id.at(image_id1).Name(),
+                   images_by_id.at(image_id2).Name(),
+                   matches.num_matches);
     }
     database->EndTransaction();
 
-    std::cout << "Phoenix matching finished. matched_pairs="
-              << num_matched_pairs << " skipped_pairs=" << num_skipped_pairs
-              << std::endl;
+    spdlog::info("Phoenix matching finished. matched_pairs={} skipped_pairs={}",
+                 num_matched_pairs,
+                 num_skipped_pairs);
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {
-    std::cerr << error.what() << std::endl;
+    spdlog::error("{}", error.what());
     return EXIT_FAILURE;
   }
 }

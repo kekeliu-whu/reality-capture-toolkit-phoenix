@@ -1,11 +1,11 @@
-#include "feature_extraction/colmap_bridge.h"
+#include "sfm_phoenix/bridges/colmap_bridge.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
 
-namespace feature_extraction {
+namespace sfm_phoenix {
 
 colmap::FeatureKeypoints ToColmapKeypoints(const AlikedResult& result) {
   colmap::FeatureKeypoints keypoints(result.keypoints.size());
@@ -85,4 +85,4 @@ float ComputeExtractionScale(const colmap::Camera& camera, const int max_edge) {
                       static_cast<float>(longest_edge));
 }
 
-}  // namespace feature_extraction
+}  // namespace sfm_phoenix

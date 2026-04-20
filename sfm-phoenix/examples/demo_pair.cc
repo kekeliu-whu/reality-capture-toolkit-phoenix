@@ -11,7 +11,7 @@
  *       --output matches.jpg
  */
 
-#include "feature_extraction/feature_pipeline.h"
+#include "sfm_phoenix/pipelines/feature_pipeline.h"
 
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
@@ -23,7 +23,7 @@
 #include <sstream>
 #include <string>
 
-using namespace feature_extraction;
+using namespace sfm_phoenix;
 
 static cv::Mat draw_matches(const cv::Mat& img0, const cv::Mat& img1,
                             const AlikedResult& r0, const AlikedResult& r1,

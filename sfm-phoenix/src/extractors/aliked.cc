@@ -1,5 +1,5 @@
-#include "feature_extraction/aliked_trt.h"
-#include "feature_extraction/preprocess_cuda.h"
+#include "sfm_phoenix/extractors/aliked.h"
+#include "sfm_phoenix/internal/preprocess_cuda.h"
 
 #include <opencv2/imgproc.hpp>
 
@@ -8,10 +8,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
-#include <iostream>
+#include <spdlog/spdlog.h>
 #include <vector>
 
-namespace feature_extraction {
+namespace sfm_phoenix {
 
 AlikedDetector::~AlikedDetector() {
     if (stream_) cudaStreamDestroy(stream_);
@@ -21,18 +21,30 @@ bool AlikedDetector::init(const AlikedConfig& config) {
     config_ = config;
 
     if (!backbone_.load(config.backbone_engine)) {
-        std::cerr << "Failed to load backbone engine" << std::endl;
+        spdlog::error("Failed to load backbone engine: {}",
+                      config.backbone_engine);
         return false;
     }
     if (!sddh_.load(config.sddh_engine)) {
-        std::cerr << "Failed to load SDDH engine" << std::endl;
+        spdlog::error("Failed to load SDDH engine: {}", config.sddh_engine);
+        return false;
+    }
+
+    int max_kpts = config_.dkd.top_k > 0 ? config_.dkd.top_k : config_.dkd.n_limit;
+    const auto sddh_max_shape = sddh_.max_profile_shape("keypoints_wh");
+    if (!sddh_max_shape.empty() && max_kpts > sddh_max_shape[0]) {
+        spdlog::error(
+            "Configured Phoenix top_k={} exceeds SDDH engine profile max {}. "
+            "Rebuild {} with a larger keypoints_wh profile.",
+            max_kpts,
+            sddh_max_shape[0],
+            config.sddh_engine);
         return false;
     }
 
     cudaStreamCreate(&stream_);
 
     // Pre-allocate DKD buffers for max keypoints
-    int max_kpts = config_.dkd.top_k > 0 ? config_.dkd.top_k : config_.dkd.n_limit;
     dkd_kpts_.resize(max_kpts * 2 * sizeof(float));
     dkd_scores_.resize(max_kpts * sizeof(float));
     dkd_count_.resize(sizeof(int));
@@ -178,11 +190,11 @@ int AlikedDetector::run_pipeline(const cv::Mat& image_bgr) {
         auto ms = [](auto a, auto b) {
             return std::chrono::duration<double, std::milli>(b - a).count();
         };
-        std::cerr << "  [PROFILE] preproc=" << ms(tp[0], tp[1])
-                  << "ms backbone=" << ms(tp[1], tp[2])
-                  << "ms dkd=" << ms(tp[2], tp[3])
-                  << "ms sddh=" << ms(tp[3], tp[4]) << "ms"
-                  << std::endl;
+        spdlog::info("[PROFILE] preproc={}ms backbone={}ms dkd={}ms sddh={}ms",
+                 ms(tp[0], tp[1]),
+                 ms(tp[1], tp[2]),
+                 ms(tp[2], tp[3]),
+                 ms(tp[3], tp[4]));
     }
     // Don't sync here — let the caller decide when to sync.
 
@@ -272,4 +284,4 @@ AlikedResult AlikedDetector::detect(const cv::Mat& image_bgr) {
     return result;
 }
 
-}  // namespace feature_extraction
+}  // namespace sfm_phoenix

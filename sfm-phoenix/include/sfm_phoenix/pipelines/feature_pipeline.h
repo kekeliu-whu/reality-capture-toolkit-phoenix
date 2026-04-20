@@ -1,14 +1,14 @@
 #pragma once
 
-#include "feature_extraction/aliked_trt.h"
-#include "feature_extraction/lightglue_trt.h"
+#include "sfm_phoenix/extractors/aliked.h"
+#include "sfm_phoenix/matchers/lightglue.h"
 
 #include <opencv2/core.hpp>
 
 #include <memory>
 #include <string>
 
-namespace feature_extraction {
+namespace sfm_phoenix {
 
 /// Complete feature extraction + matching pipeline.
 ///
@@ -61,4 +61,4 @@ private:
     LightGlueMatcher matcher_;
 };
 
-}  // namespace feature_extraction
+}  // namespace sfm_phoenix
