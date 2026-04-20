@@ -15,4 +15,9 @@ void bgr_hwc_to_rgb_chw_gpu(const unsigned char* src_bgr_hwc,
                              int H, int W,
                              cudaStream_t stream);
 
+void rgb_hwc_to_rgb_chw_gpu(const unsigned char* src_rgb_hwc,
+                             float* dst_chw_gpu,
+                             int H, int W,
+                             cudaStream_t stream);
+
 }  // namespace sfm_phoenix

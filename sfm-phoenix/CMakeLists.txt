@@ -169,7 +169,12 @@ endif()
 add_executable(demo_feature_matching examples/demo_pair.cc)
 target_link_libraries(demo_feature_matching PRIVATE sfm_phoenix phoenix_logging)
 
-add_executable(phoenix tools/phoenix.cc)
+add_executable(phoenix
+    tools/phoenix_main.cc
+    tools/phoenix/phoenix_common.cc
+    tools/phoenix/phoenix_extractor.cc
+    tools/phoenix/phoenix_matcher.cc
+    tools/phoenix/phoenix_automatic.cc)
 target_link_libraries(phoenix PRIVATE sfm_phoenix phoenix_logging)
 
 set(PHOENIX_RUNTIME_ASSETS

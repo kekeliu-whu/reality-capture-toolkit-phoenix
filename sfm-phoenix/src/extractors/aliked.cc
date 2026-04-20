@@ -64,9 +64,10 @@ bool AlikedDetector::init(const AlikedConfig& config) {
     return true;
 }
 
-void AlikedDetector::preprocess(const cv::Mat& image_bgr,
+void AlikedDetector::preprocess(const cv::Mat& image,
+                                const bool input_is_rgb,
                                 int& padded_h, int& padded_w) {
-    cv::Mat img = image_bgr;
+    cv::Mat img = image;
 
     // Resize by max edge
     if (config_.max_edge > 0) {
@@ -103,7 +104,7 @@ void AlikedDetector::preprocess(const cv::Mat& image_bgr,
 
     if (!img.isContinuous()) img = img.clone();
 
-    // Upload BGR uint8 to GPU and convert to CHW RGB float [0,1]
+    // Upload uint8 HWC image to GPU and convert to CHW RGB float [0,1].
     size_t img_bytes = static_cast<size_t>(padded_h) * padded_w * 3;
     preprocess_buf_.resize(img_bytes);
     cudaMemcpyAsync(preprocess_buf_.ptr, img.data, img_bytes,
@@ -112,12 +113,19 @@ void AlikedDetector::preprocess(const cv::Mat& image_bgr,
     backbone_.set_input_shape("image", {1, 3, padded_h, padded_w});
     float* dst_gpu = static_cast<float*>(backbone_.device_ptr("image"));
 
-    bgr_hwc_to_rgb_chw_gpu(
-        static_cast<const unsigned char*>(preprocess_buf_.ptr),
-        dst_gpu, padded_h, padded_w, stream_);
+    if (input_is_rgb) {
+        rgb_hwc_to_rgb_chw_gpu(
+            static_cast<const unsigned char*>(preprocess_buf_.ptr),
+            dst_gpu, padded_h, padded_w, stream_);
+    } else {
+        bgr_hwc_to_rgb_chw_gpu(
+            static_cast<const unsigned char*>(preprocess_buf_.ptr),
+            dst_gpu, padded_h, padded_w, stream_);
+    }
 }
 
-int AlikedDetector::run_pipeline(const cv::Mat& image_bgr) {
+int AlikedDetector::run_pipeline(const cv::Mat& image,
+                                 const bool input_is_rgb) {
     static bool profile = (std::getenv("PROFILE") != nullptr);
     std::chrono::high_resolution_clock::time_point tp[5];
 
@@ -125,7 +133,7 @@ int AlikedDetector::run_pipeline(const cv::Mat& image_bgr) {
 
     // 1. Preprocess
     int padded_h, padded_w;
-    preprocess(image_bgr, padded_h, padded_w);
+    preprocess(image, input_is_rgb, padded_h, padded_w);
 
     if (profile) {
         cudaStreamSynchronize(stream_);
@@ -205,7 +213,7 @@ GpuDetectResult AlikedDetector::detect_gpu(const cv::Mat& image_bgr) {
     GpuDetectResult result;
     result.descriptor_dim = config_.descriptor_dim;
 
-    int num_kpts = run_pipeline(image_bgr);
+    int num_kpts = run_pipeline(image_bgr, false);
     if (num_kpts <= 0) return result;
 
     result.num_keypoints = num_kpts;
@@ -238,7 +246,7 @@ AlikedResult AlikedDetector::detect(const cv::Mat& image_bgr) {
     AlikedResult result;
     result.descriptor_dim = config_.descriptor_dim;
 
-    int num_kpts = run_pipeline(image_bgr);
+    int num_kpts = run_pipeline(image_bgr, false);
     if (num_kpts <= 0) return result;
 
     result.num_keypoints = num_kpts;
@@ -275,6 +283,52 @@ AlikedResult AlikedDetector::detect(const cv::Mat& image_bgr) {
     }
 
     // Sanitize NaN descriptors
+    for (int i = 0; i < num_kpts * D; ++i) {
+        if (std::isnan(result.descriptors[i])) {
+            result.descriptors[i] = 0.0f;
+        }
+    }
+
+    return result;
+}
+
+AlikedResult AlikedDetector::detect_rgb(const cv::Mat& image_rgb) {
+    AlikedResult result;
+    result.descriptor_dim = config_.descriptor_dim;
+
+    int num_kpts = run_pipeline(image_rgb, true);
+    if (num_kpts <= 0) return result;
+
+    result.num_keypoints = num_kpts;
+    result.scale = scale_;
+    int D = config_.descriptor_dim;
+
+    cudaStreamSynchronize(stream_);
+
+    std::vector<float> kpts_flat(num_kpts * 2);
+    cudaMemcpyAsync(kpts_flat.data(), dkd_kpts_.ptr,
+                    num_kpts * 2 * sizeof(float),
+                    cudaMemcpyDeviceToHost, stream_);
+
+    result.scores.resize(num_kpts);
+    cudaMemcpyAsync(result.scores.data(), dkd_scores_.ptr,
+                    num_kpts * sizeof(float),
+                    cudaMemcpyDeviceToHost, stream_);
+
+    result.descriptors.resize(num_kpts * D);
+    sddh_.get_output("descriptors", result.descriptors.data(),
+                     num_kpts * D * sizeof(float), stream_);
+
+    sddh_.clear_device_inputs();
+
+    cudaStreamSynchronize(stream_);
+
+    result.keypoints.resize(num_kpts);
+    for (int i = 0; i < num_kpts; ++i) {
+        result.keypoints[i] = cv::Point2f(kpts_flat[i * 2 + 0],
+                                          kpts_flat[i * 2 + 1]);
+    }
+
     for (int i = 0; i < num_kpts * D; ++i) {
         if (std::isnan(result.descriptors[i])) {
             result.descriptors[i] = 0.0f;

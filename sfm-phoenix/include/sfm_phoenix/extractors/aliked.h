@@ -57,6 +57,9 @@ public:
     /// Extract features from a BGR image (copies results to host).
     AlikedResult detect(const cv::Mat& image_bgr);
 
+    /// Extract features from an RGB image (copies results to host).
+    AlikedResult detect_rgb(const cv::Mat& image_rgb);
+
     /// Extract features, keeping results on GPU (no D2H copy).
     /// Much faster when results will be passed directly to LightGlue.
     GpuDetectResult detect_gpu(const cv::Mat& image_bgr);
@@ -81,12 +84,13 @@ private:
     float scale_ = 1.0f;
 
     /// Pre-process: BGR → RGB float, resize, pad to 32-multiple.
-    void preprocess(const cv::Mat& image_bgr,
+    void preprocess(const cv::Mat& image,
+                    bool input_is_rgb,
                     int& padded_h, int& padded_w);
 
     /// Run backbone + DKD + SDDH, leaving results on GPU.
     /// Returns the actual keypoint count.
-    int run_pipeline(const cv::Mat& image_bgr);
+    int run_pipeline(const cv::Mat& image, bool input_is_rgb);
 };
 
 }  // namespace sfm_phoenix
