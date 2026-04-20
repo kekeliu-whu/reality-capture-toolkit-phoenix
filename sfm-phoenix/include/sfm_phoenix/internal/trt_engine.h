@@ -4,6 +4,7 @@
 
 #include <cuda_runtime.h>
 
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -26,6 +27,24 @@ struct CudaBuffer {
     /// Ensure buffer has at least `bytes` allocated.
     void resize(size_t bytes);
 };
+
+struct TrtProfileShape {
+    std::string name;
+    std::vector<int> min_shape;
+    std::vector<int> opt_shape;
+    std::vector<int> max_shape;
+};
+
+struct TrtBuildOptions {
+    std::vector<TrtProfileShape> profile_shapes;
+    bool enable_fp16 = true;
+    size_t workspace_bytes = size_t{4} << 30;
+    int builder_optimization_level = 3;
+};
+
+bool BuildSerializedEngine(const std::filesystem::path& onnx_path,
+                          const std::filesystem::path& engine_path,
+                          const TrtBuildOptions& options);
 
 /// TensorRT engine wrapper (TensorRT 10.x API).
 ///

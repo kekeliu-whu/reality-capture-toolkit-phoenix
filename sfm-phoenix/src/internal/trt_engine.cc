@@ -2,8 +2,10 @@
 
 #include <NvInfer.h>
 #include <NvInferPlugin.h>
+#include <NvOnnxParser.h>
 
 #include <cassert>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <numeric>
@@ -41,6 +43,15 @@ std::string DimsToString(const nvinfer1::Dims& dims) {
     return stream.str();
 }
 
+nvinfer1::Dims MakeDims(const std::vector<int>& shape) {
+    nvinfer1::Dims dims;
+    dims.nbDims = static_cast<int>(shape.size());
+    for (int i = 0; i < dims.nbDims; ++i) {
+        dims.d[i] = shape[i];
+    }
+    return dims;
+}
+
 }  // namespace
 
 // Ensure TRT plugins are registered (one-time init)
@@ -48,6 +59,103 @@ static bool g_plugins_initialized = []() {
     initLibNvInferPlugins(&g_trt_logger, "");
     return true;
 }();
+
+bool BuildSerializedEngine(const std::filesystem::path& onnx_path,
+                          const std::filesystem::path& engine_path,
+                          const TrtBuildOptions& options) {
+    if (!std::filesystem::exists(onnx_path)) {
+        spdlog::error("Cannot find ONNX model: {}", onnx_path.string());
+        return false;
+    }
+
+    auto builder = std::unique_ptr<nvinfer1::IBuilder>(
+        nvinfer1::createInferBuilder(g_trt_logger));
+    if (!builder) {
+        spdlog::error("Failed to create TensorRT builder");
+        return false;
+    }
+
+    constexpr uint32_t kExplicitBatchFlag =
+        1U << static_cast<uint32_t>(
+                  nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
+    auto network = std::unique_ptr<nvinfer1::INetworkDefinition>(
+        builder->createNetworkV2(kExplicitBatchFlag));
+    auto config = std::unique_ptr<nvinfer1::IBuilderConfig>(
+        builder->createBuilderConfig());
+    auto parser = std::unique_ptr<nvonnxparser::IParser>(
+        nvonnxparser::createParser(*network, g_trt_logger));
+    if (!network || !config || !parser) {
+        spdlog::error("Failed to create TensorRT network/config/parser");
+        return false;
+    }
+
+    if (!parser->parseFromFile(
+            onnx_path.string().c_str(),
+            static_cast<int>(nvinfer1::ILogger::Severity::kWARNING))) {
+        for (int index = 0; index < parser->getNbErrors(); ++index) {
+            spdlog::error("[TRT] {}", parser->getError(index)->desc());
+        }
+        spdlog::error("Failed to parse ONNX model: {}", onnx_path.string());
+        return false;
+    }
+
+    config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE,
+                               options.workspace_bytes);
+    config->setBuilderOptimizationLevel(options.builder_optimization_level);
+    if (options.enable_fp16 && builder->platformHasFastFp16()) {
+        config->setFlag(nvinfer1::BuilderFlag::kFP16);
+    }
+
+    if (!options.profile_shapes.empty()) {
+        auto* profile = builder->createOptimizationProfile();
+        if (profile == nullptr) {
+            spdlog::error("Failed to create TensorRT optimization profile");
+            return false;
+        }
+        for (const auto& profile_shape : options.profile_shapes) {
+            const auto min_dims = MakeDims(profile_shape.min_shape);
+            const auto opt_dims = MakeDims(profile_shape.opt_shape);
+            const auto max_dims = MakeDims(profile_shape.max_shape);
+            const bool ok =
+                profile->setDimensions(profile_shape.name.c_str(),
+                                       nvinfer1::OptProfileSelector::kMIN,
+                                       min_dims) &&
+                profile->setDimensions(profile_shape.name.c_str(),
+                                       nvinfer1::OptProfileSelector::kOPT,
+                                       opt_dims) &&
+                profile->setDimensions(profile_shape.name.c_str(),
+                                       nvinfer1::OptProfileSelector::kMAX,
+                                       max_dims);
+            if (!ok) {
+                spdlog::error("Failed to set TensorRT profile for {}",
+                              profile_shape.name);
+                return false;
+            }
+        }
+        config->addOptimizationProfile(profile);
+    }
+
+    spdlog::info("Building missing TensorRT engine: {} -> {}",
+                 onnx_path.string(),
+                 engine_path.string());
+    auto serialized = std::unique_ptr<nvinfer1::IHostMemory>(
+        builder->buildSerializedNetwork(*network, *config));
+    if (!serialized) {
+        spdlog::error("TensorRT engine build failed for {}", onnx_path.string());
+        return false;
+    }
+
+    std::filesystem::create_directories(engine_path.parent_path());
+    std::ofstream stream(engine_path, std::ios::binary);
+    if (!stream.is_open()) {
+        spdlog::error("Cannot write engine file: {}", engine_path.string());
+        return false;
+    }
+    stream.write(static_cast<const char*>(serialized->data()),
+                 static_cast<std::streamsize>(serialized->size()));
+    stream.close();
+    return true;
+}
 
 // --------------------------------------------------------------------------
 // CudaBuffer

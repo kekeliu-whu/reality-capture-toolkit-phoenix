@@ -105,6 +105,7 @@ endif()
 # --------------------------------------------------------------------------
 set(FE_SOURCES
     src/internal/trt_engine.cc
+    src/internal/model_runtime.cc
     src/extractors/aliked.cc
     src/bridges/colmap_bridge.cc
     src/matchers/lightglue.cc
@@ -168,11 +169,29 @@ endif()
 add_executable(demo_feature_matching examples/demo_pair.cc)
 target_link_libraries(demo_feature_matching PRIVATE sfm_phoenix phoenix_logging)
 
-add_executable(phoenix_feature_extractor tools/phoenix_feature_extractor.cc)
-target_link_libraries(phoenix_feature_extractor PRIVATE sfm_phoenix phoenix_logging)
+add_executable(phoenix tools/phoenix.cc)
+target_link_libraries(phoenix PRIVATE sfm_phoenix phoenix_logging)
 
-add_executable(phoenix_matcher tools/phoenix_matcher.cc)
-target_link_libraries(phoenix_matcher PRIVATE sfm_phoenix phoenix_logging)
+set(PHOENIX_RUNTIME_ASSETS
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/aliked_backbone.onnx
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/aliked_sddh.onnx
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/lightglue.onnx
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/lightglue.onnx.data
+)
+
+function(copy_phoenix_runtime_assets target_name)
+    foreach(asset IN LISTS PHOENIX_RUNTIME_ASSETS)
+        if(EXISTS "${asset}")
+            add_custom_command(TARGET ${target_name} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${asset}"
+                        "$<TARGET_FILE_DIR:${target_name}>")
+        endif()
+    endforeach()
+endfunction()
+
+copy_phoenix_runtime_assets(demo_feature_matching)
+copy_phoenix_runtime_assets(phoenix)
 
 # --------------------------------------------------------------------------
 # Install
@@ -181,9 +200,9 @@ install(TARGETS
     sfm_phoenix
     phoenix_logging
     demo_feature_matching
-    phoenix_feature_extractor
-    phoenix_matcher
+    phoenix
     ARCHIVE DESTINATION lib
     RUNTIME DESTINATION bin
 )
+install(FILES ${PHOENIX_RUNTIME_ASSETS} DESTINATION bin)
 install(DIRECTORY include/sfm_phoenix DESTINATION include)
