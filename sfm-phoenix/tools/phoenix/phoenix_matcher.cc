@@ -10,6 +10,7 @@
 #include <spdlog/spdlog.h>
 
 #include <chrono>
+#include <future>
 
 namespace phoenix_tool {
 
@@ -170,6 +171,27 @@ int RunFeatureMatcher(int argc, char** argv) {
   std::unordered_map<colmap::image_t, CachedFeatures> feature_cache;
   feature_cache.reserve(ordered_images.size());
 
+  // Pipeline state: geometry estimation for previous pair runs on a CPU
+  // thread while the GPU processes the next match.
+  struct PendingGeometry {
+    colmap::image_t id1;
+    colmap::image_t id2;
+    colmap::FeatureMatches colmap_matches;
+    std::future<colmap::TwoViewGeometry> geometry_future;
+  };
+  std::optional<PendingGeometry> pending;
+
+  const auto flush_pending = [&](PendingGeometry& pg) {
+    auto geometry = pg.geometry_future.get();
+    const auto db_write_start = Clock::now();
+    database->WriteMatches(pg.id1, pg.id2, pg.colmap_matches);
+    database->WriteTwoViewGeometry(pg.id1, pg.id2, geometry);
+    metrics.db_write_ms.AddSample(
+        std::chrono::duration<double, std::milli>(Clock::now() -
+                                                  db_write_start)
+            .count());
+  };
+
   database->BeginTransaction();
   for (const auto& [image_id1, image_id2] : pairs) {
     const bool has_matches = database->ExistsMatches(image_id1, image_id2);
@@ -231,30 +253,45 @@ int RunFeatureMatcher(int argc, char** argv) {
         std::chrono::duration<double, std::milli>(Clock::now() - match_start)
             .count());
 
+    // Flush previous pending geometry result (was running on CPU thread
+    // in parallel with the GPU match above).
+    if (pending) {
+      flush_pending(*pending);
+      pending.reset();
+    }
+
     if (matches.num_matches > 0) {
       const auto colmap_matches = sfm_phoenix::ToColmapMatches(matches);
 
-      const auto geometry_start = Clock::now();
-      colmap::TwoViewGeometryOptions geometry_options;
-      colmap::TwoViewGeometry geometry = colmap::EstimateTwoViewGeometry(
-          cameras_by_id.at(images_by_id.at(image_id1).CameraId()),
-          features1.points,
-          cameras_by_id.at(images_by_id.at(image_id2).CameraId()),
-          features2.points,
-          colmap_matches,
-          geometry_options);
-      metrics.geometry_ms.AddSample(
-          std::chrono::duration<double, std::milli>(Clock::now() -
-                                                    geometry_start)
-              .count());
+      // Launch geometry estimation on a background thread so the next
+      // GPU match can start immediately.
+      const auto& cam1 =
+          cameras_by_id.at(images_by_id.at(image_id1).CameraId());
+      const auto& cam2 =
+          cameras_by_id.at(images_by_id.at(image_id2).CameraId());
+      const auto& pts1 = features1.points;
+      const auto& pts2 = features2.points;
 
-      const auto db_write_start = Clock::now();
-      database->WriteMatches(image_id1, image_id2, colmap_matches);
-      database->WriteTwoViewGeometry(image_id1, image_id2, geometry);
-      metrics.db_write_ms.AddSample(
-          std::chrono::duration<double, std::milli>(Clock::now() -
-                                                    db_write_start)
-              .count());
+      auto geometry_future =
+          std::async(std::launch::async,
+                     [&cam1, &cam2, &pts1, &pts2,
+                      colmap_matches, &metrics]() {
+                       const auto geometry_start = Clock::now();
+                       colmap::TwoViewGeometryOptions geometry_options;
+                       auto geometry = colmap::EstimateTwoViewGeometry(
+                           cam1, pts1, cam2, pts2,
+                           colmap_matches, geometry_options);
+                       metrics.geometry_ms.AddSample(
+                           std::chrono::duration<double, std::milli>(
+                               Clock::now() - geometry_start)
+                               .count());
+                       return geometry;
+                     });
+
+      pending = PendingGeometry{
+          image_id1, image_id2,
+          std::move(colmap_matches),
+          std::move(geometry_future)};
     } else {
       ++metrics.num_zero_match_pairs;
     }
@@ -265,6 +302,11 @@ int RunFeatureMatcher(int argc, char** argv) {
                  images_by_id.at(image_id1).Name(),
                  images_by_id.at(image_id2).Name(),
                  matches.num_matches);
+  }
+  // Flush last pending geometry result.
+  if (pending) {
+    flush_pending(*pending);
+    pending.reset();
   }
   database->EndTransaction();
 

@@ -338,4 +338,183 @@ AlikedResult AlikedDetector::detect_rgb(const cv::Mat& image_rgb) {
     return result;
 }
 
+std::vector<AlikedResult> AlikedDetector::detect_batch(
+    const std::vector<cv::Mat>& images_bgr) {
+    if (images_bgr.empty()) return {};
+
+    // Check engine supports batch > 1
+    const auto img_max = backbone_.max_profile_shape("image");
+    const int max_batch = img_max.empty() ? 1 : img_max[0];
+    if (max_batch <= 1 || static_cast<int>(images_bgr.size()) == 1) {
+        std::vector<AlikedResult> results;
+        results.reserve(images_bgr.size());
+        for (const auto& img : images_bgr) results.push_back(detect(img));
+        return results;
+    }
+
+    const int B = static_cast<int>(images_bgr.size());
+
+    // ------------------------------------------------------------------
+    // 1. CPU preprocessing for each image
+    // ------------------------------------------------------------------
+    struct FrameInfo {
+        cv::Mat padded;
+        int pad_h = 0;
+        int pad_w = 0;
+        float scale = 1.0f;
+    };
+    std::vector<FrameInfo> frames(B);
+    for (int i = 0; i < B; ++i) {
+        cv::Mat img = images_bgr[i];
+        float scale = 1.0f;
+        if (config_.max_edge > 0) {
+            const int h = img.rows, w = img.cols;
+            scale = std::min(1.0f,
+                             static_cast<float>(config_.max_edge) /
+                                 static_cast<float>(std::max(h, w)));
+            if (scale < 1.0f) {
+                cv::resize(img, img,
+                           cv::Size(static_cast<int>(std::round(w * scale)),
+                                    static_cast<int>(std::round(h * scale))),
+                           0, 0, cv::INTER_AREA);
+            }
+        }
+        FrameInfo& f = frames[i];
+        f.pad_h = ((img.rows + 31) / 32) * 32;
+        f.pad_w = ((img.cols + 31) / 32) * 32;
+        f.scale = scale;
+        const int pb = f.pad_h - img.rows;
+        const int pr = f.pad_w - img.cols;
+        if (pb > 0 || pr > 0) {
+            cv::copyMakeBorder(img, img, 0, pb, 0, pr,
+                               cv::BORDER_REPLICATE);
+        }
+        if (!img.isContinuous()) img = img.clone();
+        f.padded = std::move(img);
+    }
+
+    // All images must share the same padded size; otherwise fall back.
+    const int pad_h = frames[0].pad_h;
+    const int pad_w = frames[0].pad_w;
+    for (int i = 1; i < B; ++i) {
+        if (frames[i].pad_h != pad_h || frames[i].pad_w != pad_w) {
+            std::vector<AlikedResult> results;
+            results.reserve(B);
+            for (const auto& img : images_bgr) results.push_back(detect(img));
+            return results;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 2. Upload all images to backbone input buffer [B, 3, H, W]
+    // ------------------------------------------------------------------
+    backbone_.set_input_shape("image", {B, 3, pad_h, pad_w});
+    float* backbone_input =
+        static_cast<float*>(backbone_.device_ptr("image"));
+
+    const size_t img_bytes =
+        static_cast<size_t>(pad_h) * pad_w * 3;   // uint8 bytes per image
+    const size_t chw_floats =
+        static_cast<size_t>(3) * pad_h * pad_w;   // float elems per CHW image
+
+    preprocess_buf_.resize(img_bytes);
+    for (int i = 0; i < B; ++i) {
+        cudaMemcpyAsync(preprocess_buf_.ptr, frames[i].padded.data, img_bytes,
+                        cudaMemcpyHostToDevice, stream_);
+        bgr_hwc_to_rgb_chw_gpu(
+            static_cast<const unsigned char*>(preprocess_buf_.ptr),
+            backbone_input + static_cast<ptrdiff_t>(i) * chw_floats,
+            pad_h, pad_w, stream_);
+    }
+
+    // ------------------------------------------------------------------
+    // 3. Single backbone pass for the whole batch
+    // ------------------------------------------------------------------
+    backbone_.infer(stream_);
+
+    const float* score_map_gpu =
+        static_cast<const float*>(backbone_.device_ptr("score_map"));
+    float* feature_map_gpu =
+        static_cast<float*>(backbone_.device_ptr("feature_map"));
+
+    const int C = config_.descriptor_dim;
+    const size_t sm_per_image =
+        static_cast<size_t>(pad_h) * pad_w;        // [1, H, W] floats
+    const size_t fm_per_image =
+        static_cast<size_t>(C) * pad_h * pad_w;    // [C, H, W] floats
+
+    // ------------------------------------------------------------------
+    // 4. Per-image DKD + SDDH (reuses pre-allocated workspace)
+    // ------------------------------------------------------------------
+    const int max_kpts =
+        config_.dkd.top_k > 0 ? config_.dkd.top_k : config_.dkd.n_limit;
+
+    std::vector<AlikedResult> results(B);
+    for (int i = 0; i < B; ++i) {
+        results[i].scale = frames[i].scale;
+        results[i].descriptor_dim = C;
+
+        const float* sm_i =
+            score_map_gpu + static_cast<ptrdiff_t>(i) * sm_per_image;
+        dkd::detect_keypoints(
+            sm_i, pad_h, pad_w, config_.dkd,
+            static_cast<float*>(dkd_kpts_.ptr),
+            static_cast<float*>(dkd_scores_.ptr),
+            static_cast<int*>(dkd_count_.ptr),
+            dkd_nms_buf_.ptr, dkd_workspace_, stream_);
+
+        int num_kpts = 0;
+        cudaMemcpyAsync(&num_kpts, dkd_count_.ptr, sizeof(int),
+                        cudaMemcpyDeviceToHost, stream_);
+        cudaStreamSynchronize(stream_);
+        num_kpts = std::min(num_kpts, max_kpts);
+        if (num_kpts <= 0) continue;
+
+        results[i].num_keypoints = num_kpts;
+
+        float* fm_i =
+            feature_map_gpu + static_cast<ptrdiff_t>(i) * fm_per_image;
+        sddh_.set_input_shape("feature_map", {1, C, pad_h, pad_w});
+        sddh_.set_input_shape("keypoints_wh", {num_kpts, 2});
+        sddh_.set_input_shape("feature_map_hw", {2});
+        sddh_.set_device_input("feature_map", fm_i);
+        sddh_.set_device_input("keypoints_wh", dkd_kpts_.ptr);
+        float fm_hw[2] = {static_cast<float>(pad_h),
+                          static_cast<float>(pad_w)};
+        sddh_.set_input("feature_map_hw", fm_hw, 2 * sizeof(float), stream_);
+        sddh_.infer(stream_);
+        cudaStreamSynchronize(stream_);
+
+        std::vector<float> kpts_flat(num_kpts * 2);
+        cudaMemcpy(kpts_flat.data(), dkd_kpts_.ptr,
+                   num_kpts * 2 * sizeof(float), cudaMemcpyDeviceToHost);
+
+        results[i].keypoints.resize(num_kpts);
+        for (int k = 0; k < num_kpts; ++k) {
+            results[i].keypoints[k] =
+                cv::Point2f(kpts_flat[k * 2], kpts_flat[k * 2 + 1]);
+        }
+
+        results[i].scores.resize(num_kpts);
+        cudaMemcpy(results[i].scores.data(), dkd_scores_.ptr,
+                   num_kpts * sizeof(float), cudaMemcpyDeviceToHost);
+
+        results[i].descriptors.resize(num_kpts * C);
+        sddh_.get_output("descriptors", results[i].descriptors.data(),
+                         static_cast<size_t>(num_kpts) * C * sizeof(float),
+                         stream_);
+        cudaStreamSynchronize(stream_);
+
+        for (int j = 0; j < num_kpts * C; ++j) {
+            if (std::isnan(results[i].descriptors[j])) {
+                results[i].descriptors[j] = 0.0f;
+            }
+        }
+
+        sddh_.clear_device_inputs();
+    }
+
+    return results;
+}
+
 }  // namespace sfm_phoenix

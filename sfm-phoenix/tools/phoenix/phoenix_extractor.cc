@@ -11,6 +11,8 @@
 #include <opencv2/imgcodecs.hpp>
 #include <spdlog/spdlog.h>
 
+#include <cuda_runtime.h>
+
 #include <chrono>
 #include <fstream>
 #include <thread>
@@ -47,6 +49,7 @@ struct FeatureExtractorCliOptions {
   int top_k = 5000;
   double scores_th = 0.2;
   double static_frame_diff_threshold = 1.0;
+  int detect_batch_size = 0;  // 0 = auto (GPU memory based)
   bool filter_static_frames = false;
   bool skip_existing = true;
 };
@@ -55,6 +58,7 @@ struct ExtractorExecutionContext {
   const colmap::ImageReaderOptions& reader_options;
   bool default_share_camera_per_folder = false;
   bool skip_existing = true;
+  int detect_batch_size = 1;
   colmap::Database* database = nullptr;
   sfm_phoenix::AlikedDetector* detector = nullptr;
   FeatureExtractionMetrics* metrics = nullptr;
@@ -109,6 +113,8 @@ void AddFeatureExtractorOptions(colmap::OptionManager* options,
                             &cli_options->static_frame_diff_threshold);
   options->AddDefaultOption("Phoenix.skip_existing",
                             &cli_options->skip_existing);
+  options->AddDefaultOption("Phoenix.detect_batch_size",
+                            &cli_options->detect_batch_size);
 }
 
 void ClampFeatureExtractorOptions(FeatureExtractorCliOptions* cli_options) {
@@ -184,6 +190,34 @@ bool DefaultShareCameraPerFolder(
          !reader_options.single_camera &&
          !reader_options.single_camera_per_folder &&
          !reader_options.single_camera_per_image;
+}
+
+// Estimate optimal detect batch size from free GPU memory.
+// Called after engine init so allocations are already accounted for.
+int EstimateDetectBatchSize(int max_edge, int descriptor_dim,
+                            int engine_max_batch) {
+  size_t free_bytes = 0, total_bytes = 0;
+  if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess) {
+    spdlog::warn("cudaMemGetInfo failed, defaulting batch_size=1");
+    return 1;
+  }
+  // Padded dimensions (rounded up to 32).
+  const int pad = ((max_edge + 31) / 32) * 32;
+  // Per-image backbone GPU memory:
+  //   input:       3 * H * W * 4 bytes
+  //   feature_map: C * H * W * 4 bytes
+  //   score_map:   1 * H * W * 4 bytes
+  const size_t per_image =
+      static_cast<size_t>(3 + descriptor_dim + 1) * pad * pad * sizeof(float);
+  // Reserve 40% for DKD workspace, SDDH, CUDA overhead, etc.
+  const size_t usable = static_cast<size_t>(free_bytes * 0.6);
+  int batch = per_image > 0 ? static_cast<int>(usable / per_image) : 1;
+  batch = std::max(1, std::min(batch, engine_max_batch));
+  spdlog::info("GPU memory: free={:.0f} MB  total={:.0f} MB  "
+               "per_image~={:.1f} MB  auto batch_size={}",
+               free_bytes / 1e6, total_bytes / 1e6,
+               per_image / 1e6, batch);
+  return batch;
 }
 
 bool InitializeDetector(const FeatureExtractorCliOptions& cli_options,
@@ -351,18 +385,11 @@ colmap::image_t RegisterImageAndFrame(const std::string& image_name,
   return image_id;
 }
 
-void DetectAndStoreFeatures(const std::string& image_name,
-                            const cv::Mat& image_bgr,
-                            const colmap::image_t image_id,
-                            sfm_phoenix::AlikedDetector* detector,
-                            colmap::Database* database,
-                            FeatureExtractionMetrics* metrics) {
-  const auto detect_start = Clock::now();
-  const auto result = detector->detect(image_bgr);
-  metrics->detect_ms.AddSample(
-      std::chrono::duration<double, std::milli>(Clock::now() - detect_start)
-          .count());
-
+void StoreDetectedFeatures(const std::string& image_name,
+                           const sfm_phoenix::AlikedResult& result,
+                           const colmap::image_t image_id,
+                           colmap::Database* database,
+                           FeatureExtractionMetrics* metrics) {
   const auto convert_start = Clock::now();
   const auto keypoints = sfm_phoenix::ToColmapKeypoints(result);
   const auto descriptors = sfm_phoenix::ToColmapDescriptors(result);
@@ -383,50 +410,18 @@ void DetectAndStoreFeatures(const std::string& image_name,
                image_name);
 }
 
-void ProcessNewImageTask(const DecodedImageTask& task,
-                        ExtractorExecutionContext* context) {
-  context->metrics->file_read_ms.AddSample(task.file_read_ms);
-  context->metrics->image_parse_ms.AddSample(task.image_parse_ms);
-  context->metrics->image_decode_ms.AddSample(task.decode_ms);
-
-  const auto import_start = Clock::now();
-  const ImportedCameraEntry camera_entry = ResolveCameraForImage(
-      context->reader_options,
-      task.image_name,
-      static_cast<size_t>(task.image_bgr.cols),
-      static_cast<size_t>(task.image_bgr.rows),
-      context->default_share_camera_per_folder,
-      context->database,
-      context->camera_cache);
-  context->metrics->import_images_ms.AddSample(
-      std::chrono::duration<double, std::milli>(Clock::now() - import_start)
+void DetectAndStoreFeatures(const std::string& image_name,
+                            const cv::Mat& image_bgr,
+                            const colmap::image_t image_id,
+                            sfm_phoenix::AlikedDetector* detector,
+                            colmap::Database* database,
+                            FeatureExtractionMetrics* metrics) {
+  const auto detect_start = Clock::now();
+  const auto result = detector->detect(image_bgr);
+  metrics->detect_ms.AddSample(
+      std::chrono::duration<double, std::milli>(Clock::now() - detect_start)
           .count());
-
-  const colmap::image_t image_id = RegisterImageAndFrame(task.image_name,
-                                                         camera_entry,
-                                                         context->database,
-                                                         context->metrics);
-
-  const FeatureAvailability availability = CheckFeatureAvailability(
-      context->database,
-      image_id,
-      task.image_name,
-      context->skip_existing,
-      context->metrics);
-  if (availability == FeatureAvailability::kSkip) {
-    return;
-  }
-  if (availability == FeatureAvailability::kConflict) {
-    throw std::runtime_error("Image already has features in database: " +
-                             task.image_name);
-  }
-
-  DetectAndStoreFeatures(task.image_name,
-                         task.image_bgr,
-                         image_id,
-                         context->detector,
-                         context->database,
-                         context->metrics);
+  StoreDetectedFeatures(image_name, result, image_id, database, metrics);
 }
 
 void ProcessNewImages(
@@ -436,6 +431,66 @@ void ProcessNewImages(
     std::vector<std::string>* existing_image_names) {
   size_t next_image_index = 0;
   const size_t decode_tokens = DecodePipelineTokens();
+  const int batch_size = context->detect_batch_size;
+
+  // Accumulation buffer: filled by the serial stage-4 filter,
+  // flushed when batch_size is reached or the pipeline ends.
+  std::vector<DecodedImageTask> pending;
+  pending.reserve(batch_size);
+
+  const auto flush_pending = [&]() {
+    if (pending.empty()) return;
+
+    std::vector<cv::Mat> imgs;
+    imgs.reserve(pending.size());
+    for (const auto& t : pending) imgs.push_back(t.image_bgr);
+
+    const auto detect_start = Clock::now();
+    auto batch_results = context->detector->detect_batch(imgs);
+    const double batch_ms =
+        std::chrono::duration<double, std::milli>(Clock::now() - detect_start)
+            .count();
+    const double per_img_ms =
+        batch_ms / static_cast<double>(pending.size());
+
+    for (int i = 0; i < static_cast<int>(pending.size()); ++i) {
+      const DecodedImageTask& task = pending[i];
+      context->metrics->file_read_ms.AddSample(task.file_read_ms);
+      context->metrics->image_parse_ms.AddSample(task.image_parse_ms);
+      context->metrics->image_decode_ms.AddSample(task.decode_ms);
+      context->metrics->detect_ms.AddSample(per_img_ms);
+
+      const auto import_start = Clock::now();
+      const ImportedCameraEntry camera_entry = ResolveCameraForImage(
+          context->reader_options,
+          task.image_name,
+          static_cast<size_t>(task.image_bgr.cols),
+          static_cast<size_t>(task.image_bgr.rows),
+          context->default_share_camera_per_folder,
+          context->database,
+          context->camera_cache);
+      context->metrics->import_images_ms.AddSample(
+          std::chrono::duration<double, std::milli>(Clock::now() - import_start)
+              .count());
+
+      const colmap::image_t image_id = RegisterImageAndFrame(
+          task.image_name, camera_entry,
+          context->database, context->metrics);
+
+      const FeatureAvailability availability = CheckFeatureAvailability(
+          context->database, image_id, task.image_name,
+          context->skip_existing, context->metrics);
+      if (availability == FeatureAvailability::kSkip) continue;
+      if (availability == FeatureAvailability::kConflict) {
+        throw std::runtime_error(
+            "Image already has features in database: " + task.image_name);
+      }
+
+      StoreDetectedFeatures(task.image_name, batch_results[i],
+                            image_id, context->database, context->metrics);
+    }
+    pending.clear();
+  };
 
   context->database->BeginTransaction();
   tbb::parallel_pipeline(
@@ -493,8 +548,12 @@ void ProcessNewImages(
           tbb::make_filter<DecodedImageTask, void>(
               tbb::filter_mode::serial_in_order,
               [&](const DecodedImageTask& task) {
-                ProcessNewImageTask(task, context);
+                pending.push_back(task);
+                if (static_cast<int>(pending.size()) >= batch_size) {
+                  flush_pending();
+                }
               }));
+  flush_pending();  // drain remainder
   context->database->EndTransaction();
 }
 
@@ -690,6 +749,16 @@ int RunFeatureExtractor(int argc, char** argv) {
     return EXIT_FAILURE;
   }
 
+  // Resolve detect batch size: 0 = auto from GPU free memory.
+  int detect_batch_size = cli_options.detect_batch_size;
+  if (detect_batch_size <= 0) {
+    const auto img_max = sfm_phoenix::EnsurePhoenixBackboneEngine();
+    // engine_max_batch comes from the backbone profile (already built)
+    detect_batch_size = EstimateDetectBatchSize(
+        cli_options.max_edge, 128, /*engine_max_batch=*/8);
+  }
+  spdlog::info("Using detect_batch_size={}", detect_batch_size);
+
   std::vector<std::string> existing_image_names;
   existing_image_names.reserve(reader_options.image_names.size());
   std::unordered_map<std::string, ImportedCameraEntry> camera_cache;
@@ -697,6 +766,7 @@ int RunFeatureExtractor(int argc, char** argv) {
       reader_options,
       default_share_camera_per_folder,
       cli_options.skip_existing,
+      detect_batch_size,
       database.get(),
       &detector,
       &metrics,

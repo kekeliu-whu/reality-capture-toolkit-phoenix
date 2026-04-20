@@ -324,9 +324,9 @@ def export_backbone(model: ALIKED, output_dir: str, device: str, opset: int = 16
         input_names=['image'],
         output_names=['feature_map', 'score_map'],
         dynamic_axes={
-            'image':       {2: 'H', 3: 'W'},
-            'feature_map': {2: 'H', 3: 'W'},
-            'score_map':   {2: 'H', 3: 'W'},
+            'image':       {0: 'batch', 2: 'H', 3: 'W'},
+            'feature_map': {0: 'batch', 2: 'H', 3: 'W'},
+            'score_map':   {0: 'batch', 2: 'H', 3: 'W'},
         },
         dynamo=False,
     )

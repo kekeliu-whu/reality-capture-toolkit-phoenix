@@ -67,7 +67,8 @@ std::filesystem::path EnsurePhoenixBackboneEngine() {
   options.enable_fp16 = false;
   options.builder_optimization_level = 3;
   options.profile_shapes = {
-      {"image", {1, 3, 320, 320}, {1, 3, 1600, 1600}, {1, 3, 1600, 1600}},
+      // batch axis is dynamic: min=1, opt=4, max=8
+      {"image", {1, 3, 320, 320}, {4, 3, 1024, 1024}, {8, 3, 1600, 1600}},
   };
   return EnsureRuntimeEngine(
       "aliked_backbone.onnx", "aliked_backbone.engine", options);

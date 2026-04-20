@@ -60,6 +60,13 @@ public:
     /// Extract features from an RGB image (copies results to host).
     AlikedResult detect_rgb(const cv::Mat& image_rgb);
 
+    /// Extract features from a batch of BGR images in a single backbone pass.
+    /// All images must be the same resolution; if not, or if the loaded engine
+    /// was built without dynamic batch, falls back to per-image detect().
+    /// Returns one AlikedResult per input image, in the same order.
+    std::vector<AlikedResult> detect_batch(
+        const std::vector<cv::Mat>& images_bgr);
+
     /// Extract features, keeping results on GPU (no D2H copy).
     /// Much faster when results will be passed directly to LightGlue.
     GpuDetectResult detect_gpu(const cv::Mat& image_bgr);
