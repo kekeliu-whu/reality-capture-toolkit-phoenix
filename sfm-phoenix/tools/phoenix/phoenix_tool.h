@@ -47,6 +47,8 @@ struct FeatureExtractionMetrics {
   int num_skipped = 0;
   int num_filtered_static_frames = 0;
   TimerStats static_filter_ms;
+  TimerStats file_read_ms;
+  TimerStats image_parse_ms;
   TimerStats import_images_ms;
   TimerStats image_registration_ms;
   TimerStats feature_check_ms;

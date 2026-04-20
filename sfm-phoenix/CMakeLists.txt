@@ -58,6 +58,7 @@ find_package(Eigen3 3.4 REQUIRED)
 find_package(COLMAP CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(TBB CONFIG REQUIRED)
 
 # TensorRT — search common install locations
 # Set TensorRT_ROOT via cmake -DTensorRT_ROOT=... or environment variable
@@ -175,7 +176,7 @@ add_executable(phoenix
     tools/phoenix/phoenix_extractor.cc
     tools/phoenix/phoenix_matcher.cc
     tools/phoenix/phoenix_automatic.cc)
-target_link_libraries(phoenix PRIVATE sfm_phoenix phoenix_logging)
+target_link_libraries(phoenix PRIVATE sfm_phoenix phoenix_logging TBB::tbb)
 
 set(PHOENIX_RUNTIME_ASSETS
     ${CMAKE_CURRENT_SOURCE_DIR}/models/aliked_backbone.onnx
