@@ -222,6 +222,27 @@ bool TrtEngine::load(const std::string& engine_path) {
 
     int nb = engine_->getNbIOTensors();
     spdlog::info("Loaded TRT engine: {} ({} IO tensors)", engine_path, nb);
+
+    // Log precision for each IO tensor
+    auto dtype_str = [](nvinfer1::DataType dt) -> const char* {
+        switch (dt) {
+            case nvinfer1::DataType::kFLOAT: return "FP32";
+            case nvinfer1::DataType::kHALF:  return "FP16";
+            case nvinfer1::DataType::kINT8:  return "INT8";
+            case nvinfer1::DataType::kINT32: return "INT32";
+            case nvinfer1::DataType::kINT64: return "INT64";
+            case nvinfer1::DataType::kBOOL:  return "BOOL";
+            default:                         return "OTHER";
+        }
+    };
+    for (int i = 0; i < nb; ++i) {
+        const char* tname = engine_->getIOTensorName(i);
+        auto mode = engine_->getTensorIOMode(tname);
+        auto dtype = engine_->getTensorDataType(tname);
+        const char* dir = (mode == nvinfer1::TensorIOMode::kINPUT)
+                          ? "in" : "out";
+        spdlog::info("  [{}] {} dtype={}", dir, tname, dtype_str(dtype));
+    }
     return true;
 }
 

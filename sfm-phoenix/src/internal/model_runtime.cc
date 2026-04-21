@@ -64,11 +64,13 @@ std::filesystem::path GetExecutableDirectory() {
 
 std::filesystem::path EnsurePhoenixBackboneEngine() {
   TrtBuildOptions options;
-  options.enable_fp16 = false;
+  options.enable_fp16 = false; // ALIKED backbone is more stable in FP32 (some ops produce NaNs in FP16)
   options.builder_optimization_level = 3;
   options.profile_shapes = {
-      // batch axis is dynamic: min=1, opt=4, max=8
-      {"image", {1, 3, 320, 320}, {4, 3, 1024, 1024}, {8, 3, 1600, 1600}},
+      // batch axis is dynamic: min=1, opt=1, max=4
+      // Spatial max is capped at 1024 to stay within GPU VRAM during TRT
+      // tactic search (1600x1600 at batch=4 FP16 requires ~7.3 GB workspace).
+      {"image", {1, 3, 320, 320}, {1, 3, 1024, 1024}, {4, 3, 1024, 1024}},
   };
   return EnsureRuntimeEngine(
       "aliked_backbone.onnx", "aliked_backbone.engine", options);
@@ -79,7 +81,7 @@ std::filesystem::path EnsurePhoenixSddhEngine() {
   options.enable_fp16 = true;
   options.builder_optimization_level = 3;
   options.profile_shapes = {
-      {"feature_map", {1, 128, 320, 320}, {1, 128, 1600, 1600}, {1, 128, 1600, 1600}},
+      {"feature_map", {1, 128, 320, 320}, {1, 128, 1024, 1024}, {1, 128, 1600, 1600}},
       {"keypoints_wh", {100, 2}, {5000, 2}, {5000, 2}},
       {"feature_map_hw", {2}, {2}, {2}},
   };

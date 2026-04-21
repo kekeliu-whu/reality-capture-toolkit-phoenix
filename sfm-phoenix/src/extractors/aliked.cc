@@ -209,6 +209,11 @@ int AlikedDetector::run_pipeline(const cv::Mat& image,
     return num_kpts;
 }
 
+int AlikedDetector::backbone_max_batch() const {
+    const auto shape = backbone_.max_profile_shape("image");
+    return shape.empty() ? 1 : shape[0];
+}
+
 GpuDetectResult AlikedDetector::detect_gpu(const cv::Mat& image_bgr) {
     GpuDetectResult result;
     result.descriptor_dim = config_.descriptor_dim;

@@ -757,10 +757,9 @@ int RunFeatureExtractor(int argc, char** argv) {
   // Resolve detect batch size: 0 = auto from GPU free memory.
   int detect_batch_size = cli_options.detect_batch_size;
   if (detect_batch_size <= 0) {
-    const auto img_max = sfm_phoenix::EnsurePhoenixBackboneEngine();
-    // engine_max_batch comes from the backbone profile (already built)
+    const int engine_max_batch = detector.backbone_max_batch();
     detect_batch_size = EstimateDetectBatchSize(
-        cli_options.max_edge, 128, /*engine_max_batch=*/8);
+        cli_options.max_edge, 128, engine_max_batch);
   }
   spdlog::info("Using detect_batch_size={}", detect_batch_size);
 

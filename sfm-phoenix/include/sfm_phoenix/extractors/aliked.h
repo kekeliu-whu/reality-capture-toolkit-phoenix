@@ -71,6 +71,9 @@ public:
     /// Much faster when results will be passed directly to LightGlue.
     GpuDetectResult detect_gpu(const cv::Mat& image_bgr);
 
+    /// Return the maximum batch size supported by the loaded backbone engine.
+    int backbone_max_batch() const;
+
 private:
     AlikedConfig config_;
     TrtEngine backbone_;
