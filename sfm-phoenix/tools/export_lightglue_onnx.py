@@ -19,6 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import onnx
 
 try:
     from lightglue import LightGlue
@@ -97,6 +98,7 @@ def export(wrapper: LightGlueExportable, output_dir: str, device: str, opset: in
     desc1 = F.normalize(torch.randn(1, M, D, device=device), dim=-1)
 
     path = os.path.join(output_dir, 'lightglue.onnx')
+    external_data_path = path + '.data'
 
     # LightGlue internals may use operations beyond basic opset.
     # We try opset 17+ for better Transformer op support.
@@ -108,6 +110,7 @@ def export(wrapper: LightGlueExportable, output_dir: str, device: str, opset: in
             (kpts0, desc0, kpts1, desc1),
             path,
             opset_version=export_opset,
+            external_data=False,
             input_names=['kpts0', 'desc0', 'kpts1', 'desc1'],
             output_names=['matches0', 'mscores0'],
             dynamic_axes={
@@ -119,6 +122,13 @@ def export(wrapper: LightGlueExportable, output_dir: str, device: str, opset: in
                 'mscores0': {1: 'N'},
             },
         )
+
+        model = onnx.load(path, load_external_data=True)
+        onnx.save_model(model, path, save_as_external_data=False)
+
+        if os.path.exists(external_data_path):
+            os.remove(external_data_path)
+
         print(f"  Saved: {path}")
     except Exception as e:
         print(f"\n  ONNX export failed: {e}")

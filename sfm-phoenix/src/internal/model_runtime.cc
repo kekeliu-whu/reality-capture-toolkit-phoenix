@@ -99,4 +99,39 @@ std::filesystem::path EnsurePhoenixLightGlueEngine() {
   return EnsureRuntimeEngine("lightglue.onnx", "lightglue.engine", options);
 }
 
+std::filesystem::path EnsureRetrievalEngine(
+    const std::filesystem::path& onnx_path) {
+  auto engine_path = onnx_path;
+  engine_path.replace_extension(".engine");
+
+  if (std::filesystem::exists(engine_path)) {
+    return engine_path;
+  }
+
+  if (!std::filesystem::exists(onnx_path)) {
+    throw std::runtime_error("Retrieval ONNX model not found: " +
+                             onnx_path.string());
+  }
+
+  spdlog::info("Building retrieval TRT engine from {}", onnx_path.string());
+
+  TrtBuildOptions options;
+  options.enable_fp16 = true;
+  options.builder_optimization_level = 3;
+  options.profile_shapes = {
+      {"pixel_values",
+       {1, 3, 224, 224},
+       {16, 3, 224, 224},
+       {64, 3, 224, 224}},
+  };
+
+  if (!BuildSerializedEngine(onnx_path, engine_path, options)) {
+    throw std::runtime_error(
+        "Failed to build retrieval TRT engine from: " + onnx_path.string());
+  }
+
+  spdlog::info("Built retrieval TRT engine: {}", engine_path.string());
+  return engine_path;
+}
+
 }  // namespace sfm_phoenix

@@ -215,3 +215,30 @@ $env:HTTPS_PROXY="http://127.0.0.1:7890"
   `hloc_output/pairs-seq.txt`、`hloc_output/pairs-merged.txt`
 - 匹配结果：`hloc_output/matches-aliked-lightglue.h5`
 - COLMAP 重建：`hloc_output/sfm/`
+
+---
+
+### Phoenix 特征提取 + 匹配
+
+用于直接运行 `phoenix feature_extractor` 和 `phoenix feature_matcher`，
+自动补齐常用运行时 PATH，并串起两步处理。
+
+```powershell
+.\ztools\run-phoenix.ps1 `
+  -ImageDir "D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\ground_undistort\fisheye_x5_VID_20251017_113930_00_052_cam0" `
+  -DatabasePath "D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\ground_undistort\fisheye_x5_VID_20251017_113930_00_052_cam0\phoenix_output\database.db" `
+  -CameraMode 3 `
+  -MaxEdge 1024 `
+  -RetrievalNum 50
+```
+
+常用可选参数：
+
+- `-TopK 5000`
+- `-MaxMatches 4000`
+- `-LinearOverlapNum 10`
+- `-QuadraticOverlapNum 10`
+- `-ImageListPath images.txt`
+- `-PairListPath pairs.txt`
+- `-ExtractorOnly`
+- `-MatcherOnly`

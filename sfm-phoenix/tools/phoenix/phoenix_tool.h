@@ -69,6 +69,7 @@ struct FeatureMatchingMetrics {
   int feature_cache_misses = 0;
   int cached_images = 0;
   TimerStats pair_prepare_ms;
+  TimerStats retrieval_ms;
   TimerStats engine_init_ms;
   TimerStats feature_load_ms;
   TimerStats feature_db_read_ms;
@@ -86,10 +87,13 @@ struct AutomaticOptions {
   std::string image_list_path;
   std::string pair_list_path;
   std::string colmap_path = "colmap";
+  std::string retrieval_model_path;
   int camera_mode = -1;
   int max_edge = 1600;
   int top_k = 5000;
   int max_matches = 4000;
+  int retrieval_num = 50;
+  int retrieval_batch_size = 32;
   double static_frame_diff_threshold = 1.0;
   int linear_overlap_num = 0;
   int quadratic_overlap_num = 0;

@@ -721,6 +721,11 @@ int RunFeatureExtractor(int argc, char** argv) {
   options.Parse(argc, argv);
   ClampFeatureExtractorOptions(&cli_options);
 
+  spdlog::info("Phoenix.max_edge={} top_k={} scores_th={:.3f}",
+               cli_options.max_edge,
+               cli_options.top_k,
+               cli_options.scores_th);
+
   colmap::ImageReaderOptions reader_options =
       BuildReaderOptions(options, cli_options);
 

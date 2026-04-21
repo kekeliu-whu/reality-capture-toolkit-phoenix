@@ -178,22 +178,63 @@ add_executable(phoenix
     tools/phoenix/phoenix_automatic.cc)
 target_link_libraries(phoenix PRIVATE sfm_phoenix phoenix_logging TBB::tbb)
 
+set(PHOENIX_RUNTIME_OUTPUT_DIR "${CMAKE_BINARY_DIR}/$<CONFIG>")
+
 set(PHOENIX_RUNTIME_ASSETS
     ${CMAKE_CURRENT_SOURCE_DIR}/models/aliked_backbone.onnx
     ${CMAKE_CURRENT_SOURCE_DIR}/models/aliked_sddh.onnx
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/dinov3_vitb16_pretrain_lvd1689m.onnx
     ${CMAKE_CURRENT_SOURCE_DIR}/models/lightglue.onnx
-    ${CMAKE_CURRENT_SOURCE_DIR}/models/lightglue.onnx.data
 )
 
 function(copy_phoenix_runtime_assets target_name)
     foreach(asset IN LISTS PHOENIX_RUNTIME_ASSETS)
         if(EXISTS "${asset}")
+            get_filename_component(_asset_name "${asset}" NAME)
             add_custom_command(TARGET ${target_name} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                         "${asset}"
-                        "$<TARGET_FILE_DIR:${target_name}>")
+                        "${PHOENIX_RUNTIME_OUTPUT_DIR}"
+                COMMENT "[phoenix] copy asset: ${_asset_name}")
+        else()
+            message(WARNING "[phoenix] asset not found, skipping: ${asset}")
         endif()
     endforeach()
+
+    if(_vcpkg_installed AND EXISTS "${_vcpkg_installed}/tools/crashpad_handler.exe")
+        add_custom_command(TARGET ${target_name} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_vcpkg_installed}/tools/crashpad_handler.exe"
+                    "${PHOENIX_RUNTIME_OUTPUT_DIR}/crashpad_handler.exe"
+            COMMENT "[phoenix] copy asset: crashpad_handler.exe")
+    endif()
+
+    if(_vcpkg_installed AND EXISTS "${_vcpkg_installed}/tools/colmap")
+        add_custom_command(TARGET ${target_name} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+                    "${_vcpkg_installed}/tools/colmap/"
+                    "${PHOENIX_RUNTIME_OUTPUT_DIR}/"
+            COMMENT "[phoenix] copy colmap tools dir")
+    endif()
+
+    if(WIN32 AND TensorRT_ROOT AND EXISTS "${TensorRT_ROOT}")
+        set(_trt_bin_dir "${TensorRT_ROOT}/bin")
+        file(GLOB _trt_dlls "${_trt_bin_dir}/*.dll")
+        if(_trt_dlls)
+            foreach(_dll IN LISTS _trt_dlls)
+                get_filename_component(_dll_name "${_dll}" NAME)
+                add_custom_command(TARGET ${target_name} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                            "${_dll}"
+                            "${PHOENIX_RUNTIME_OUTPUT_DIR}"
+                    COMMENT "[phoenix] copy TensorRT DLL: ${_dll_name}")
+            endforeach()
+        else()
+            message(WARNING "[phoenix] No DLLs found in TRT bin dir: ${_trt_bin_dir}")
+        endif()
+    else()
+        message(STATUS "[phoenix] TRT DLL copy skipped: WIN32=${WIN32} TensorRT_ROOT=${TensorRT_ROOT}")
+    endif()
 endfunction()
 
 copy_phoenix_runtime_assets(demo_feature_matching)
