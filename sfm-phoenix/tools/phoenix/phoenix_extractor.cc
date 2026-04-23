@@ -42,17 +42,7 @@ struct DecodedImageTask {
   double decode_ms = 0.0;
 };
 
-struct FeatureExtractorCliOptions {
-  std::filesystem::path image_list_path;
-  int camera_mode = -1;
-  int max_edge = 1600;
-  int top_k = 5000;
-  double scores_th = 0.2;
-  double static_frame_diff_threshold = 1.0;
-  int detect_batch_size = 0;  // 0 = auto (GPU memory based)
-  bool filter_static_frames = false;
-  bool skip_existing = true;
-};
+// FeatureExtractionOptions is defined in phoenix_tool.h.
 
 struct ExtractorExecutionContext {
   const colmap::ImageReaderOptions& reader_options;
@@ -98,15 +88,16 @@ std::vector<uint8_t> ReadFileBytes(const std::filesystem::path& image_path) {
 }
 
 void AddFeatureExtractorOptions(colmap::OptionManager* options,
-                                FeatureExtractorCliOptions* cli_options) {
+                                FeatureExtractionOptions* cli_options) {
   options->AddDatabaseOptions();
   options->AddImageOptions();
   options->AddDefaultOption("camera_mode", &cli_options->camera_mode);
-  options->AddDefaultOption("image_list_path", &cli_options->image_list_path);
   options->AddFeatureExtractionOptions();
   options->AddDefaultOption("Phoenix.max_edge", &cli_options->max_edge);
   options->AddDefaultOption("Phoenix.top_k", &cli_options->top_k);
   options->AddDefaultOption("Phoenix.scores_th", &cli_options->scores_th);
+  options->AddDefaultOption("Phoenix.single_camera_per_folder",
+                            &cli_options->single_camera_per_folder);
   options->AddDefaultOption("Phoenix.filter_static_frames",
                             &cli_options->filter_static_frames);
   options->AddDefaultOption("Phoenix.static_frame_diff_threshold",
@@ -117,7 +108,7 @@ void AddFeatureExtractorOptions(colmap::OptionManager* options,
                             &cli_options->detect_batch_size);
 }
 
-void ClampFeatureExtractorOptions(FeatureExtractorCliOptions* cli_options) {
+void ClampFeatureExtractionOptions(FeatureExtractionOptions* cli_options) {
   constexpr int kMaxExtractedFeatures = 5000;
   if (cli_options->top_k > kMaxExtractedFeatures) {
     spdlog::warn("Phoenix.top_k={} exceeds hard cap {}, clamping",
@@ -127,32 +118,53 @@ void ClampFeatureExtractorOptions(FeatureExtractorCliOptions* cli_options) {
   }
 }
 
+// Builds ImageReaderOptions from a raw image_path (no COLMAP OptionManager).
+// Used by ExecFeatureExtractor when called from the automatic pipeline.
+colmap::ImageReaderOptions BuildReaderOptionsFromPath(
+    const std::filesystem::path& image_path,
+    const FeatureExtractionOptions& opts) {
+  colmap::ImageReaderOptions reader_options;
+  reader_options.image_path = image_path.string();
+  reader_options.as_rgb = true;
+
+  if (opts.camera_mode >= 0) {
+    ApplyCameraMode(opts.camera_mode, &reader_options);
+  } else if (opts.single_camera_per_folder) {
+    reader_options.single_camera = false;
+    reader_options.single_camera_per_folder = true;
+    reader_options.single_camera_per_image = false;
+  }
+
+  return reader_options;
+}
+
+// Builds ImageReaderOptions using COLMAP OptionManager (for CLI path).
 colmap::ImageReaderOptions BuildReaderOptions(
     const colmap::OptionManager& options,
-    const FeatureExtractorCliOptions& cli_options) {
+    const FeatureExtractionOptions& cli_options) {
   colmap::ImageReaderOptions reader_options = *options.image_reader;
   reader_options.image_path = *options.image_path;
   reader_options.as_rgb = true;
 
   if (cli_options.camera_mode >= 0) {
     ApplyCameraMode(cli_options.camera_mode, &reader_options);
-  }
-
-  if (!cli_options.image_list_path.empty()) {
-    reader_options.image_names = ReadTextLines(cli_options.image_list_path);
+  } else if (cli_options.single_camera_per_folder) {
+    reader_options.single_camera = false;
+    reader_options.single_camera_per_folder = true;
+    reader_options.single_camera_per_image = false;
   }
 
   return reader_options;
 }
 
 void SelectImagesForExtraction(
-    const FeatureExtractorCliOptions& cli_options,
+    const FeatureExtractionOptions& cli_options,
     const std::filesystem::path& image_path,
     colmap::ImageReaderOptions* reader_options,
     FeatureExtractionMetrics* metrics) {
   std::vector<std::string> candidate_image_names = reader_options->image_names;
   if (candidate_image_names.empty()) {
-    candidate_image_names = CollectImageNamesFromDirectory(image_path);
+    candidate_image_names = CollectImageNamesFromDirectory(image_path, true);
   }
   metrics->candidate_images = static_cast<int>(candidate_image_names.size());
 
@@ -175,17 +187,17 @@ void SelectImagesForExtraction(
 }
 
 bool ShouldExitEarlyAfterSelection(
-    const FeatureExtractorCliOptions& cli_options,
+    const FeatureExtractionOptions& cli_options,
     const colmap::ImageReaderOptions& reader_options) {
-  return (cli_options.filter_static_frames ||
-          !cli_options.image_list_path.empty()) &&
+  return cli_options.filter_static_frames &&
          reader_options.image_names.empty();
 }
 
 bool DefaultShareCameraPerFolder(
-    const FeatureExtractorCliOptions& cli_options,
+    const FeatureExtractionOptions& cli_options,
     const colmap::ImageReaderOptions& reader_options) {
   return cli_options.camera_mode < 0 &&
+      cli_options.single_camera_per_folder &&
          reader_options.existing_camera_id == colmap::kInvalidCameraId &&
          !reader_options.single_camera &&
          !reader_options.single_camera_per_folder &&
@@ -220,7 +232,7 @@ int EstimateDetectBatchSize(int max_edge, int descriptor_dim,
   return batch;
 }
 
-bool InitializeDetector(const FeatureExtractorCliOptions& cli_options,
+bool InitializeDetector(const FeatureExtractionOptions& cli_options,
                        FeatureExtractionMetrics* metrics,
                        sfm_phoenix::AlikedDetector* detector) {
   constexpr int kMaxExtractedFeatures = 5000;
@@ -498,6 +510,10 @@ void ProcessNewImages(
       tbb::make_filter<void, DecodedImageTask>(
           tbb::filter_mode::serial_in_order,
           [&](tbb::flow_control& control) -> DecodedImageTask {
+            if (IsInterruptRequested()) {
+              control.stop();
+              return {};
+            }
             while (next_image_index < image_names.size()) {
               const std::string& image_name = image_names[next_image_index++];
               if (context->database->ExistsImageWithName(image_name)) {
@@ -569,6 +585,10 @@ bool ProcessExistingImages(const std::vector<colmap::Image>& existing_images,
 
   database->BeginTransaction();
   for (const auto& image : existing_images) {
+    if (IsInterruptRequested()) {
+      database->EndTransaction();
+      return false;
+    }
     const FeatureAvailability availability = CheckFeatureAvailability(
         database, image.ImageId(), image.Name(), skip_existing, metrics);
     if (availability == FeatureAvailability::kSkip) {
@@ -711,29 +731,17 @@ void LogFeatureExtractionMetrics(const FeatureExtractionMetrics& metrics) {
                wall_avg_ms);
 }
 
-}  // namespace
-
-int RunFeatureExtractor(int argc, char** argv) {
-  FeatureExtractorCliOptions cli_options;
-
-  colmap::OptionManager options;
-  AddFeatureExtractorOptions(&options, &cli_options);
-  options.Parse(argc, argv);
-  ClampFeatureExtractorOptions(&cli_options);
-
-  spdlog::info("Phoenix.max_edge={} top_k={} scores_th={:.3f}",
-               cli_options.max_edge,
-               cli_options.top_k,
-               cli_options.scores_th);
-
-  colmap::ImageReaderOptions reader_options =
-      BuildReaderOptions(options, cli_options);
+// Core extraction logic — shared by ExecFeatureExtractor and RunFeatureExtractor.
+int DoExtraction(const std::string& database_path,
+                 colmap::ImageReaderOptions reader_options,
+                 const FeatureExtractionOptions& cli_options) {
+  const std::filesystem::path image_path = reader_options.image_path;
 
   FeatureExtractionMetrics metrics;
   const auto extraction_start = Clock::now();
 
   SelectImagesForExtraction(
-      cli_options, *options.image_path, &reader_options, &metrics);
+      cli_options, image_path, &reader_options, &metrics);
   if (ShouldExitEarlyAfterSelection(cli_options, reader_options)) {
     metrics.wall_total_ms =
         std::chrono::duration<double, std::milli>(Clock::now() -
@@ -745,7 +753,7 @@ int RunFeatureExtractor(int argc, char** argv) {
 
   reader_options.Check();
 
-  auto database = colmap::Database::Open(*options.database_path);
+  auto database = colmap::Database::Open(database_path);
   const bool default_share_camera_per_folder =
       DefaultShareCameraPerFolder(cli_options, reader_options);
 
@@ -782,6 +790,16 @@ int RunFeatureExtractor(int argc, char** argv) {
                    &execution_context,
                    &existing_image_names);
 
+  if (IsInterruptRequested()) {
+    metrics.wall_total_ms =
+        std::chrono::duration<double, std::milli>(Clock::now() -
+                                                  extraction_start)
+            .count();
+    spdlog::warn("Phoenix feature extraction interrupted by Ctrl+C");
+    LogFeatureExtractionMetrics(metrics);
+    return EXIT_FAILURE;
+  }
+
   if (!existing_image_names.empty()) {
     const std::vector<colmap::Image> existing_images =
         CollectTargetImages(*database, existing_image_names);
@@ -791,6 +809,14 @@ int RunFeatureExtractor(int argc, char** argv) {
                                database.get(),
                                &detector,
                                &metrics)) {
+      if (IsInterruptRequested()) {
+        metrics.wall_total_ms =
+            std::chrono::duration<double, std::milli>(Clock::now() -
+                                                      extraction_start)
+                .count();
+        spdlog::warn("Phoenix feature extraction interrupted by Ctrl+C");
+        LogFeatureExtractionMetrics(metrics);
+      }
       return EXIT_FAILURE;
     }
   }
@@ -804,6 +830,35 @@ int RunFeatureExtractor(int argc, char** argv) {
                metrics.num_skipped);
   LogFeatureExtractionMetrics(metrics);
   return EXIT_SUCCESS;
+}
+
+}  // namespace
+
+int ExecFeatureExtractor(const std::string& database_path,
+                         const std::filesystem::path& image_path,
+                         const FeatureExtractionOptions& opts) {
+  FeatureExtractionOptions clamped = opts;
+  ClampFeatureExtractionOptions(&clamped);
+  WriteExtractionMaxEdgeMetadata(database_path, clamped.max_edge);
+  spdlog::info("Phoenix.max_edge={} top_k={} scores_th={:.3f}",
+               clamped.max_edge, clamped.top_k, clamped.scores_th);
+  return DoExtraction(
+      database_path, BuildReaderOptionsFromPath(image_path, clamped), clamped);
+}
+
+int RunFeatureExtractor(int argc, char** argv) {
+  FeatureExtractionOptions cli_options;
+  colmap::OptionManager options;
+  AddFeatureExtractorOptions(&options, &cli_options);
+  options.Parse(argc, argv);
+  ClampFeatureExtractionOptions(&cli_options);
+  spdlog::info("Phoenix.max_edge={} top_k={} scores_th={:.3f}",
+               cli_options.max_edge,
+               cli_options.top_k,
+               cli_options.scores_th);
+  return DoExtraction(*options.database_path,
+                      BuildReaderOptions(options, cli_options),
+                      cli_options);
 }
 
 }  // namespace phoenix_tool

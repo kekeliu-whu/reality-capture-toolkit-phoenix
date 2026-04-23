@@ -188,33 +188,32 @@ set(PHOENIX_RUNTIME_ASSETS
 )
 
 function(copy_phoenix_runtime_assets target_name)
+    set(_copy_commands)
+
     foreach(asset IN LISTS PHOENIX_RUNTIME_ASSETS)
         if(EXISTS "${asset}")
             get_filename_component(_asset_name "${asset}" NAME)
-            add_custom_command(TARGET ${target_name} POST_BUILD
+            list(APPEND _copy_commands
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                         "${asset}"
-                        "${PHOENIX_RUNTIME_OUTPUT_DIR}"
-                COMMENT "[phoenix] copy asset: ${_asset_name}")
+                        "${PHOENIX_RUNTIME_OUTPUT_DIR}")
         else()
             message(WARNING "[phoenix] asset not found, skipping: ${asset}")
         endif()
     endforeach()
 
     if(_vcpkg_installed AND EXISTS "${_vcpkg_installed}/tools/crashpad_handler.exe")
-        add_custom_command(TARGET ${target_name} POST_BUILD
+        list(APPEND _copy_commands
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${_vcpkg_installed}/tools/crashpad_handler.exe"
-                    "${PHOENIX_RUNTIME_OUTPUT_DIR}/crashpad_handler.exe"
-            COMMENT "[phoenix] copy asset: crashpad_handler.exe")
+                    "${PHOENIX_RUNTIME_OUTPUT_DIR}/crashpad_handler.exe")
     endif()
 
     if(_vcpkg_installed AND EXISTS "${_vcpkg_installed}/tools/colmap")
-        add_custom_command(TARGET ${target_name} POST_BUILD
+        list(APPEND _copy_commands
             COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
                     "${_vcpkg_installed}/tools/colmap/"
-                    "${PHOENIX_RUNTIME_OUTPUT_DIR}/"
-            COMMENT "[phoenix] copy colmap tools dir")
+                    "${PHOENIX_RUNTIME_OUTPUT_DIR}/")
     endif()
 
     if(WIN32 AND TensorRT_ROOT AND EXISTS "${TensorRT_ROOT}")
@@ -223,17 +222,22 @@ function(copy_phoenix_runtime_assets target_name)
         if(_trt_dlls)
             foreach(_dll IN LISTS _trt_dlls)
                 get_filename_component(_dll_name "${_dll}" NAME)
-                add_custom_command(TARGET ${target_name} POST_BUILD
+                list(APPEND _copy_commands
                     COMMAND ${CMAKE_COMMAND} -E copy_if_different
                             "${_dll}"
-                            "${PHOENIX_RUNTIME_OUTPUT_DIR}"
-                    COMMENT "[phoenix] copy TensorRT DLL: ${_dll_name}")
+                            "${PHOENIX_RUNTIME_OUTPUT_DIR}")
             endforeach()
         else()
             message(WARNING "[phoenix] No DLLs found in TRT bin dir: ${_trt_bin_dir}")
         endif()
     else()
         message(STATUS "[phoenix] TRT DLL copy skipped: WIN32=${WIN32} TensorRT_ROOT=${TensorRT_ROOT}")
+    endif()
+
+    if(_copy_commands)
+        add_custom_command(TARGET ${target_name} POST_BUILD
+            ${_copy_commands}
+            COMMENT "[phoenix] copy runtime assets")
     endif()
 endfunction()
 

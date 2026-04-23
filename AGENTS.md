@@ -224,21 +224,11 @@ $env:HTTPS_PROXY="http://127.0.0.1:7890"
 自动补齐常用运行时 PATH，并串起两步处理。
 
 ```powershell
-.\ztools\run-phoenix.ps1 `
+.\scripts.ps1 `
   -ImageDir "D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\ground_undistort\fisheye_x5_VID_20251017_113930_00_052_cam0" `
+  -OutputDir "D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\ground_undistort\fisheye_x5_VID_20251017_113930_00_052_cam0\phoenix_output" `
   -DatabasePath "D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\ground_undistort\fisheye_x5_VID_20251017_113930_00_052_cam0\phoenix_output\database.db" `
-  -CameraMode 3 `
   -MaxEdge 1024 `
-  -RetrievalNum 50
+  -TopK 5000 `
+  -MaxMatches 4000
 ```
-
-常用可选参数：
-
-- `-TopK 5000`
-- `-MaxMatches 4000`
-- `-LinearOverlapNum 10`
-- `-QuadraticOverlapNum 10`
-- `-ImageListPath images.txt`
-- `-PairListPath pairs.txt`
-- `-ExtractorOnly`
-- `-MatcherOnly`

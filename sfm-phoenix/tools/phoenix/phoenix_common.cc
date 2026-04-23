@@ -4,12 +4,16 @@
 
 #include <colmap/estimators/two_view_geometry.h>
 
+#include <sqlite3.h>
+
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <spdlog/spdlog.h>
 
 #include <cctype>
+#include <atomic>
 #include <chrono>
+#include <csignal>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
@@ -27,14 +31,52 @@ namespace phoenix_tool {
 
 namespace {
 
+constexpr char kPhoenixMetadataTable[] = "phoenix_metadata";
+constexpr char kExtractionMaxEdgeKey[] = "extraction_max_edge";
+
+std::atomic<bool> g_interrupt_requested = false;
+
+#ifdef _WIN32
+BOOL WINAPI PhoenixConsoleCtrlHandler(DWORD ctrl_type) {
+  switch (ctrl_type) {
+    case CTRL_C_EVENT:
+    case CTRL_BREAK_EVENT:
+    case CTRL_CLOSE_EVENT:
+      g_interrupt_requested.store(true, std::memory_order_relaxed);
+      return TRUE;
+    default:
+      return FALSE;
+  }
+}
+#else
+void PhoenixSignalHandler(int signal_number) {
+  if (signal_number == SIGINT) {
+    g_interrupt_requested.store(true, std::memory_order_relaxed);
+  }
+}
+#endif
+
 std::string QuoteArg(const std::string& argument) {
   std::string quoted = "\"";
+  size_t backslash_count = 0;
   for (const char ch : argument) {
-    if (ch == '\"') {
-      quoted += '\\';
+    if (ch == '\\') {
+      ++backslash_count;
+      continue;
     }
+
+    if (ch == '\"') {
+      quoted.append(backslash_count * 2 + 1, '\\');
+      quoted += ch;
+      backslash_count = 0;
+      continue;
+    }
+
+    quoted.append(backslash_count, '\\');
+    backslash_count = 0;
     quoted += ch;
   }
+  quoted.append(backslash_count * 2, '\\');
   quoted += '"';
   return quoted;
 }
@@ -87,7 +129,61 @@ uint64_t PairKey(const colmap::image_t image_id1,
   return (static_cast<uint64_t>(min_id) << 32) | max_id;
 }
 
+void CheckSqliteResult(const int rc,
+                       sqlite3* db,
+                       const std::string& action) {
+  if (rc == SQLITE_OK || rc == SQLITE_DONE || rc == SQLITE_ROW) {
+    return;
+  }
+  throw std::runtime_error(action + ": " + sqlite3_errmsg(db));
+}
+
+void EnsurePhoenixMetadataTable(sqlite3* db) {
+  const std::string sql =
+      "CREATE TABLE IF NOT EXISTS " + std::string(kPhoenixMetadataTable) +
+      " (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)";
+  char* error_message = nullptr;
+  const int rc = sqlite3_exec(db, sql.c_str(), nullptr, nullptr,
+                              &error_message);
+  if (rc != SQLITE_OK) {
+    const std::string details =
+        error_message != nullptr ? error_message : sqlite3_errmsg(db);
+    sqlite3_free(error_message);
+    throw std::runtime_error("Failed to create phoenix_metadata table: " +
+                             details);
+  }
+}
+
+void FinalizeSqliteStatement(sqlite3_stmt* stmt) {
+  if (stmt != nullptr) {
+    sqlite3_finalize(stmt);
+  }
+}
+
+void CloseSqliteDatabase(sqlite3* db) {
+  if (db != nullptr) {
+    sqlite3_close(db);
+  }
+}
+
 }  // namespace
+
+void InstallInterruptHandler() {
+  ResetInterruptRequested();
+#ifdef _WIN32
+  SetConsoleCtrlHandler(PhoenixConsoleCtrlHandler, TRUE);
+#else
+  std::signal(SIGINT, PhoenixSignalHandler);
+#endif
+}
+
+void ResetInterruptRequested() {
+  g_interrupt_requested.store(false, std::memory_order_relaxed);
+}
+
+bool IsInterruptRequested() {
+  return g_interrupt_requested.load(std::memory_order_relaxed);
+}
 
 void ApplyCameraMode(const int camera_mode,
                      colmap::ImageReaderOptions* reader_options) {
@@ -233,13 +329,27 @@ std::vector<std::string> ReadTextLines(const std::filesystem::path& path,
 }
 
 std::vector<std::string> CollectImageNamesFromDirectory(
-    const std::filesystem::path& image_path) {
+    const std::filesystem::path& image_path,
+    const bool recursive) {
   std::vector<std::string> image_names;
-  for (const auto& entry : std::filesystem::directory_iterator(image_path)) {
-    if (!entry.is_regular_file() || !IsSupportedImageExtension(entry.path())) {
-      continue;
+  if (recursive) {
+    for (const auto& entry :
+         std::filesystem::recursive_directory_iterator(image_path)) {
+      if (!entry.is_regular_file() ||
+          !IsSupportedImageExtension(entry.path())) {
+        continue;
+      }
+      image_names.push_back(
+          std::filesystem::relative(entry.path(), image_path).generic_string());
     }
-    image_names.push_back(entry.path().filename().string());
+  } else {
+    for (const auto& entry : std::filesystem::directory_iterator(image_path)) {
+      if (!entry.is_regular_file() ||
+          !IsSupportedImageExtension(entry.path())) {
+        continue;
+      }
+      image_names.push_back(entry.path().filename().string());
+    }
   }
   std::sort(image_names.begin(), image_names.end());
   return image_names;
@@ -436,32 +546,6 @@ std::vector<std::pair<colmap::image_t, colmap::image_t>> BuildSequentialPairs(
   return pairs;
 }
 
-std::vector<std::pair<colmap::image_t, colmap::image_t>> ReadPairs(
-    const std::filesystem::path& pair_list_path,
-    const std::unordered_map<std::string, colmap::image_t>& image_ids) {
-  std::vector<std::pair<colmap::image_t, colmap::image_t>> pairs;
-  for (const auto& line : ReadTextLines(pair_list_path, true)) {
-    std::istringstream stream(line);
-    std::string image_name1;
-    std::string image_name2;
-    stream >> image_name1 >> image_name2;
-    if (image_name1.empty() || image_name2.empty()) {
-      continue;
-    }
-
-    const auto it1 = image_ids.find(image_name1);
-    const auto it2 = image_ids.find(image_name2);
-    if (it1 == image_ids.end() || it2 == image_ids.end()) {
-      throw std::runtime_error("Pair list references unknown image: " + line);
-    }
-    if (it1->second == it2->second) {
-      continue;
-    }
-    pairs.emplace_back(it1->second, it2->second);
-  }
-  return pairs;
-}
-
 const CachedFeatures& LoadFeatures(
     const colmap::Database& database,
     const std::unordered_map<colmap::image_t, colmap::Image>& images,
@@ -545,6 +629,110 @@ const CachedFeatures& LoadFeatures(
 bool ParseBool(const std::string& value) {
   return value == "1" || value == "true" || value == "TRUE" ||
          value == "True";
+}
+
+void WriteExtractionMaxEdgeMetadata(const std::string& database_path,
+                                    const int max_edge) {
+  sqlite3* db = nullptr;
+  sqlite3_stmt* stmt = nullptr;
+  const int open_rc = sqlite3_open(database_path.c_str(), &db);
+  if (open_rc != SQLITE_OK) {
+    const std::string details =
+        db != nullptr ? sqlite3_errmsg(db) : "sqlite3_open failed";
+    CloseSqliteDatabase(db);
+    throw std::runtime_error("Failed to open database for Phoenix metadata: " +
+                             details);
+  }
+
+  try {
+    EnsurePhoenixMetadataTable(db);
+
+    const std::string sql =
+        "INSERT OR REPLACE INTO " + std::string(kPhoenixMetadataTable) +
+        "(key, value) VALUES(?, ?)";
+    CheckSqliteResult(sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr),
+                      db,
+                      "Failed to prepare Phoenix metadata write");
+    CheckSqliteResult(sqlite3_bind_text(stmt,
+                                        1,
+                                        kExtractionMaxEdgeKey,
+                                        -1,
+                                        SQLITE_STATIC),
+                      db,
+                      "Failed to bind Phoenix metadata key");
+    const std::string value = std::to_string(max_edge);
+    CheckSqliteResult(sqlite3_bind_text(stmt,
+                                        2,
+                                        value.c_str(),
+                                        -1,
+                                        SQLITE_TRANSIENT),
+                      db,
+                      "Failed to bind Phoenix metadata value");
+    CheckSqliteResult(sqlite3_step(stmt),
+                      db,
+                      "Failed to write Phoenix metadata");
+    FinalizeSqliteStatement(stmt);
+    CloseSqliteDatabase(db);
+  } catch (...) {
+    FinalizeSqliteStatement(stmt);
+    CloseSqliteDatabase(db);
+    throw;
+  }
+}
+
+bool ReadExtractionMaxEdgeMetadata(const std::string& database_path,
+                                   int* max_edge) {
+  sqlite3* db = nullptr;
+  sqlite3_stmt* stmt = nullptr;
+  const int open_rc = sqlite3_open(database_path.c_str(), &db);
+  if (open_rc != SQLITE_OK) {
+    const std::string details =
+        db != nullptr ? sqlite3_errmsg(db) : "sqlite3_open failed";
+    CloseSqliteDatabase(db);
+    throw std::runtime_error("Failed to open database for Phoenix metadata: " +
+                             details);
+  }
+
+  try {
+    EnsurePhoenixMetadataTable(db);
+
+    const std::string sql =
+        "SELECT value FROM " + std::string(kPhoenixMetadataTable) +
+        " WHERE key = ?";
+    CheckSqliteResult(sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr),
+                      db,
+                      "Failed to prepare Phoenix metadata read");
+    CheckSqliteResult(sqlite3_bind_text(stmt,
+                                        1,
+                                        kExtractionMaxEdgeKey,
+                                        -1,
+                                        SQLITE_STATIC),
+                      db,
+                      "Failed to bind Phoenix metadata read key");
+
+    const int step_rc = sqlite3_step(stmt);
+    if (step_rc == SQLITE_ROW) {
+      const unsigned char* value = sqlite3_column_text(stmt, 0);
+      if (value == nullptr) {
+        throw std::runtime_error(
+            "Phoenix extraction metadata row is missing a value");
+      }
+      *max_edge = std::stoi(reinterpret_cast<const char*>(value));
+      FinalizeSqliteStatement(stmt);
+      CloseSqliteDatabase(db);
+      return true;
+    }
+    if (step_rc != SQLITE_DONE) {
+      CheckSqliteResult(step_rc, db, "Failed to read Phoenix metadata");
+    }
+    FinalizeSqliteStatement(stmt);
+    CloseSqliteDatabase(db);
+    return false;
+  } catch (...) {
+    FinalizeSqliteStatement(stmt);
+    CloseSqliteDatabase(db);
+    throw;
+  }
 }
 
 }  // namespace phoenix_tool

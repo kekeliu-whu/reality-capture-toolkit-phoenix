@@ -80,26 +80,59 @@ struct FeatureMatchingMetrics {
   double wall_total_ms = 0.0;
 };
 
+// Options for DINOv3-based image retrieval pair generation.
+struct RetrievalOptions {
+  int num = 50;
+  int batch_size = 32;
+  double similarity_threshold = 0.0;
+  double relative_threshold = 0.8;
+};
+
+// Options for ALIKED feature extraction (phoenix feature_extractor).
+struct FeatureExtractionOptions {
+  int camera_mode = -1;
+  int max_edge = 1024;
+  int top_k = 5000;
+  double scores_th = 0.2;
+  int detect_batch_size = 0;  // 0 = auto (GPU memory based)
+  double static_frame_diff_threshold = 1.0;
+  bool single_camera_per_folder = true;
+  bool filter_static_frames = false;
+  bool skip_existing = true;
+};
+
+// Options for LightGlue feature matching (phoenix feature_matcher).
+struct FeatureMatchingOptions {
+  enum class Preset {
+    kFeatureMatcher,
+    kAutomaticReconstructor,
+  };
+
+  explicit FeatureMatchingOptions(
+      const Preset preset = Preset::kFeatureMatcher)
+      : linear_overlap_num(
+            preset == Preset::kAutomaticReconstructor ? 0 : 15),
+        quadratic_overlap_num(
+            preset == Preset::kAutomaticReconstructor ? 0 : 10) {}
+
+  std::filesystem::path image_path;   // image root dir; used for retrieval
+  int max_matches = 4000;
+  int linear_overlap_num;
+  int quadratic_overlap_num;
+  bool skip_existing = true;
+  bool overwrite_existing = false;
+  RetrievalOptions retrieval;
+};
+
+// Options for the full automatic reconstruction pipeline.
 struct AutomaticOptions {
   std::string database_path;
   std::string image_path;
   std::string output_path;
-  std::string image_list_path;
-  std::string pair_list_path;
-  std::string colmap_path = "colmap";
-  std::string retrieval_model_path;
-  int camera_mode = -1;
-  int max_edge = 1600;
-  int top_k = 5000;
-  int max_matches = 4000;
-  int retrieval_num = 50;
-  int retrieval_batch_size = 32;
-  double static_frame_diff_threshold = 1.0;
-  int linear_overlap_num = 0;
-  int quadratic_overlap_num = 0;
-  bool filter_static_frames = false;
-  bool skip_existing = true;
-  bool overwrite_existing = false;
+  FeatureExtractionOptions extraction;
+  FeatureMatchingOptions matching =
+      FeatureMatchingOptions(
+          FeatureMatchingOptions::Preset::kAutomaticReconstructor);
   std::vector<std::string> mapper_args;
 };
 
@@ -124,7 +157,8 @@ std::vector<std::string> ReadTextLines(
     bool allow_comments = false);
 
 std::vector<std::string> CollectImageNamesFromDirectory(
-    const std::filesystem::path& image_path);
+  const std::filesystem::path& image_path,
+  bool recursive);
 
 std::vector<std::string> FilterStaticAdjacentFrames(
     const std::filesystem::path& image_path,
@@ -153,10 +187,6 @@ std::vector<std::pair<colmap::image_t, colmap::image_t>> BuildSequentialPairs(
     int linear_overlap_num,
     int quadratic_overlap_num);
 
-std::vector<std::pair<colmap::image_t, colmap::image_t>> ReadPairs(
-    const std::filesystem::path& pair_list_path,
-    const std::unordered_map<std::string, colmap::image_t>& image_ids);
-
 const CachedFeatures& LoadFeatures(
     const colmap::Database& database,
     const std::unordered_map<colmap::image_t, colmap::Image>& images,
@@ -168,12 +198,28 @@ const CachedFeatures& LoadFeatures(
 
 bool ParseBool(const std::string& value);
 
+void WriteExtractionMaxEdgeMetadata(const std::string& database_path,
+                                    int max_edge);
+
+bool ReadExtractionMaxEdgeMetadata(const std::string& database_path,
+                                   int* max_edge);
+
+void InstallInterruptHandler();
+void ResetInterruptRequested();
+bool IsInterruptRequested();
+
 AutomaticOptions ParseAutomaticOptions(int argc, char** argv);
 
+// Direct execution (no CLI arg parsing).
+int ExecFeatureExtractor(const std::string& database_path,
+                         const std::filesystem::path& image_path,
+                         const FeatureExtractionOptions& opts);
+int ExecFeatureMatcher(const std::string& database_path,
+                       const FeatureMatchingOptions& opts);
+
+// CLI entry points (parse argc/argv then delegate to Exec* above).
 int RunFeatureExtractor(int argc, char** argv);
-
 int RunFeatureMatcher(int argc, char** argv);
-
 int RunAutomaticReconstructor(const AutomaticOptions& options);
 
 }  // namespace phoenix_tool

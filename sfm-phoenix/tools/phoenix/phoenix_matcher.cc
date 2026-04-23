@@ -156,6 +156,8 @@ std::vector<std::pair<colmap::image_t, colmap::image_t>> TopKRetrievalPairs(
     const std::vector<std::string>& image_names,
     const std::vector<std::vector<float>>& embeddings,
     const int top_k,
+  const double similarity_threshold,
+  const double relative_threshold,
     const std::unordered_map<std::string, colmap::image_t>& image_ids) {
   const int n = static_cast<int>(embeddings.size());
 
@@ -187,8 +189,17 @@ std::vector<std::pair<colmap::image_t, colmap::image_t>> TopKRetrievalPairs(
     std::partial_sort(row_scores.begin(), row_scores.begin() + k,
                       row_scores.end(),
                       std::greater<std::pair<float, int>>());
+    const float best_score = k > 0 ? row_scores.front().first : -1.0f;
 
     for (int ki = 0; ki < k; ++ki) {
+      const float score = row_scores[ki].first;
+      if (similarity_threshold > 0.0 && score < similarity_threshold) {
+        continue;
+      }
+      if (relative_threshold > 0.0 &&
+          score < best_score * relative_threshold) {
+        continue;
+      }
       const auto it_j =
           image_ids.find(image_names[row_scores[ki].second]);
       const colmap::image_t id_i = it_i->second;
@@ -202,10 +213,10 @@ std::vector<std::pair<colmap::image_t, colmap::image_t>> TopKRetrievalPairs(
 
 std::vector<std::pair<colmap::image_t, colmap::image_t>> BuildRetrievalPairs(
     const std::filesystem::path& image_path,
-    const std::filesystem::path& image_list_path,
-    const std::filesystem::path& retrieval_model_path,
     const int retrieval_num,
     const int retrieval_batch_size,
+  const double similarity_threshold,
+  const double relative_threshold,
     const std::unordered_map<std::string, colmap::image_t>& image_ids) {
   if (retrieval_num <= 0) return {};
   if (image_path.empty()) {
@@ -214,16 +225,18 @@ std::vector<std::pair<colmap::image_t, colmap::image_t>> BuildRetrievalPairs(
         "Phoenix.retrieval_num > 0");
   }
 
-  const auto onnx_path = retrieval_model_path.empty()
-                             ? DefaultRetrievalModelPath()
-                             : retrieval_model_path;
+  const auto onnx_path = DefaultRetrievalModelPath();
 
   const auto t_engine_start = std::chrono::steady_clock::now();
   const auto engine_path = sfm_phoenix::EnsureRetrievalEngine(onnx_path);
 
   spdlog::info(
-      "Phoenix retrieval: generating top-{} pairs via TRT engine {}",
-      retrieval_num, engine_path.string());
+      "Phoenix retrieval: generating top-{} pairs via TRT engine {} "
+      "similarity_threshold={:.3f} relative_threshold={:.3f}",
+      retrieval_num,
+      engine_path.string(),
+      similarity_threshold,
+      relative_threshold);
 
   sfm_phoenix::TrtEngine engine;
   if (!engine.load(engine_path.string())) {
@@ -237,14 +250,8 @@ std::vector<std::pair<colmap::image_t, colmap::image_t>> BuildRetrievalPairs(
 
   // Collect image names — ordered or from DB
   std::vector<std::string> image_names;
-  if (!image_list_path.empty()) {
-    for (const auto& name : ReadTextLines(image_list_path)) {
-      if (image_ids.count(name)) image_names.push_back(name);
-    }
-  } else {
-    for (const auto& [name, id] : image_ids) image_names.push_back(name);
-    std::sort(image_names.begin(), image_names.end());
-  }
+  for (const auto& [name, id] : image_ids) image_names.push_back(name);
+  std::sort(image_names.begin(), image_names.end());
   if (image_names.empty()) return {};
 
   const auto t_embed_start = std::chrono::steady_clock::now();
@@ -256,8 +263,12 @@ std::vector<std::pair<colmap::image_t, colmap::image_t>> BuildRetrievalPairs(
           .count();
 
   const auto t_topk_start = std::chrono::steady_clock::now();
-  auto pairs =
-      TopKRetrievalPairs(image_names, embeddings, retrieval_num, image_ids);
+  auto pairs = TopKRetrievalPairs(image_names,
+                                  embeddings,
+                                  retrieval_num,
+                                  similarity_threshold,
+                                  relative_threshold,
+                                  image_ids);
   const double topk_ms =
       std::chrono::duration<double, std::milli>(
           std::chrono::steady_clock::now() - t_topk_start)
@@ -323,71 +334,48 @@ void LogFeatureMatchingMetrics(const FeatureMatchingMetrics& metrics) {
       pairs_per_sec);
 }
 
-}  // namespace
+// Registers FeatureMatchingOptions fields with the COLMAP OptionManager.
+void AddFeatureMatcherOptions(colmap::OptionManager* options,
+                               FeatureMatchingOptions* opts) {
+  options->AddDatabaseOptions();
+  options->AddDefaultOption("image_path", &opts->image_path);
+  options->AddDefaultOption("Phoenix.max_matches", &opts->max_matches);
+  options->AddDefaultOption("Phoenix.retrieval_num", &opts->retrieval.num);
+  options->AddDefaultOption("Phoenix.retrieval_batch_size",
+                            &opts->retrieval.batch_size);
+  options->AddDefaultOption("Phoenix.retrieval_similarity_threshold",
+                            &opts->retrieval.similarity_threshold);
+  options->AddDefaultOption("Phoenix.retrieval_relative_threshold",
+                            &opts->retrieval.relative_threshold);
+  options->AddDefaultOption("Phoenix.linear_overlap_num",
+                            &opts->linear_overlap_num);
+  options->AddDefaultOption("Phoenix.quadratic_overlap_num",
+                            &opts->quadratic_overlap_num);
+  options->AddDefaultOption("Phoenix.skip_existing", &opts->skip_existing);
+  options->AddDefaultOption("Phoenix.overwrite_existing",
+                            &opts->overwrite_existing);
+}
 
-int RunFeatureMatcher(int argc, char** argv) {
+// Core matching logic — shared by ExecFeatureMatcher and RunFeatureMatcher.
+int DoMatching(const std::string& database_path,
+               const FeatureMatchingOptions& opts) {
   constexpr int kMaxMatchedFeatures = 4000;
   using Clock = std::chrono::steady_clock;
 
-  std::filesystem::path pair_list_path;
-  std::filesystem::path image_path;
-  std::filesystem::path image_list_path;
-  std::filesystem::path retrieval_model_path;
-  int max_edge = 1600;
-  int max_matches = kMaxMatchedFeatures;
-  int retrieval_num = 50;
-  int retrieval_batch_size = 32;
-  int linear_overlap_num = 10;
-  int quadratic_overlap_num = 10;
-  bool skip_existing = true;
-  bool overwrite_existing = false;
-
-  colmap::OptionManager options;
-  options.AddDatabaseOptions();
-  options.AddDefaultOption("pair_list_path", &pair_list_path);
-  options.AddDefaultOption("image_path", &image_path);
-  options.AddDefaultOption("image_list_path", &image_list_path);
-  options.AddDefaultOption("Phoenix.retrieval_model_path",
-                           &retrieval_model_path);
-  options.AddDefaultOption("Phoenix.max_edge", &max_edge);
-  options.AddDefaultOption("Phoenix.max_matches", &max_matches);
-  options.AddDefaultOption("Phoenix.retrieval_num", &retrieval_num);
-  options.AddDefaultOption("Phoenix.retrieval_batch_size",
-                           &retrieval_batch_size);
-  options.AddDefaultOption("Phoenix.linear_overlap_num", &linear_overlap_num);
-  options.AddDefaultOption("Phoenix.quadratic_overlap_num",
-                           &quadratic_overlap_num);
-  options.AddDefaultOption("Phoenix.skip_existing", &skip_existing);
-  options.AddDefaultOption("Phoenix.overwrite_existing", &overwrite_existing);
-  options.Parse(argc, argv);
-
-  if (linear_overlap_num < 0 || quadratic_overlap_num < 0) {
-    spdlog::error("Phoenix overlap params must be non-negative");
-    return EXIT_FAILURE;
-  }
-  if (retrieval_num < 0 || retrieval_batch_size <= 0) {
-    spdlog::error("Phoenix retrieval params must be positive/zero");
-    return EXIT_FAILURE;
-  }
-
-  if (max_matches > kMaxMatchedFeatures) {
-    spdlog::warn("Phoenix.max_matches={} exceeds hard cap {}, clamping",
-                 max_matches,
-                 kMaxMatchedFeatures);
-    max_matches = kMaxMatchedFeatures;
+  int extraction_max_edge = 0;
+  if (!ReadExtractionMaxEdgeMetadata(database_path, &extraction_max_edge)) {
+    throw std::runtime_error(
+        "Phoenix extraction metadata missing: extraction_max_edge not found in "
+        "database. Run feature_extractor again with this Phoenix version.");
   }
 
   FeatureMatchingMetrics metrics;
   const auto matching_start = Clock::now();
 
-  auto database = colmap::Database::Open(*options.database_path);
+  auto database = colmap::Database::Open(database_path);
   const std::vector<colmap::Image> all_images = LoadImages(*database);
-  std::vector<std::string> selected_image_names;
-  if (!image_list_path.empty()) {
-    selected_image_names = ReadTextLines(image_list_path);
-  }
   const std::vector<colmap::Image> ordered_images =
-      SelectOrderedImages(all_images, selected_image_names);
+      SelectOrderedImages(all_images, {});
 
   std::unordered_map<std::string, colmap::image_t> image_ids;
   std::unordered_map<colmap::image_t, colmap::Image> images_by_id;
@@ -405,33 +393,27 @@ int RunFeatureMatcher(int argc, char** argv) {
 
   const auto pair_prepare_start = Clock::now();
   std::vector<std::pair<colmap::image_t, colmap::image_t>> pairs;
-  if (pair_list_path.empty()) {
-    if (linear_overlap_num > 0 || quadratic_overlap_num > 0) {
-      pairs = BuildSequentialPairs(ordered_images,
-                                   linear_overlap_num,
-                                   quadratic_overlap_num);
-    } else if (retrieval_num <= 0) {
-      pairs = BuildExhaustivePairs(ordered_images);
-    }
-    if (retrieval_num > 0) {
-      const auto resolved_model = retrieval_model_path.empty()
-                                      ? DefaultRetrievalModelPath()
-                                      : retrieval_model_path;
-      const auto retrieval_start = Clock::now();
-      const auto retrieval_pairs = BuildRetrievalPairs(image_path,
-                                                       image_list_path,
-                                                       resolved_model,
-                                                       retrieval_num,
-                                                       retrieval_batch_size,
-                                                       image_ids);
-      metrics.retrieval_ms.AddSample(
-          std::chrono::duration<double, std::milli>(
-              Clock::now() - retrieval_start)
-              .count());
-      MergeUniquePairs(retrieval_pairs, &pairs);
-    }
-  } else {
-    pairs = ReadPairs(pair_list_path, image_ids);
+  if (opts.linear_overlap_num > 0 || opts.quadratic_overlap_num > 0) {
+    pairs = BuildSequentialPairs(ordered_images,
+                                 opts.linear_overlap_num,
+                                 opts.quadratic_overlap_num);
+  } else if (opts.retrieval.num <= 0) {
+    pairs = BuildExhaustivePairs(ordered_images);
+  }
+  if (opts.retrieval.num > 0) {
+    const auto retrieval_start = Clock::now();
+    const auto retrieval_pairs =
+        BuildRetrievalPairs(opts.image_path,
+                            opts.retrieval.num,
+                            opts.retrieval.batch_size,
+                            opts.retrieval.similarity_threshold,
+                            opts.retrieval.relative_threshold,
+                            image_ids);
+    metrics.retrieval_ms.AddSample(
+        std::chrono::duration<double, std::milli>(
+            Clock::now() - retrieval_start)
+            .count());
+    MergeUniquePairs(retrieval_pairs, &pairs);
   }
   metrics.pair_prepare_ms.AddSample(
       std::chrono::duration<double, std::milli>(Clock::now() -
@@ -444,7 +426,7 @@ int RunFeatureMatcher(int argc, char** argv) {
 
   sfm_phoenix::LightGlueConfig matcher_config;
   matcher_config.engine_path = lightglue_engine.string();
-  matcher_config.max_matches = max_matches;
+  matcher_config.max_matches = opts.max_matches;
 
   sfm_phoenix::LightGlueMatcher matcher;
   if (!matcher.init(matcher_config)) {
@@ -468,10 +450,12 @@ int RunFeatureMatcher(int argc, char** argv) {
     std::future<colmap::TwoViewGeometry> geometry_future;
   };
   std::optional<PendingGeometry> pending;
+  bool interrupted = false;
 
   const auto flush_pending = [&](PendingGeometry& pg) {
     auto geometry = pg.geometry_future.get();
     const auto db_write_start = Clock::now();
+    colmap::DatabaseTransaction transaction(database.get());
     database->WriteMatches(pg.id1, pg.id2, pg.colmap_matches);
     database->WriteTwoViewGeometry(pg.id1, pg.id2, geometry);
     metrics.db_write_ms.AddSample(
@@ -480,13 +464,16 @@ int RunFeatureMatcher(int argc, char** argv) {
             .count());
   };
 
-  database->BeginTransaction();
   for (const auto& [image_id1, image_id2] : pairs) {
+    if (IsInterruptRequested()) {
+      interrupted = true;
+      break;
+    }
     const bool has_matches = database->ExistsMatches(image_id1, image_id2);
     const bool has_geometry =
         database->ExistsInlierMatches(image_id1, image_id2);
-    if ((has_matches || has_geometry) && skip_existing &&
-        !overwrite_existing) {
+    if ((has_matches || has_geometry) && opts.skip_existing &&
+        !opts.overwrite_existing) {
       spdlog::info("Skip existing pair: {} <-> {}",
                    images_by_id.at(image_id1).Name(),
                    images_by_id.at(image_id2).Name());
@@ -494,8 +481,9 @@ int RunFeatureMatcher(int argc, char** argv) {
       continue;
     }
 
-    if (overwrite_existing) {
+    if (opts.overwrite_existing) {
       const auto db_write_start = Clock::now();
+      colmap::DatabaseTransaction transaction(database.get());
       if (has_geometry) {
         database->DeleteInlierMatches(image_id1, image_id2);
       }
@@ -514,14 +502,14 @@ int RunFeatureMatcher(int argc, char** argv) {
     const auto& features1 = LoadFeatures(*database,
                                          images_by_id,
                                          cameras_by_id,
-                                         max_edge,
+                                         extraction_max_edge,
                                          image_id1,
                                          &feature_cache,
                                          &metrics);
     const auto& features2 = LoadFeatures(*database,
                                          images_by_id,
                                          cameras_by_id,
-                                         max_edge,
+                                         extraction_max_edge,
                                          image_id2,
                                          &feature_cache,
                                          &metrics);
@@ -590,13 +578,17 @@ int RunFeatureMatcher(int argc, char** argv) {
                  images_by_id.at(image_id1).Name(),
                  images_by_id.at(image_id2).Name(),
                  matches.num_matches);
+
+    if (IsInterruptRequested()) {
+      interrupted = true;
+      break;
+    }
   }
   // Flush last pending geometry result.
   if (pending) {
     flush_pending(*pending);
     pending.reset();
   }
-  database->EndTransaction();
 
   metrics.wall_total_ms =
       std::chrono::duration<double, std::milli>(Clock::now() - matching_start)
@@ -606,7 +598,56 @@ int RunFeatureMatcher(int argc, char** argv) {
                metrics.num_matched_pairs,
                metrics.num_skipped_pairs);
   LogFeatureMatchingMetrics(metrics);
+  if (interrupted) {
+    spdlog::warn("Phoenix matching interrupted by Ctrl+C");
+    return EXIT_FAILURE;
+  }
   return EXIT_SUCCESS;
+}
+
+}  // namespace
+
+int ExecFeatureMatcher(const std::string& database_path,
+                       const FeatureMatchingOptions& opts) {
+  constexpr int kMaxMatchedFeatures = 4000;
+  if (opts.linear_overlap_num < 0 || opts.quadratic_overlap_num < 0) {
+    spdlog::error("Phoenix overlap params must be non-negative");
+    return EXIT_FAILURE;
+  }
+  if (opts.retrieval.num < 0 || opts.retrieval.batch_size <= 0) {
+    spdlog::error("Phoenix retrieval params must be positive/zero");
+    return EXIT_FAILURE;
+  }
+  if (opts.retrieval.similarity_threshold < 0.0 ||
+      opts.retrieval.similarity_threshold > 1.0) {
+    spdlog::error(
+        "Phoenix.retrieval_similarity_threshold must be in [0, 1]");
+    return EXIT_FAILURE;
+  }
+  if (opts.retrieval.relative_threshold < 0.0 ||
+      opts.retrieval.relative_threshold > 1.0) {
+    spdlog::error(
+        "Phoenix.retrieval_relative_threshold must be in [0, 1]");
+    return EXIT_FAILURE;
+  }
+  FeatureMatchingOptions clamped = opts;
+  if (clamped.max_matches > kMaxMatchedFeatures) {
+    spdlog::warn("Phoenix.max_matches={} exceeds hard cap {}, clamping",
+                 clamped.max_matches,
+                 kMaxMatchedFeatures);
+    clamped.max_matches = kMaxMatchedFeatures;
+  }
+  return DoMatching(database_path, clamped);
+}
+
+int RunFeatureMatcher(int argc, char** argv) {
+  FeatureMatchingOptions cli_options;
+
+  colmap::OptionManager options;
+  AddFeatureMatcherOptions(&options, &cli_options);
+  options.Parse(argc, argv);
+
+  return ExecFeatureMatcher(*options.database_path, cli_options);
 }
 
 }  // namespace phoenix_tool

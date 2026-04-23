@@ -10,6 +10,7 @@
 int main(int argc, char** argv) {
   try {
     InitSpdLog();
+    phoenix_tool::InstallInterruptHandler();
 
     if (argc < 2) {
       phoenix_tool::PrintHelp();
