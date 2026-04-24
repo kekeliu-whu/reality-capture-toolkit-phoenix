@@ -105,6 +105,10 @@ bool BuildSerializedEngine(const std::filesystem::path& onnx_path,
     if (options.enable_fp16 && builder->platformHasFastFp16()) {
         config->setFlag(nvinfer1::BuilderFlag::kFP16);
     }
+    if (options.detailed_profiling) {
+        config->setProfilingVerbosity(
+            nvinfer1::ProfilingVerbosity::kDETAILED);
+    }
 
     if (!options.profile_shapes.empty()) {
         auto* profile = builder->createOptimizationProfile();

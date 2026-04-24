@@ -31,9 +31,10 @@
 
 ```powershell
 $env:KMP_DUPLICATE_LIB_OK = "TRUE"
-$env:PYTHONPATH = "D:\codes\reality-capture-toolkit"
-$env:PATH = "d:\codes\tmp\colmap-x64-windows-cuda\bin;" +
-            "C:\Program Files\NVIDIA\CUDNN\v9.21\bin\12.9\x64;" +
+$env:PYTHONPATH = "D:\ProjectX\project-3d\reality-capture-toolkit"
+# torch\lib 包含 cudnn64_9.dll，必须放在最前面；原先记录的 colmap bin / CUDNN v9.21 路径均不存在
+$env:PATH = "C:\Users\rick\miniconda3\envs\cusfm\Lib\site-packages\torch\lib;" +
+            "C:\Users\rick\miniconda3\envs\cusfm\Lib\site-packages\torch\bin;" +
             "C:\Users\rick\miniconda3\envs\cusfm;" +
             "C:\Users\rick\miniconda3\envs\cusfm\Library\bin;" +
             "C:\Users\rick\miniconda3\envs\cusfm\Scripts;" +

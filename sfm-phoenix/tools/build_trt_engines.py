@@ -114,10 +114,11 @@ def build_lightglue(input_dir: str, output_dir: str, fp16: bool):
         return
     print(f"\n[lightglue]")
     build_engine(onnx, engine, fp16=fp16, profiles=[
-        ('kpts0', (1, 100, 2),  (1, 5000, 2),  (1, 5000, 2)),
-        ('desc0', (1, 100, 128),(1, 5000, 128), (1, 5000, 128)),
-        ('kpts1', (1, 100, 2),  (1, 5000, 2),  (1, 5000, 2)),
-        ('desc1', (1, 100, 128),(1, 5000, 128), (1, 5000, 128)),
+        # Phoenix feature matching supports batch sizes {1, 4, 8}.
+        ('kpts0', (1, 100, 2),   (4, 5000, 2),   (8, 5000, 2)),
+        ('desc0', (1, 100, 128), (4, 5000, 128), (8, 5000, 128)),
+        ('kpts1', (1, 100, 2),   (4, 5000, 2),   (8, 5000, 2)),
+        ('desc1', (1, 100, 128), (4, 5000, 128), (8, 5000, 128)),
     ])
 
 

@@ -15,8 +15,10 @@
 #include <chrono>
 #include <csignal>
 #include <cstdint>
+#include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -24,6 +26,7 @@
 #include <vector>
 
 #ifdef _WIN32
+#include <psapi.h>
 #include <windows.h>
 #endif
 
@@ -35,6 +38,72 @@ constexpr char kPhoenixMetadataTable[] = "phoenix_metadata";
 constexpr char kExtractionMaxEdgeKey[] = "extraction_max_edge";
 
 std::atomic<bool> g_interrupt_requested = false;
+
+#ifdef _WIN32
+using NvmlReturnT = int;
+using NvmlDeviceT = void*;
+
+struct NvmlUtilizationSt {
+  unsigned int gpu = 0;
+  unsigned int memory = 0;
+};
+
+constexpr NvmlReturnT kNvmlSuccess = 0;
+
+using NvmlInitV2Fn = NvmlReturnT (*)();
+using NvmlShutdownFn = NvmlReturnT (*)();
+using NvmlDeviceGetHandleByIndexV2Fn = NvmlReturnT (*)(unsigned int,
+                                                       NvmlDeviceT*);
+using NvmlDeviceGetUtilizationRatesFn = NvmlReturnT (*)(NvmlDeviceT,
+                                                        NvmlUtilizationSt*);
+
+struct NvmlApi {
+  HMODULE module = nullptr;
+  NvmlInitV2Fn init_v2 = nullptr;
+  NvmlShutdownFn shutdown = nullptr;
+  NvmlDeviceGetHandleByIndexV2Fn get_handle_by_index_v2 = nullptr;
+  NvmlDeviceGetUtilizationRatesFn get_utilization_rates = nullptr;
+  bool available = false;
+  bool initialized = false;
+};
+
+NvmlApi& GetNvmlApi() {
+  static NvmlApi api;
+  static std::once_flag once;
+  std::call_once(once, []() {
+    api.module = LoadLibraryA("nvml.dll");
+    if (api.module == nullptr) {
+      return;
+    }
+    api.init_v2 = reinterpret_cast<NvmlInitV2Fn>(
+        GetProcAddress(api.module, "nvmlInit_v2"));
+    api.shutdown = reinterpret_cast<NvmlShutdownFn>(
+        GetProcAddress(api.module, "nvmlShutdown"));
+    api.get_handle_by_index_v2 =
+        reinterpret_cast<NvmlDeviceGetHandleByIndexV2Fn>(
+            GetProcAddress(api.module, "nvmlDeviceGetHandleByIndex_v2"));
+    api.get_utilization_rates =
+        reinterpret_cast<NvmlDeviceGetUtilizationRatesFn>(
+            GetProcAddress(api.module, "nvmlDeviceGetUtilizationRates"));
+    api.available = api.init_v2 != nullptr && api.shutdown != nullptr &&
+                    api.get_handle_by_index_v2 != nullptr &&
+                    api.get_utilization_rates != nullptr;
+    if (!api.available) {
+      FreeLibrary(api.module);
+      api.module = nullptr;
+      return;
+    }
+    api.initialized = api.init_v2() == kNvmlSuccess;
+    if (!api.initialized) {
+      FreeLibrary(api.module);
+      api.module = nullptr;
+      api.available = false;
+      return;
+    }
+  });
+  return api;
+}
+#endif
 
 #ifdef _WIN32
 BOOL WINAPI PhoenixConsoleCtrlHandler(DWORD ctrl_type) {
@@ -89,6 +158,110 @@ std::string ToLower(std::string value) {
                    return static_cast<char>(std::tolower(ch));
                  });
   return value;
+}
+
+ResourceSnapshot CaptureResourceSnapshotImpl() {
+  ResourceSnapshot snapshot;
+
+#ifdef _WIN32
+  PROCESS_MEMORY_COUNTERS_EX counters;
+  std::memset(&counters, 0, sizeof(counters));
+  if (GetProcessMemoryInfo(GetCurrentProcess(),
+                           reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(
+                               &counters),
+                           sizeof(counters))) {
+    snapshot.has_rss = true;
+    snapshot.process_rss_mb =
+        static_cast<double>(counters.WorkingSetSize) / (1024.0 * 1024.0);
+  }
+#endif
+
+  int device_index = 0;
+  if (cudaGetDevice(&device_index) == cudaSuccess) {
+    snapshot.gpu_index = device_index;
+    size_t free_bytes = 0;
+    size_t total_bytes = 0;
+    if (cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess) {
+      snapshot.has_gpu_memory = true;
+      snapshot.gpu_memory_total_mb =
+          static_cast<double>(total_bytes) / (1024.0 * 1024.0);
+      snapshot.gpu_memory_used_mb =
+          static_cast<double>(total_bytes - free_bytes) / (1024.0 * 1024.0);
+    }
+
+#ifdef _WIN32
+    NvmlApi& nvml = GetNvmlApi();
+    if (nvml.available && nvml.initialized) {
+      NvmlDeviceT device = nullptr;
+      if (nvml.get_handle_by_index_v2(device_index, &device) ==
+          kNvmlSuccess) {
+        NvmlUtilizationSt utilization;
+        if (nvml.get_utilization_rates(device, &utilization) ==
+            kNvmlSuccess) {
+          snapshot.has_gpu_utilization = true;
+          snapshot.gpu_utilization_pct =
+              static_cast<double>(utilization.gpu);
+        }
+      }
+    }
+#endif
+  }
+
+  return snapshot;
+}
+
+void LogResourceSnapshotImpl(const std::string& stage,
+                             const ResourceSnapshot& snapshot,
+                             const ResourceSnapshot* baseline,
+                             const std::string& detail) {
+  std::string message = stage;
+  if (!detail.empty()) {
+    message += " | ";
+    message += detail;
+  }
+
+  if (snapshot.has_gpu_utilization) {
+    message += " | gpu=" + std::to_string(snapshot.gpu_index) +
+               " util=" + std::to_string(snapshot.gpu_utilization_pct) + "%";
+  } else if (snapshot.gpu_index >= 0) {
+    message += " | gpu=" + std::to_string(snapshot.gpu_index) +
+               " util=n/a";
+  }
+
+  if (snapshot.has_gpu_memory) {
+    char buffer[128];
+    std::snprintf(buffer,
+                  sizeof(buffer),
+                  " | vram=%.1f/%.1fMB",
+                  snapshot.gpu_memory_used_mb,
+                  snapshot.gpu_memory_total_mb);
+    message += buffer;
+    if (baseline != nullptr && baseline->has_gpu_memory) {
+      std::snprintf(buffer,
+                    sizeof(buffer),
+                    " (delta=%+.1fMB)",
+                    snapshot.gpu_memory_used_mb - baseline->gpu_memory_used_mb);
+      message += buffer;
+    }
+  }
+
+  if (snapshot.has_rss) {
+    char buffer[128];
+    std::snprintf(buffer,
+                  sizeof(buffer),
+                  " | rss=%.1fMB",
+                  snapshot.process_rss_mb);
+    message += buffer;
+    if (baseline != nullptr && baseline->has_rss) {
+      std::snprintf(buffer,
+                    sizeof(buffer),
+                    " (delta=%+.1fMB)",
+                    snapshot.process_rss_mb - baseline->process_rss_mb);
+      message += buffer;
+    }
+  }
+
+  spdlog::info("[resource] {}", message);
 }
 
 bool IsSupportedImageExtension(const std::filesystem::path& path) {
@@ -167,6 +340,17 @@ void CloseSqliteDatabase(sqlite3* db) {
 }
 
 }  // namespace
+
+ResourceSnapshot CaptureResourceSnapshot() {
+  return CaptureResourceSnapshotImpl();
+}
+
+void LogResourceSnapshot(const std::string& stage,
+                         const ResourceSnapshot& snapshot,
+                         const ResourceSnapshot* baseline,
+                         const std::string& detail) {
+  LogResourceSnapshotImpl(stage, snapshot, baseline, detail);
+}
 
 void InstallInterruptHandler() {
   ResetInterruptRequested();

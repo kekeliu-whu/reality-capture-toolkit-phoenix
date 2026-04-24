@@ -40,6 +40,9 @@ struct TrtBuildOptions {
     bool enable_fp16 = true;
     size_t workspace_bytes = size_t{4} << 30;
     int builder_optimization_level = 3;
+    // Set to true to embed per-layer precision info in the engine so that
+    // trtexec --exportLayerInfo and --profilingVerbosity=detailed work.
+    bool detailed_profiling = false;
 };
 
 bool BuildSerializedEngine(const std::filesystem::path& onnx_path,

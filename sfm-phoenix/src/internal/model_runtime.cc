@@ -14,6 +14,21 @@ namespace sfm_phoenix {
 
 namespace {
 
+int SelectPhoenixEngineBatchBucket(const int batch_size) {
+  if (batch_size <= 1) {
+    return 1;
+  }
+  if (batch_size <= 4) {
+    return 4;
+  }
+  return 8;
+}
+
+std::string PhoenixBatchEngineName(const std::string& base_name,
+                                   const int batch_size) {
+  return base_name + "_b" + std::to_string(batch_size) + ".engine";
+}
+
 std::filesystem::path EnsureRuntimeEngine(
     const std::string& onnx_filename,
     const std::string& engine_filename,
@@ -62,18 +77,23 @@ std::filesystem::path GetExecutableDirectory() {
 #endif
 }
 
-std::filesystem::path EnsurePhoenixBackboneEngine() {
+std::filesystem::path EnsurePhoenixBackboneEngine(const int batch_size) {
+  const int engine_batch = SelectPhoenixEngineBatchBucket(batch_size);
   TrtBuildOptions options;
   options.enable_fp16 = false; // ALIKED backbone is more stable in FP32 (some ops produce NaNs in FP16)
   options.builder_optimization_level = 3;
+  // Cap max spatial resolution at 1024 to keep workspace requirements within
+  // 8 GB. Phoenix typical usage is --Phoenix.max_edge 1024; higher resolutions
+  // cause /Div node tactics to require >15 GB workspace on this GPU.
+  constexpr int kBackboneMaxEdge = 1024;
   options.profile_shapes = {
-      // batch axis is dynamic: min=1, opt=1, max=4
-      // Spatial max is capped at 1024 to stay within GPU VRAM during TRT
-      // tactic search (1600x1600 at batch=4 FP16 requires ~7.3 GB workspace).
-      {"image", {1, 3, 320, 320}, {1, 3, 1024, 1024}, {4, 3, 1024, 1024}},
+    {"image", {1, 3, 320, 320}, {engine_batch, 3, kBackboneMaxEdge, kBackboneMaxEdge},
+     {engine_batch, 3, kBackboneMaxEdge, kBackboneMaxEdge}},
   };
   return EnsureRuntimeEngine(
-      "aliked_backbone.onnx", "aliked_backbone.engine", options);
+      "aliked_backbone.onnx",
+      PhoenixBatchEngineName("aliked_backbone", engine_batch),
+      options);
 }
 
 std::filesystem::path EnsurePhoenixSddhEngine() {
@@ -88,17 +108,28 @@ std::filesystem::path EnsurePhoenixSddhEngine() {
   return EnsureRuntimeEngine("aliked_sddh.onnx", "aliked_sddh.engine", options);
 }
 
-std::filesystem::path EnsurePhoenixLightGlueEngine() {
+std::filesystem::path EnsurePhoenixLightGlueEngine(const int batch_size) {
+  const int engine_batch = SelectPhoenixEngineBatchBucket(batch_size);
   TrtBuildOptions options;
   options.enable_fp16 = true;
   options.builder_optimization_level = 3;
+  options.detailed_profiling = true;  // Allows trtexec --exportLayerInfo
+  // Phoenix feature matching uses separate engines for batch buckets
+  // {1, 4, 8} to avoid loading the widest LightGlue context for batch=1.
   options.profile_shapes = {
-      {"kpts0", {1, 100, 2}, {1, 5000, 2}, {1, 5000, 2}},
-      {"desc0", {1, 100, 128}, {1, 5000, 128}, {1, 5000, 128}},
-      {"kpts1", {1, 100, 2}, {1, 5000, 2}, {1, 5000, 2}},
-      {"desc1", {1, 100, 128}, {1, 5000, 128}, {1, 5000, 128}},
+      {"kpts0", {1, 100, 2}, {engine_batch, 5000, 2},
+       {engine_batch, 5000, 2}},
+      {"desc0", {1, 100, 128}, {engine_batch, 5000, 128},
+       {engine_batch, 5000, 128}},
+      {"kpts1", {1, 100, 2}, {engine_batch, 5000, 2},
+       {engine_batch, 5000, 2}},
+      {"desc1", {1, 100, 128}, {engine_batch, 5000, 128},
+       {engine_batch, 5000, 128}},
   };
-  return EnsureRuntimeEngine("lightglue.onnx", "lightglue.engine", options);
+  return EnsureRuntimeEngine(
+      "lightglue.onnx",
+      PhoenixBatchEngineName("lightglue", engine_batch),
+      options);
 }
 
 std::filesystem::path EnsureRetrievalEngine(

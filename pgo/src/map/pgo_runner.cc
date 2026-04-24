@@ -54,7 +54,7 @@ void SaveOptimizedTrajectory(const std::string& output_path,
     return;
   }
 
-  traj_file << "# x y z roll pitch yaw qx qy qz qw timestamp\n";
+  traj_file << "#x y z roll pitch yaw qx qy qz qw timestamp\n";
   traj_file << std::fixed << std::setprecision(12);
   for (const auto& scan_pose : scan_poses) {
     const auto& pose     = *scan_pose.pose;

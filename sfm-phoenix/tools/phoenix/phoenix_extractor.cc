@@ -25,6 +25,30 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
+constexpr int kPhoenixFixedBatchSize = 4;
+
+int ClampSupportedPhoenixBatchSize(const int requested,
+                                   const int max_supported) {
+  constexpr int kSupportedBatchSizes[] = {8, 4, 1};
+  for (const int batch_size : kSupportedBatchSizes) {
+    if (batch_size <= requested && batch_size <= max_supported) {
+      return batch_size;
+    }
+  }
+  return 1;
+}
+
+size_t EstimateBackboneEngineReserveBytes(const int batch_size) {
+  switch (ClampSupportedPhoenixBatchSize(batch_size, /*max_supported=*/8)) {
+    case 8:
+      return static_cast<size_t>(7300) * 1024 * 1024;
+    case 4:
+      return static_cast<size_t>(5600) * 1024 * 1024;
+    default:
+      return static_cast<size_t>(4300) * 1024 * 1024;
+  }
+}
+
 struct ImportedCameraEntry {
   colmap::camera_t camera_id = colmap::kInvalidCameraId;
   colmap::rig_t rig_id = colmap::kInvalidRigId;
@@ -116,6 +140,7 @@ void ClampFeatureExtractionOptions(FeatureExtractionOptions* cli_options) {
                  kMaxExtractedFeatures);
     cli_options->top_k = kMaxExtractedFeatures;
   }
+  cli_options->detect_batch_size = kPhoenixFixedBatchSize;
 }
 
 // Builds ImageReaderOptions from a raw image_path (no COLMAP OptionManager).
@@ -127,6 +152,9 @@ colmap::ImageReaderOptions BuildReaderOptionsFromPath(
   reader_options.image_path = image_path.string();
   reader_options.as_rgb = true;
 
+  if (!opts.camera_model.empty()) {
+    reader_options.camera_model = opts.camera_model;
+  }
   if (opts.camera_mode >= 0) {
     ApplyCameraMode(opts.camera_mode, &reader_options);
   } else if (opts.single_camera_per_folder) {
@@ -204,8 +232,8 @@ bool DefaultShareCameraPerFolder(
          !reader_options.single_camera_per_image;
 }
 
-// Estimate optimal detect batch size from free GPU memory.
-// Called after engine init so allocations are already accounted for.
+// Estimate the largest supported extraction batch whose engine/context reserve
+// plus per-image activations still fit in current free VRAM.
 int EstimateDetectBatchSize(int max_edge, int descriptor_dim,
                             int engine_max_batch) {
   size_t free_bytes = 0, total_bytes = 0;
@@ -221,10 +249,19 @@ int EstimateDetectBatchSize(int max_edge, int descriptor_dim,
   //   score_map:   1 * H * W * 4 bytes
   const size_t per_image =
       static_cast<size_t>(3 + descriptor_dim + 1) * pad * pad * sizeof(float);
-  // Reserve 40% for DKD workspace, SDDH, CUDA overhead, etc.
-  const size_t usable = static_cast<size_t>(free_bytes * 0.6);
-  int batch = per_image > 0 ? static_cast<int>(usable / per_image) : 1;
-  batch = std::max(1, std::min(batch, engine_max_batch));
+  const size_t cuda_safety_bytes = static_cast<size_t>(384) * 1024 * 1024;
+  int batch = 1;
+  for (const int candidate : {8, 4, 1}) {
+    if (candidate > engine_max_batch) {
+      continue;
+    }
+    const size_t required_bytes = EstimateBackboneEngineReserveBytes(candidate) +
+                                  per_image * candidate + cuda_safety_bytes;
+    if (free_bytes >= required_bytes) {
+      batch = candidate;
+      break;
+    }
+  }
   spdlog::info("GPU memory: free={:.0f} MB  total={:.0f} MB  "
                "per_image~={:.1f} MB  auto batch_size={}",
                free_bytes / 1e6, total_bytes / 1e6,
@@ -233,11 +270,15 @@ int EstimateDetectBatchSize(int max_edge, int descriptor_dim,
 }
 
 bool InitializeDetector(const FeatureExtractionOptions& cli_options,
+             const int detect_batch_size,
                        FeatureExtractionMetrics* metrics,
                        sfm_phoenix::AlikedDetector* detector) {
   constexpr int kMaxExtractedFeatures = 5000;
+  const ResourceSnapshot before_init = CaptureResourceSnapshot();
+  LogResourceSnapshot("extract.engine.before_init", before_init);
   const auto engine_init_start = Clock::now();
-  const auto backbone_engine = sfm_phoenix::EnsurePhoenixBackboneEngine();
+  const auto backbone_engine =
+    sfm_phoenix::EnsurePhoenixBackboneEngine(detect_batch_size);
   const auto sddh_engine = sfm_phoenix::EnsurePhoenixSddhEngine();
 
   sfm_phoenix::AlikedConfig detector_config;
@@ -257,6 +298,12 @@ bool InitializeDetector(const FeatureExtractionOptions& cli_options,
       std::chrono::duration<double, std::milli>(Clock::now() -
                                                 engine_init_start)
           .count());
+  const ResourceSnapshot after_init = CaptureResourceSnapshot();
+  LogResourceSnapshot("extract.engine.after_init",
+                      after_init,
+                      &before_init,
+                      "backbone=" + backbone_engine.filename().string() +
+                          " sddh=" + sddh_engine.filename().string());
   return true;
 }
 
@@ -444,6 +491,7 @@ void ProcessNewImages(
   size_t next_image_index = 0;
   const size_t decode_tokens = DecodePipelineTokens();
   const int batch_size = context->detect_batch_size;
+  ResourceSnapshot previous_snapshot = CaptureResourceSnapshot();
 
   // Accumulation buffer: filled by the serial stage-4 filter,
   // flushed when batch_size is reached or the pipeline ends.
@@ -457,6 +505,15 @@ void ProcessNewImages(
     imgs.reserve(pending.size());
     for (const auto& t : pending) imgs.push_back(t.image_bgr);
 
+    const ResourceSnapshot batch_before = CaptureResourceSnapshot();
+    LogResourceSnapshot(
+      "extract.batch.before_detect",
+      batch_before,
+      &previous_snapshot,
+      "batch_size=" + std::to_string(pending.size()) +
+        " first=" + pending.front().image_name +
+        " last=" + pending.back().image_name);
+
     const auto detect_start = Clock::now();
     auto batch_results = context->detector->detect_batch(imgs);
     const double batch_ms =
@@ -464,6 +521,12 @@ void ProcessNewImages(
             .count();
     const double per_img_ms =
         batch_ms / static_cast<double>(pending.size());
+    const ResourceSnapshot batch_after = CaptureResourceSnapshot();
+    LogResourceSnapshot("extract.batch.after_detect",
+              batch_after,
+              &batch_before,
+              "batch_size=" + std::to_string(pending.size()) +
+                " detect_ms=" + std::to_string(batch_ms));
 
     for (int i = 0; i < static_cast<int>(pending.size()); ++i) {
       const DecodedImageTask& task = pending[i];
@@ -500,6 +563,14 @@ void ProcessNewImages(
 
       StoreDetectedFeatures(task.image_name, batch_results[i],
                             image_id, context->database, context->metrics);
+      const ResourceSnapshot current_snapshot = CaptureResourceSnapshot();
+      LogResourceSnapshot("extract.image.done",
+                          current_snapshot,
+                          &previous_snapshot,
+                          "image=" + task.image_name +
+                              " keypoints=" +
+                              std::to_string(batch_results[i].num_keypoints));
+      previous_snapshot = current_snapshot;
     }
     pending.clear();
   };
@@ -584,6 +655,7 @@ bool ProcessExistingImages(const std::vector<colmap::Image>& existing_images,
   }
 
   database->BeginTransaction();
+  ResourceSnapshot previous_snapshot = CaptureResourceSnapshot();
   for (const auto& image : existing_images) {
     if (IsInterruptRequested()) {
       database->EndTransaction();
@@ -616,6 +688,12 @@ bool ProcessExistingImages(const std::vector<colmap::Image>& existing_images,
 
     DetectAndStoreFeatures(
         image.Name(), image_bgr, image.ImageId(), detector, database, metrics);
+    const ResourceSnapshot current_snapshot = CaptureResourceSnapshot();
+    LogResourceSnapshot("extract.image.done",
+                        current_snapshot,
+                        &previous_snapshot,
+                        "image=" + image.Name() + " existing=1");
+    previous_snapshot = current_snapshot;
   }
   database->EndTransaction();
   return true;
@@ -736,6 +814,7 @@ int DoExtraction(const std::string& database_path,
                  colmap::ImageReaderOptions reader_options,
                  const FeatureExtractionOptions& cli_options) {
   const std::filesystem::path image_path = reader_options.image_path;
+  WriteExtractionMaxEdgeMetadata(database_path, cli_options.max_edge);
 
   FeatureExtractionMetrics metrics;
   const auto extraction_start = Clock::now();
@@ -757,19 +836,13 @@ int DoExtraction(const std::string& database_path,
   const bool default_share_camera_per_folder =
       DefaultShareCameraPerFolder(cli_options, reader_options);
 
+  const int detect_batch_size = kPhoenixFixedBatchSize;
+
   sfm_phoenix::AlikedDetector detector;
-  if (!InitializeDetector(cli_options, &metrics, &detector)) {
+  if (!InitializeDetector(cli_options, detect_batch_size, &metrics, &detector)) {
     return EXIT_FAILURE;
   }
-
-  // Resolve detect batch size: 0 = auto from GPU free memory.
-  int detect_batch_size = cli_options.detect_batch_size;
-  if (detect_batch_size <= 0) {
-    const int engine_max_batch = detector.backbone_max_batch();
-    detect_batch_size = EstimateDetectBatchSize(
-        cli_options.max_edge, 128, engine_max_batch);
-  }
-  spdlog::info("Using detect_batch_size={}", detect_batch_size);
+  spdlog::info("Using fixed detect_batch_size={}", detect_batch_size);
 
   std::vector<std::string> existing_image_names;
   existing_image_names.reserve(reader_options.image_names.size());
@@ -839,7 +912,6 @@ int ExecFeatureExtractor(const std::string& database_path,
                          const FeatureExtractionOptions& opts) {
   FeatureExtractionOptions clamped = opts;
   ClampFeatureExtractionOptions(&clamped);
-  WriteExtractionMaxEdgeMetadata(database_path, clamped.max_edge);
   spdlog::info("Phoenix.max_edge={} top_k={} scores_th={:.3f}",
                clamped.max_edge, clamped.top_k, clamped.scores_th);
   return DoExtraction(

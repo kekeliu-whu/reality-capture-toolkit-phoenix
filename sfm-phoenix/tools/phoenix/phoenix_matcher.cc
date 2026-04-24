@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -30,6 +31,55 @@
 namespace phoenix_tool {
 
 namespace {
+
+constexpr int kPhoenixFixedBatchSize = 4;
+constexpr int kPhoenixMaxBatchSize = 8;
+constexpr int kPhoenixMaxKeypoints = 5000;
+
+int ClampSupportedPhoenixBatchSize(const int requested,
+                                   const int max_supported) {
+  constexpr int kSupportedBatchSizes[] = {8, 4, 1};
+  for (const int batch_size : kSupportedBatchSizes) {
+    if (batch_size <= requested && batch_size <= max_supported) {
+      return batch_size;
+    }
+  }
+  return 1;
+}
+
+size_t EstimateLightGlueEngineReserveBytes(const int batch_size) {
+  switch (ClampSupportedPhoenixBatchSize(batch_size, /*max_supported=*/8)) {
+    case 8:
+      return static_cast<size_t>(3200) * 1024 * 1024;
+    case 4:
+      return static_cast<size_t>(1800) * 1024 * 1024;
+    default:
+      return static_cast<size_t>(700) * 1024 * 1024;
+  }
+}
+
+int EstimateMatchingBatchSize(const size_t per_pair_staging,
+                              const int max_supported) {
+  size_t free_vram_bytes = 0, total_vram_bytes = 0;
+  if (cudaMemGetInfo(&free_vram_bytes, &total_vram_bytes) != cudaSuccess) {
+    spdlog::warn("cudaMemGetInfo failed, defaulting matching batch_size=1");
+    return 1;
+  }
+
+  const size_t cuda_safety_bytes = static_cast<size_t>(256) * 1024 * 1024;
+  for (const int candidate : {8, 4, 1}) {
+    if (candidate > max_supported) {
+      continue;
+    }
+    const size_t required_bytes = EstimateLightGlueEngineReserveBytes(candidate) +
+                                  per_pair_staging * candidate +
+                                  cuda_safety_bytes;
+    if (free_vram_bytes >= required_bytes) {
+      return candidate;
+    }
+  }
+  return 1;
+}
 
 uint64_t PairKey(const colmap::image_t image_id1,
                  const colmap::image_t image_id2) {
@@ -106,6 +156,7 @@ std::vector<std::vector<float>> ExtractDinoEmbeddings(
   std::vector<float> batch_output(
       static_cast<size_t>(batch_size) * kDinoEmbedDim);
   std::vector<std::vector<float>> result(n);
+  ResourceSnapshot previous_snapshot = CaptureResourceSnapshot();
 
   for (int i = 0; i < n; i += batch_size) {
     const int actual = std::min(batch_size, n - i);
@@ -133,6 +184,7 @@ std::vector<std::vector<float>> ExtractDinoEmbeddings(
         static_cast<size_t>(actual) * kDinoEmbedDim * sizeof(float),
         stream);
     cudaStreamSynchronize(stream);
+    const ResourceSnapshot current_snapshot = CaptureResourceSnapshot();
 
     for (int j = 0; j < actual; ++j) {
       float* emb = batch_output.data() + j * kDinoEmbedDim;
@@ -144,6 +196,13 @@ std::vector<std::vector<float>> ExtractDinoEmbeddings(
       result[i + j] = std::move(v);
     }
     spdlog::info("Phoenix retrieval: embeddings {}/{}", i + actual, n);
+    LogResourceSnapshot("retrieval.batch.done",
+                        current_snapshot,
+                        &previous_snapshot,
+                        "images=" + std::to_string(actual) +
+                            " upto=" + std::to_string(i + actual) +
+                            "/" + std::to_string(n));
+    previous_snapshot = current_snapshot;
   }
 
   cudaStreamDestroy(stream);
@@ -228,6 +287,8 @@ std::vector<std::pair<colmap::image_t, colmap::image_t>> BuildRetrievalPairs(
   const auto onnx_path = DefaultRetrievalModelPath();
 
   const auto t_engine_start = std::chrono::steady_clock::now();
+  const ResourceSnapshot before_engine = CaptureResourceSnapshot();
+  LogResourceSnapshot("retrieval.engine.before_init", before_engine);
   const auto engine_path = sfm_phoenix::EnsureRetrievalEngine(onnx_path);
 
   spdlog::info(
@@ -243,10 +304,16 @@ std::vector<std::pair<colmap::image_t, colmap::image_t>> BuildRetrievalPairs(
     throw std::runtime_error("Failed to load retrieval engine: " +
                              engine_path.string());
   }
+  const ResourceSnapshot after_engine = CaptureResourceSnapshot();
   const double engine_ms =
       std::chrono::duration<double, std::milli>(
           std::chrono::steady_clock::now() - t_engine_start)
           .count();
+  LogResourceSnapshot("retrieval.engine.after_init",
+                      after_engine,
+                      &before_engine,
+                      "engine=" + engine_path.filename().string() +
+                          " engine_ms=" + std::to_string(engine_ms));
 
   // Collect image names — ordered or from DB
   std::vector<std::string> image_names;
@@ -421,8 +488,21 @@ int DoMatching(const std::string& database_path,
           .count());
   metrics.scheduled_pairs = static_cast<int>(pairs.size());
 
+    // Resolve LightGlue batch size before engine init so we can load the
+    // smallest engine bucket that supports the chosen batch.
+    const int desc_dim = 128;
+    const size_t kpt_slot_bytes =
+      static_cast<size_t>(kPhoenixMaxKeypoints) * 2 * sizeof(float);
+    const size_t desc_slot_bytes =
+      static_cast<size_t>(kPhoenixMaxKeypoints) * desc_dim * sizeof(float);
+    const size_t per_pair_staging = 2 * (kpt_slot_bytes + desc_slot_bytes);
+  const int selected_batch = kPhoenixFixedBatchSize;
+
   const auto engine_init_start = Clock::now();
-  const auto lightglue_engine = sfm_phoenix::EnsurePhoenixLightGlueEngine();
+  const ResourceSnapshot before_engine = CaptureResourceSnapshot();
+  LogResourceSnapshot("match.engine.before_init", before_engine);
+    const auto lightglue_engine =
+      sfm_phoenix::EnsurePhoenixLightGlueEngine(selected_batch);
 
   sfm_phoenix::LightGlueConfig matcher_config;
   matcher_config.engine_path = lightglue_engine.string();
@@ -437,19 +517,72 @@ int DoMatching(const std::string& database_path,
       std::chrono::duration<double, std::milli>(Clock::now() -
                                                 engine_init_start)
           .count());
+  const ResourceSnapshot after_engine = CaptureResourceSnapshot();
+  LogResourceSnapshot("match.engine.after_init",
+                      after_engine,
+                      &before_engine,
+                      "engine=" + lightglue_engine.filename().string());
 
   std::unordered_map<colmap::image_t, CachedFeatures> feature_cache;
   feature_cache.reserve(ordered_images.size());
+  ResourceSnapshot previous_snapshot = after_engine;
 
-  // Pipeline state: geometry estimation for previous pair runs on a CPU
-  // thread while the GPU processes the next match.
+  // ─── VRAM-based batch sizing for GPU feature staging ──────────────────────
+  // Each staging slot holds one pair's features (kpts + descs, both images)
+  // pre-uploaded to GPU. Batch inference runs back-to-back without H2D stalls,
+  // and geometry estimation tasks from a batch run in parallel on CPU threads
+  // while the GPU processes the next batch.
+  const int engine_max_batch = std::max(1, matcher.max_batch_size());
+    const int max_kpts_per_img = matcher.max_keypoints();
+  const int batch_size = std::min(selected_batch, engine_max_batch);
+  size_t free_vram_bytes = 0, total_vram_bytes = 0;
+  cudaMemGetInfo(&free_vram_bytes, &total_vram_bytes);
+  spdlog::info(
+      "Phoenix matching: free_vram={:.1f}MB per_pair_staging={:.1f}MB "
+      "engine_max_batch={} fixed_batch_size={}",
+      static_cast<double>(free_vram_bytes) / (1 << 20),
+      static_cast<double>(per_pair_staging) / (1 << 20),
+      engine_max_batch,
+      batch_size);
+
+  // GPU staging slots: pre-allocated device buffers for batch_size pairs.
+  struct PairGpuSlot {
+    sfm_phoenix::CudaBuffer kpts0;
+    sfm_phoenix::CudaBuffer desc0;
+    sfm_phoenix::CudaBuffer kpts1;
+    sfm_phoenix::CudaBuffer desc1;
+    int N0 = 0;
+    int N1 = 0;
+    bool valid = false;   // true iff H2D data was uploaded for this slot
+    colmap::image_t id1 = 0;
+    colmap::image_t id2 = 0;
+
+    void Allocate(size_t kpt_bytes, size_t desc_bytes) {
+      kpts0.resize(kpt_bytes);
+      desc0.resize(desc_bytes);
+      kpts1.resize(kpt_bytes);
+      desc1.resize(desc_bytes);
+    }
+  };
+  std::vector<PairGpuSlot> gpu_slots(batch_size);
+  for (auto& s : gpu_slots) {
+    s.Allocate(kpt_slot_bytes, desc_slot_bytes);
+  }
+  cudaStream_t upload_stream = nullptr;
+  cudaStreamCreate(&upload_stream);
+
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // Pipeline state: geometry estimation tasks run on CPU threads in parallel
+  // with GPU inferences. A deque of depth batch_size allows geometry for a
+  // full batch to overlap with the next batch's GPU work.
   struct PendingGeometry {
     colmap::image_t id1;
     colmap::image_t id2;
     colmap::FeatureMatches colmap_matches;
     std::future<colmap::TwoViewGeometry> geometry_future;
   };
-  std::optional<PendingGeometry> pending;
+  std::deque<PendingGeometry> pending_queue;
   bool interrupted = false;
 
   const auto flush_pending = [&](PendingGeometry& pg) {
@@ -464,131 +597,209 @@ int DoMatching(const std::string& database_path,
             .count());
   };
 
-  for (const auto& [image_id1, image_id2] : pairs) {
-    if (IsInterruptRequested()) {
-      interrupted = true;
-      break;
-    }
-    const bool has_matches = database->ExistsMatches(image_id1, image_id2);
-    const bool has_geometry =
-        database->ExistsInlierMatches(image_id1, image_id2);
-    if ((has_matches || has_geometry) && opts.skip_existing &&
-        !opts.overwrite_existing) {
-      spdlog::info("Skip existing pair: {} <-> {}",
-                   images_by_id.at(image_id1).Name(),
-                   images_by_id.at(image_id2).Name());
-      ++metrics.num_skipped_pairs;
-      continue;
-    }
+  // Process pairs in batches of batch_size.
+  // Phase A (per batch): load features from DB/cache + async H2D upload.
+  // Phase B (per batch): single TRT forward pass for all pairs in the batch
+  //   (match_gpu_batch), then geometry tasks launched async so they overlap
+  //   with the next batch's Phase A + B.
+  int pair_idx = 0;
+  const int total_pairs = static_cast<int>(pairs.size());
 
-    if (opts.overwrite_existing) {
-      const auto db_write_start = Clock::now();
-      colmap::DatabaseTransaction transaction(database.get());
-      if (has_geometry) {
-        database->DeleteInlierMatches(image_id1, image_id2);
+  while (pair_idx < total_pairs && !interrupted) {
+    // ── Phase A: collect batch_size work items, upload features to GPU ──
+    // BatchItem describes one pair's processing in this batch.
+    struct BatchItem {
+      colmap::image_t id1;
+      colmap::image_t id2;
+      int slot_idx;   // index into gpu_slots, or -1 if no GPU work needed
+      bool skipped;   // pair was skipped (already in DB)
+    };
+    std::vector<BatchItem> batch;
+    batch.reserve(batch_size);
+    int slot_count = 0;
+
+    while (slot_count < batch_size && pair_idx < total_pairs) {
+      if (IsInterruptRequested()) {
+        interrupted = true;
+        break;
       }
-      if (has_matches) {
-        database->DeleteMatches(image_id1, image_id2);
+      const auto [image_id1, image_id2] = pairs[pair_idx++];
+      const bool has_matches =
+          database->ExistsMatches(image_id1, image_id2);
+      const bool has_geometry =
+          database->ExistsInlierMatches(image_id1, image_id2);
+
+      if ((has_matches || has_geometry) && opts.skip_existing &&
+          !opts.overwrite_existing) {
+        spdlog::info("Skip existing pair: {} <-> {}",
+                     images_by_id.at(image_id1).Name(),
+                     images_by_id.at(image_id2).Name());
+        ++metrics.num_skipped_pairs;
+        batch.push_back({image_id1, image_id2, -1, true});
+        continue;
       }
-      metrics.db_write_ms.AddSample(
-          std::chrono::duration<double, std::milli>(Clock::now() -
-                                                    db_write_start)
-              .count());
-    } else if (has_matches || has_geometry) {
-      ++metrics.num_skipped_pairs;
-      continue;
+
+      if (opts.overwrite_existing) {
+        const auto db_write_start = Clock::now();
+        colmap::DatabaseTransaction transaction(database.get());
+        if (has_geometry) {
+          database->DeleteInlierMatches(image_id1, image_id2);
+        }
+        if (has_matches) {
+          database->DeleteMatches(image_id1, image_id2);
+        }
+        metrics.db_write_ms.AddSample(
+            std::chrono::duration<double, std::milli>(Clock::now() -
+                                                      db_write_start)
+                .count());
+      } else if (has_matches || has_geometry) {
+        ++metrics.num_skipped_pairs;
+        batch.push_back({image_id1, image_id2, -1, true});
+        continue;
+      }
+
+      const auto& features1 =
+          LoadFeatures(*database, images_by_id, cameras_by_id,
+                       extraction_max_edge, image_id1,
+                       &feature_cache, &metrics);
+      const auto& features2 =
+          LoadFeatures(*database, images_by_id, cameras_by_id,
+                       extraction_max_edge, image_id2,
+                       &feature_cache, &metrics);
+
+      if (features1.num_keypoints == 0 || features2.num_keypoints == 0) {
+        ++metrics.num_matched_pairs;
+        ++metrics.num_zero_match_pairs;
+        batch.push_back({image_id1, image_id2, -1, false});
+        continue;
+      }
+
+      // Async H2D upload of this pair's features to the staging slot.
+      auto& slot = gpu_slots[slot_count];
+      slot.id1 = image_id1;
+      slot.id2 = image_id2;
+      slot.N0 = features1.num_keypoints;
+      slot.N1 = features2.num_keypoints;
+      slot.valid = true;
+      cudaMemcpyAsync(slot.kpts0.ptr, features1.keypoints.data(),
+                      static_cast<size_t>(slot.N0) * 2 * sizeof(float),
+                      cudaMemcpyHostToDevice, upload_stream);
+      cudaMemcpyAsync(slot.desc0.ptr, features1.descriptors.data(),
+                      static_cast<size_t>(slot.N0) * desc_dim * sizeof(float),
+                      cudaMemcpyHostToDevice, upload_stream);
+      cudaMemcpyAsync(slot.kpts1.ptr, features2.keypoints.data(),
+                      static_cast<size_t>(slot.N1) * 2 * sizeof(float),
+                      cudaMemcpyHostToDevice, upload_stream);
+      cudaMemcpyAsync(slot.desc1.ptr, features2.descriptors.data(),
+                      static_cast<size_t>(slot.N1) * desc_dim * sizeof(float),
+                      cudaMemcpyHostToDevice, upload_stream);
+      batch.push_back({image_id1, image_id2, slot_count, false});
+      ++slot_count;
     }
 
-    const auto& features1 = LoadFeatures(*database,
-                                         images_by_id,
-                                         cameras_by_id,
-                                         extraction_max_edge,
-                                         image_id1,
-                                         &feature_cache,
-                                         &metrics);
-    const auto& features2 = LoadFeatures(*database,
-                                         images_by_id,
-                                         cameras_by_id,
-                                         extraction_max_edge,
-                                         image_id2,
-                                         &feature_cache,
-                                         &metrics);
-    if (features1.num_keypoints == 0 || features2.num_keypoints == 0) {
-      ++metrics.num_matched_pairs;
-      continue;
+    // Wait for all H2D transfers in this batch to complete.
+    if (slot_count > 0) {
+      cudaStreamSynchronize(upload_stream);
     }
 
+    // ── Phase B: single TRT forward pass for all pairs in this batch ──
+    // Collect GPU inputs for batch inference.
+    std::vector<sfm_phoenix::BatchMatchInput> trt_inputs;
+    trt_inputs.reserve(slot_count);
+
+    for (int j = 0; j < static_cast<int>(batch.size()); ++j) {
+      const auto& item = batch[j];
+      if (item.skipped || item.slot_idx < 0) continue;
+      auto& slot = gpu_slots[item.slot_idx];
+      trt_inputs.push_back({slot.kpts0.ptr, slot.desc0.ptr, slot.N0,
+                             slot.kpts1.ptr, slot.desc1.ptr, slot.N1});
+    }
+
+    // One TRT forward pass for all pairs (or fast-path if count == 1).
     const auto match_start = Clock::now();
-    const auto matches = matcher.match(features1.keypoints.data(),
-                                       features1.descriptors.data(),
-                                       features1.num_keypoints,
-                                       features2.keypoints.data(),
-                                       features2.descriptors.data(),
-                                       features2.num_keypoints);
+    auto trt_results = matcher.match_gpu_batch(trt_inputs);
     metrics.match_ms.AddSample(
         std::chrono::duration<double, std::milli>(Clock::now() - match_start)
             .count());
 
-    // Flush previous pending geometry result (was running on CPU thread
-    // in parallel with the GPU match above).
-    if (pending) {
-      flush_pending(*pending);
-      pending.reset();
+    // Process batch results in order: launch geometry async, log, etc.
+    int ri = 0;
+    for (const auto& item : batch) {
+      if (item.skipped || item.slot_idx < 0) continue;
+
+      const auto& matches = trt_results[ri++];
+
+      // Flush the oldest pending geometry entry if the queue is at capacity.
+      if (static_cast<int>(pending_queue.size()) >= batch_size) {
+        flush_pending(pending_queue.front());
+        pending_queue.pop_front();
+      }
+
+      if (matches.num_matches > 0) {
+        const auto colmap_matches = sfm_phoenix::ToColmapMatches(matches);
+
+        const auto& feat1 = feature_cache.at(item.id1);
+        const auto& feat2 = feature_cache.at(item.id2);
+        const auto& cam1 =
+            cameras_by_id.at(images_by_id.at(item.id1).CameraId());
+        const auto& cam2 =
+            cameras_by_id.at(images_by_id.at(item.id2).CameraId());
+        const auto& pts1 = feat1.points;
+        const auto& pts2 = feat2.points;
+
+        auto geometry_future = std::async(
+            std::launch::async,
+            [&cam1, &cam2, &pts1, &pts2, colmap_matches, &metrics]() {
+              const auto geometry_start = Clock::now();
+              colmap::TwoViewGeometryOptions geometry_options;
+              auto geometry = colmap::EstimateTwoViewGeometry(
+                  cam1, pts1, cam2, pts2, colmap_matches, geometry_options);
+              metrics.geometry_ms.AddSample(
+                  std::chrono::duration<double, std::milli>(Clock::now() -
+                                                            geometry_start)
+                      .count());
+              return geometry;
+            });
+
+        pending_queue.push_back(PendingGeometry{
+            item.id1, item.id2,
+            std::move(colmap_matches),
+            std::move(geometry_future)});
+      } else {
+        ++metrics.num_zero_match_pairs;
+      }
+      ++metrics.num_matched_pairs;
+      metrics.cached_images = static_cast<int>(feature_cache.size());
+
+      spdlog::info("Matched {} <-> {}: {}",
+                   images_by_id.at(item.id1).Name(),
+                   images_by_id.at(item.id2).Name(),
+                   matches.num_matches);
+      const ResourceSnapshot current_snapshot = CaptureResourceSnapshot();
+      LogResourceSnapshot(
+          "match.pair.done",
+          current_snapshot,
+          &previous_snapshot,
+          "pair=" + images_by_id.at(item.id1).Name() + "<->" +
+              images_by_id.at(item.id2).Name() +
+              " matches=" + std::to_string(matches.num_matches));
+      previous_snapshot = current_snapshot;
+
+      gpu_slots[item.slot_idx].valid = false;
     }
-
-    if (matches.num_matches > 0) {
-      const auto colmap_matches = sfm_phoenix::ToColmapMatches(matches);
-
-      // Launch geometry estimation on a background thread so the next
-      // GPU match can start immediately.
-      const auto& cam1 =
-          cameras_by_id.at(images_by_id.at(image_id1).CameraId());
-      const auto& cam2 =
-          cameras_by_id.at(images_by_id.at(image_id2).CameraId());
-      const auto& pts1 = features1.points;
-      const auto& pts2 = features2.points;
-
-      auto geometry_future =
-          std::async(std::launch::async,
-                     [&cam1, &cam2, &pts1, &pts2,
-                      colmap_matches, &metrics]() {
-                       const auto geometry_start = Clock::now();
-                       colmap::TwoViewGeometryOptions geometry_options;
-                       auto geometry = colmap::EstimateTwoViewGeometry(
-                           cam1, pts1, cam2, pts2,
-                           colmap_matches, geometry_options);
-                       metrics.geometry_ms.AddSample(
-                           std::chrono::duration<double, std::milli>(
-                               Clock::now() - geometry_start)
-                               .count());
-                       return geometry;
-                     });
-
-      pending = PendingGeometry{
-          image_id1, image_id2,
-          std::move(colmap_matches),
-          std::move(geometry_future)};
-    } else {
-      ++metrics.num_zero_match_pairs;
-    }
-    ++metrics.num_matched_pairs;
-    metrics.cached_images = static_cast<int>(feature_cache.size());
-
-    spdlog::info("Matched {} <-> {}: {}",
-                 images_by_id.at(image_id1).Name(),
-                 images_by_id.at(image_id2).Name(),
-                 matches.num_matches);
 
     if (IsInterruptRequested()) {
       interrupted = true;
-      break;
     }
   }
-  // Flush last pending geometry result.
-  if (pending) {
-    flush_pending(*pending);
-    pending.reset();
+
+  // Flush all remaining pending geometry results.
+  while (!pending_queue.empty()) {
+    flush_pending(pending_queue.front());
+    pending_queue.pop_front();
   }
+
+  cudaStreamDestroy(upload_stream);
 
   metrics.wall_total_ms =
       std::chrono::duration<double, std::milli>(Clock::now() - matching_start)

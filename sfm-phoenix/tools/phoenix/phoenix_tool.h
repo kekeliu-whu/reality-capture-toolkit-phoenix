@@ -32,6 +32,17 @@ struct TimerStats {
   }
 };
 
+struct ResourceSnapshot {
+  bool has_gpu_utilization = false;
+  bool has_gpu_memory = false;
+  bool has_rss = false;
+  int gpu_index = -1;
+  double gpu_utilization_pct = 0.0;
+  double gpu_memory_used_mb = 0.0;
+  double gpu_memory_total_mb = 0.0;
+  double process_rss_mb = 0.0;
+};
+
 struct CachedFeatures {
   colmap::FeatureKeypoints colmap_keypoints;
   std::vector<Eigen::Vector2d> points;
@@ -91,6 +102,7 @@ struct RetrievalOptions {
 // Options for ALIKED feature extraction (phoenix feature_extractor).
 struct FeatureExtractionOptions {
   int camera_mode = -1;
+  std::string camera_model;  // e.g. "OPENCV_FISHEYE"; empty = COLMAP default
   int max_edge = 1024;
   int top_k = 5000;
   double scores_th = 0.2;
@@ -109,16 +121,12 @@ struct FeatureMatchingOptions {
   };
 
   explicit FeatureMatchingOptions(
-      const Preset preset = Preset::kFeatureMatcher)
-      : linear_overlap_num(
-            preset == Preset::kAutomaticReconstructor ? 0 : 15),
-        quadratic_overlap_num(
-            preset == Preset::kAutomaticReconstructor ? 0 : 10) {}
+      const Preset preset = Preset::kFeatureMatcher) {}
 
   std::filesystem::path image_path;   // image root dir; used for retrieval
   int max_matches = 4000;
-  int linear_overlap_num;
-  int quadratic_overlap_num;
+  int linear_overlap_num = 20;
+  int quadratic_overlap_num = 0;
   bool skip_existing = true;
   bool overwrite_existing = false;
   RetrievalOptions retrieval;
@@ -147,6 +155,13 @@ int RunCommand(const std::string& executable,
                const std::string& prefix = "");
 
 std::filesystem::path ExecutableDirectory(const char* argv0);
+
+ResourceSnapshot CaptureResourceSnapshot();
+
+void LogResourceSnapshot(const std::string& stage,
+                         const ResourceSnapshot& snapshot,
+                         const ResourceSnapshot* baseline = nullptr,
+                         const std::string& detail = "");
 
 void PrintHelp();
 

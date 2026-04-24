@@ -60,8 +60,8 @@
 #include "sophus/se3.hpp"
 #include "voxel_map_util.h"
 
-DEFINE_string(project_dirname, "D:\\output", "Path to the IMU data file");
-DEFINE_string(output_dir, "D:\\output", "Directory to save output trajectory");
+DEFINE_string(project_dirname, "Z:/rick/dataset/lianhuacheng-s20/2026-04-20_11-11-32_PointCloud/output", "Path to the IMU data file");
+DEFINE_string(output_dir, "Z:/rick/dataset/lianhuacheng-s20/2026-04-20_11-11-32_PointCloud/output", "Directory to save output trajectory");
 
 /*** Time Log Variables ***/
 bool runtime_pos_log = false, extrinsic_est_en = true;
@@ -424,7 +424,7 @@ int main(int argc, char **argv) {
   acc_cov            = 0.1;
   b_gyr_cov          = 0.0001;
   b_acc_cov          = 0.0001;
-  p_pre->blind       = 0.2;
+  p_pre->blind       = 0.1;
   p_pre->SCAN_RATE   = 10;
   runtime_pos_log    = true;
   extrinsic_est_en   = false;
@@ -481,7 +481,7 @@ int main(int argc, char **argv) {
     spdlog::error("Failed to open trajectory file: {}", traj_dir);
     return -1;
   }
-  fp_traj << "# x y z roll pitch yaw qx qy qz qw timestamp\n";
+  fp_traj << "#x y z roll pitch yaw qx qy qz qw timestamp\n";
   fp_traj.flush();
 
   /*** Load IMU data ***/

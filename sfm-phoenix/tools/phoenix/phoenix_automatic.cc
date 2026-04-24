@@ -10,6 +10,19 @@
 namespace phoenix_tool
 {
 
+  bool HasMapperOption(const std::vector<std::string> &mapper_args,
+                       const std::string &option)
+  {
+    for (const auto &arg : mapper_args)
+    {
+      if (arg == option)
+      {
+        return true;
+      }
+    }
+    return false;
+  }
+
   AutomaticOptions ParseAutomaticOptions(int argc, char **argv)
   {
     AutomaticOptions options;
@@ -19,6 +32,7 @@ namespace phoenix_tool
         "--image_path",
         "--output_path",
         "--camera_mode",
+        "--ImageReader.camera_model",
         "--Phoenix.max_edge",
         "--Phoenix.top_k",
         "--Phoenix.max_matches",
@@ -73,6 +87,10 @@ namespace phoenix_tool
       else if (arg == "--camera_mode" && has_value)
       {
         options.extraction.camera_mode = std::stoi(expanded_args[++index]);
+      }
+      else if (arg == "--ImageReader.camera_model" && has_value)
+      {
+        options.extraction.camera_model = expanded_args[++index];
       }
       else if (arg == "--Phoenix.max_edge" && has_value)
       {
@@ -187,6 +205,8 @@ namespace phoenix_tool
     spdlog::info("  image_path                 = {}", options.image_path);
     spdlog::info("  output_path                = {}", options.output_path);
     spdlog::info("  camera_mode                = {}", ext.camera_mode);
+    spdlog::info("  camera_model               = {}",
+                 ext.camera_model.empty() ? "(default)" : ext.camera_model);
     spdlog::info("  max_edge                   = {}", ext.max_edge);
     spdlog::info("  top_k                      = {}", ext.top_k);
     spdlog::info("  max_matches                = {}", mat.max_matches);
@@ -250,6 +270,21 @@ namespace phoenix_tool
     mapper_args.insert(mapper_args.end(),
                        options.mapper_args.begin(),
                        options.mapper_args.end());
+
+    const bool has_multiple_models =
+      HasMapperOption(mapper_args, "--Mapper.multiple_models");
+    const bool has_max_num_models =
+      HasMapperOption(mapper_args, "--Mapper.max_num_models");
+    if (!has_multiple_models && !has_max_num_models)
+    {
+      mapper_args.push_back("--Mapper.multiple_models");
+      mapper_args.push_back("0");
+      mapper_args.push_back("--Mapper.max_num_models");
+      mapper_args.push_back("1");
+      spdlog::info(
+        "  mapper default override      = --Mapper.multiple_models 0 "
+        "--Mapper.max_num_models 1");
+    }
 
     std::filesystem::create_directories(options.output_path);
     return RunCommand("colmap", mapper_args, "mapper");
