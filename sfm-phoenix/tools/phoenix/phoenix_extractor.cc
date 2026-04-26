@@ -155,6 +155,9 @@ colmap::ImageReaderOptions BuildReaderOptionsFromPath(
   if (!opts.camera_model.empty()) {
     reader_options.camera_model = opts.camera_model;
   }
+  if (!opts.camera_params.empty()) {
+    reader_options.camera_params = opts.camera_params;
+  }
   if (opts.camera_mode >= 0) {
     ApplyCameraMode(opts.camera_mode, &reader_options);
   } else if (opts.single_camera_per_folder) {

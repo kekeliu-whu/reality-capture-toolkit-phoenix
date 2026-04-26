@@ -232,3 +232,48 @@ $env:HTTPS_PROXY="http://127.0.0.1:7890"
   -TopK 5000 `
   -MaxMatches 4000
 ```
+
+---
+
+### DINOv3 ONNX（ModelScope 下载 + FP16 导出）
+
+用于 Phoenix retrieval 的 DINOv3 模型文件名固定为：
+
+- `sfm-phoenix/models/dinov3_vitb16_pretrain_lvd1689m.onnx`
+
+#### 依赖安装（cusfm）
+
+```powershell
+& C:\Users\rick\miniconda3\envs\cusfm\python.exe -m pip install --upgrade modelscope transformers huggingface_hub safetensors
+```
+
+#### 导出命令（优先使用 ModelScope）
+
+```powershell
+$env:KMP_DUPLICATE_LIB_OK = "TRUE"
+$env:PYTHONPATH = "D:\ProjectX\project-3d\reality-capture-toolkit"
+& C:\Users\rick\miniconda3\envs\cusfm\python.exe sfm-phoenix\tools\export_dinov3_onnx.py `
+  --download-from-modelscope `
+  --modelscope-model-id facebook/dinov3-vitb16-pretrain-lvd1689m `
+  --modelscope-cache-dir D:\ProjectX\project-3d\reality-capture-toolkit\sfm-phoenix\tmp_modelscope_cache `
+  --output D:\ProjectX\project-3d\reality-capture-toolkit\sfm-phoenix\models\dinov3_vitb16_pretrain_lvd1689m.onnx `
+  --export-fp16 `
+  --opset 19
+```
+
+#### 导出后核验
+
+- ONNX 输入名：`pixel_values`，shape `[-1, 3, 224, 224]`
+- ONNX 输出名：`embeddings`，shape `[-1, 768]`
+- 当前导出脚本默认走 FP16（输入/输出与权重均为 FLOAT16）
+
+#### automatic_reconstructor 验证命令（已通过）
+
+```powershell
+$env:PATH = "C:\Program Files\TensorRT-10.16.1.11\bin;F:\Library\vcpkg\installed\x64-windows\bin;" + $env:PATH
+& D:\ProjectX\project-3d\reality-capture-toolkit\build\RelWithDebInfo\phoenix.exe automatic_reconstructor `
+  --database_path D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\tmp\1.db `
+  --image_path D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\tmp\camera\fisheye_x5_VID_20251017_113930_00_052_cam0\ `
+  --output_path D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\tmp\xsfm\ `
+  --ImageReader.camera_model OPENCV_FISHEYE
+```

@@ -95,6 +95,7 @@ struct FeatureMatchingMetrics {
 struct RetrievalOptions {
   int num = 50;
   int batch_size = 32;
+  int period = 1;
   double similarity_threshold = 0.0;
   double relative_threshold = 0.8;
 };
@@ -103,6 +104,7 @@ struct RetrievalOptions {
 struct FeatureExtractionOptions {
   int camera_mode = -1;
   std::string camera_model;  // e.g. "OPENCV_FISHEYE"; empty = COLMAP default
+  std::string camera_params;
   int max_edge = 1024;
   int top_k = 5000;
   double scores_th = 0.2;

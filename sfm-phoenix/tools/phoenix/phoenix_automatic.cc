@@ -33,11 +33,14 @@ namespace phoenix_tool
         "--output_path",
         "--camera_mode",
         "--ImageReader.camera_model",
+      "--ImageReader.camera_params",
         "--Phoenix.max_edge",
         "--Phoenix.top_k",
         "--Phoenix.max_matches",
         "--Phoenix.retrieval_num",
         "--Phoenix.retrieval_batch_size",
+      "--SequentialMatching.loop_detection_period",
+      "--SequentialMatching.loop_detection_num_images",
         "--Phoenix.retrieval_similarity_threshold",
         "--Phoenix.retrieval_relative_threshold",
         "--Phoenix.filter_static_frames",
@@ -92,6 +95,10 @@ namespace phoenix_tool
       {
         options.extraction.camera_model = expanded_args[++index];
       }
+      else if (arg == "--ImageReader.camera_params" && has_value)
+      {
+        options.extraction.camera_params = expanded_args[++index];
+      }
       else if (arg == "--Phoenix.max_edge" && has_value)
       {
         options.extraction.max_edge = std::stoi(expanded_args[++index]);
@@ -111,6 +118,17 @@ namespace phoenix_tool
       else if (arg == "--Phoenix.retrieval_batch_size" && has_value)
       {
         options.matching.retrieval.batch_size = std::stoi(expanded_args[++index]);
+      }
+      else if (arg == "--SequentialMatching.loop_detection_period" &&
+               has_value)
+      {
+        options.matching.retrieval.period =
+            std::stoi(expanded_args[++index]);
+      }
+      else if (arg == "--SequentialMatching.loop_detection_num_images" &&
+               has_value)
+      {
+        options.matching.retrieval.num = std::stoi(expanded_args[++index]);
       }
       else if (arg == "--Phoenix.retrieval_similarity_threshold" &&
                has_value)
@@ -179,6 +197,11 @@ namespace phoenix_tool
       throw std::runtime_error(
           "Phoenix static_frame_diff_threshold must be non-negative");
     }
+    if (options.matching.retrieval.period <= 0)
+    {
+      throw std::runtime_error(
+        "SequentialMatching.loop_detection_period must be positive");
+    }
     if (options.matching.retrieval.similarity_threshold < 0.0 ||
         options.matching.retrieval.similarity_threshold > 1.0)
     {
@@ -207,11 +230,15 @@ namespace phoenix_tool
     spdlog::info("  camera_mode                = {}", ext.camera_mode);
     spdlog::info("  camera_model               = {}",
                  ext.camera_model.empty() ? "(default)" : ext.camera_model);
+    spdlog::info("  camera_params              = {}",
+           ext.camera_params.empty() ? "(default)"
+                         : ext.camera_params);
     spdlog::info("  max_edge                   = {}", ext.max_edge);
     spdlog::info("  top_k                      = {}", ext.top_k);
     spdlog::info("  max_matches                = {}", mat.max_matches);
     spdlog::info("  retrieval_num              = {}", ret.num);
     spdlog::info("  retrieval_batch_size       = {}", ret.batch_size);
+    spdlog::info("  loop_detection_period      = {}", ret.period);
     spdlog::info("  retrieval_similarity_threshold = {:.4f}",
                  ret.similarity_threshold);
     spdlog::info("  retrieval_relative_threshold   = {:.4f}",

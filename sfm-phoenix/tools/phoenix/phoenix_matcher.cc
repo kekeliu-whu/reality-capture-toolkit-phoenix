@@ -215,6 +215,7 @@ std::vector<std::pair<colmap::image_t, colmap::image_t>> TopKRetrievalPairs(
     const std::vector<std::string>& image_names,
     const std::vector<std::vector<float>>& embeddings,
     const int top_k,
+    const int query_period,
   const double similarity_threshold,
   const double relative_threshold,
     const std::unordered_map<std::string, colmap::image_t>& image_ids) {
@@ -234,6 +235,9 @@ std::vector<std::pair<colmap::image_t, colmap::image_t>> TopKRetrievalPairs(
   row_scores.reserve(n);
 
   for (int i = 0; i < n; ++i) {
+    if (query_period > 1 && ((i + 1) % query_period) != 0 && i + 1 != n) {
+      continue;
+    }
     const auto it_i = image_ids.find(image_names[i]);
     if (it_i == image_ids.end()) continue;
 
@@ -274,6 +278,7 @@ std::vector<std::pair<colmap::image_t, colmap::image_t>> BuildRetrievalPairs(
     const std::filesystem::path& image_path,
     const int retrieval_num,
     const int retrieval_batch_size,
+  const int retrieval_period,
   const double similarity_threshold,
   const double relative_threshold,
     const std::unordered_map<std::string, colmap::image_t>& image_ids) {
@@ -333,6 +338,7 @@ std::vector<std::pair<colmap::image_t, colmap::image_t>> BuildRetrievalPairs(
   auto pairs = TopKRetrievalPairs(image_names,
                                   embeddings,
                                   retrieval_num,
+                                  retrieval_period,
                                   similarity_threshold,
                                   relative_threshold,
                                   image_ids);
@@ -410,6 +416,10 @@ void AddFeatureMatcherOptions(colmap::OptionManager* options,
   options->AddDefaultOption("Phoenix.retrieval_num", &opts->retrieval.num);
   options->AddDefaultOption("Phoenix.retrieval_batch_size",
                             &opts->retrieval.batch_size);
+  options->AddDefaultOption("SequentialMatching.loop_detection_period",
+                            &opts->retrieval.period);
+  options->AddDefaultOption("SequentialMatching.loop_detection_num_images",
+                            &opts->retrieval.num);
   options->AddDefaultOption("Phoenix.retrieval_similarity_threshold",
                             &opts->retrieval.similarity_threshold);
   options->AddDefaultOption("Phoenix.retrieval_relative_threshold",
@@ -473,6 +483,7 @@ int DoMatching(const std::string& database_path,
         BuildRetrievalPairs(opts.image_path,
                             opts.retrieval.num,
                             opts.retrieval.batch_size,
+                            opts.retrieval.period,
                             opts.retrieval.similarity_threshold,
                             opts.retrieval.relative_threshold,
                             image_ids);
@@ -827,6 +838,11 @@ int ExecFeatureMatcher(const std::string& database_path,
   }
   if (opts.retrieval.num < 0 || opts.retrieval.batch_size <= 0) {
     spdlog::error("Phoenix retrieval params must be positive/zero");
+    return EXIT_FAILURE;
+  }
+  if (opts.retrieval.period <= 0) {
+    spdlog::error(
+        "SequentialMatching.loop_detection_period must be positive");
     return EXIT_FAILURE;
   }
   if (opts.retrieval.similarity_threshold < 0.0 ||
