@@ -14,7 +14,7 @@ import sys
 from spdlog_compat import init_spdlog_like_logger
 
 
-# LOGGER = init_spdlog_like_logger()
+LOGGER = init_spdlog_like_logger()
 SCRIPT_PATH = Path(__file__).resolve()
 # When running as a PyInstaller .exe, sys.executable is the .exe itself (inside build-pack/).
 # Use the exe's directory as the build-pack root so MediaSDK can be found at build-pack/MediaSDK/.
