@@ -24,33 +24,12 @@ import json
 from pathlib import Path
 from proto.calib_pb2 import SensorCalib
 import re
-import cv2
 from scipy.spatial.transform import Rotation, Slerp
 
 from spdlog_compat import init_spdlog_like_logger
 
 
 LOGGER = init_spdlog_like_logger()
-
-
-def find_first_image_in_folder(cam_folder):
-    for img_path in sorted(cam_folder.rglob("*")):
-        if img_path.is_file() and img_path.suffix.lower() in {".jpg", ".jpeg", ".png"}:
-            return img_path
-    return None
-
-
-def get_camera_image_size(cam_folder):
-    sample_image = find_first_image_in_folder(cam_folder)
-    if sample_image is None:
-        raise FileNotFoundError(f"No image found under {cam_folder}")
-
-    image = cv2.imread(str(sample_image), cv2.IMREAD_UNCHANGED)
-    if image is None:
-        raise RuntimeError(f"Failed to read image for size detection: {sample_image}")
-
-    height, width = image.shape[:2]
-    return width, height
 
 
 def invert_transform(rotation, translation):
@@ -74,14 +53,10 @@ def rotation_to_wxyz(rotation):
     return [float(qw), float(qx), float(qy), float(qz)]
 
 
-def build_rig_camera_entry(cam_idx, cam_param, cam_folder, ref_rotation, ref_translation):
-    width, height = get_camera_image_size(cam_folder)
+def build_rig_camera_entry(cam_idx, cam_param, ref_rotation, ref_translation):
     entry = {
         "image_prefix": f"cam{cam_idx}/",
-        "ref_sensor": cam_idx == 0,
-        "camera_model": "CameraModelId.OPENCV_FISHEYE",
-        "image_width": width,
-        "image_height": height,
+        "camera_model_name": "OPENCV_FISHEYE",
         "camera_params": [
             float(cam_param.fx),
             float(cam_param.fy),
@@ -92,11 +67,11 @@ def build_rig_camera_entry(cam_idx, cam_param, cam_folder, ref_rotation, ref_tra
             float(cam_param.k3),
             float(cam_param.k4),
         ],
-        "cam_from_rig_rotation": [1.0, 0.0, 0.0, 0.0],
-        "cam_from_rig_translation": [0.0, 0.0, 0.0],
     }
 
-    if cam_idx != 0:
+    if cam_idx == 0:
+        entry["ref_sensor"] = True
+    else:
         cam_rotation = Rotation.from_quat(
             [
                 cam_param.extrinsic.rx,
@@ -144,7 +119,6 @@ def write_rig_json(image_folder, calib, camera_folders):
             build_rig_camera_entry(
                 cam_idx,
                 calib.camera_param[cam_idx],
-                camera_folders[cam_idx],
                 ref_rotation,
                 ref_translation,
             )
