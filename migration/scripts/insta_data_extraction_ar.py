@@ -13,6 +13,8 @@ import sys
 
 from spdlog_compat import init_spdlog_like_logger
 
+# 说明：处理带mov的pano视频
+
 
 LOGGER = init_spdlog_like_logger()
 

@@ -1,5 +1,8 @@
 
+#include <Eigen/Dense>
 #include <spdlog/spdlog.h>
+#include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 
@@ -10,6 +13,34 @@
 #include "utils.h"
 
 namespace {
+
+/**
+ * @brief 将四元数转换为欧拉角(Roll, Pitch, Yaw)
+ * @param q_xyzw 四元数向量，顺序为 [qx, qy, qz, qw]
+ * @return Eigen::Vector3d 顺序为 [roll, pitch, yaw]，单位弧度
+ */
+Eigen::Vector3d safeQuaternionToRPY(const Eigen::Vector4d& q_xyzw) {
+  Eigen::Quaterniond q(q_xyzw[3], q_xyzw[0], q_xyzw[1], q_xyzw[2]);
+  Eigen::Matrix3d m = q.toRotationMatrix();
+
+  double roll;
+  double pitch;
+  double yaw;
+
+  double sin_pitch = -m(2, 0);
+  sin_pitch = std::max(-1.0, std::min(1.0, sin_pitch));
+  pitch = std::asin(sin_pitch);
+
+  if (std::abs(std::cos(pitch)) > 1e-6) {
+    roll = std::atan2(m(2, 1), m(2, 2));
+    yaw = std::atan2(m(1, 0), m(0, 0));
+  } else {
+    roll = 0.0;
+    yaw = std::atan2(-m(0, 1), m(1, 1));
+  }
+
+  return Eigen::Vector3d(roll, pitch, yaw);
+}
 
 void ReleaseMemoryAndDownsample(std::vector<TimestampedPointCloud>& submaps,
                                 double downsample_resolution) {
@@ -60,7 +91,9 @@ void SaveOptimizedTrajectory(const std::string& output_path,
     const auto& pose     = *scan_pose.pose;
     Eigen::Vector3d t    = pose.translation();
     Eigen::Quaterniond q = pose.unit_quaternion();
-    traj_file << t.x() << " " << t.y() << " " << t.z() << " " << 0.0 << " " << 0.0 << " " << 0.0 << " "
+    const Eigen::Vector3d rpy =
+        safeQuaternionToRPY(Eigen::Vector4d(q.x(), q.y(), q.z(), q.w()));
+    traj_file << t.x() << " " << t.y() << " " << t.z() << " " << rpy.x() << " " << rpy.y() << " " << rpy.z() << " "
               << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << " " << scan_pose.timestamp << "\n";
   }
 

@@ -45,7 +45,10 @@
 #include <so3_math.h>
 #include <spdlog/spdlog.h>
 #include <Eigen/Core>
+#include <Eigen/Geometry>
+#include <algorithm>
 #include <boost/filesystem.hpp>
+#include <cmath>
 #include <csignal>
 #include <filesystem>
 #include <fstream>
@@ -110,6 +113,34 @@ std::unordered_map<VoxelLoc, OctoTree *> voxel_map;
 std::vector<ptpl> ptpl_list;
 /////////////////// voxel map config end ///////////////////
 
+/**
+ * @brief 将四元数转换为欧拉角(Roll, Pitch, Yaw)
+ * @param q_xyzw 四元数向量，顺序为 [qx, qy, qz, qw]
+ * @return Eigen::Vector3d 顺序为 [roll, pitch, yaw]，单位弧度
+ */
+Eigen::Vector3d safeQuaternionToRPY(const Eigen::Vector4d& q_xyzw) {
+  Eigen::Quaterniond q(q_xyzw[3], q_xyzw[0], q_xyzw[1], q_xyzw[2]);
+  Eigen::Matrix3d m = q.toRotationMatrix();
+
+  double roll;
+  double pitch;
+  double yaw;
+
+  double sin_pitch = -m(2, 0);
+  sin_pitch = std::max(-1.0, std::min(1.0, sin_pitch));
+  pitch = std::asin(sin_pitch);
+
+  if (std::abs(std::cos(pitch)) > 1e-6) {
+    roll = std::atan2(m(2, 1), m(2, 2));
+    yaw = std::atan2(m(1, 0), m(0, 0));
+  } else {
+    roll = 0.0;
+    yaw = std::atan2(-m(0, 1), m(1, 1));
+  }
+
+  return Eigen::Vector3d(roll, pitch, yaw);
+}
+
 void SigHandle(int sig) { flg_exit = true; }
 
 double last_pose_timestamp = -1.0;
@@ -125,8 +156,11 @@ void   SaveTraj(std::ofstream &fp, double timestamp, const Eigen::Quaterniond &o
 
     Eigen::Quaterniond rot = Eigen::Quaterniond(pose.rot) * offset_R_L_I;
     Eigen::Vector3d    pos = pose.rot * offset_T_L_I + pose.pos;
+  const Eigen::Vector3d rpy =
+    safeQuaternionToRPY(Eigen::Vector4d(rot.x(), rot.y(), rot.z(), rot.w()));
     fp << fmt::format("{:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f}",
-                      pos(0), pos(1), pos(2), 0.0, 0.0, 0.0, rot.x(), rot.y(), rot.z(), rot.w(), last_pose_timestamp)
+                      pos(0), pos(1), pos(2), rpy.x(), rpy.y(), rpy.z(), rot.x(), rot.y(), rot.z(), rot.w(),
+                      last_pose_timestamp)
        << std::endl;
   }
 }

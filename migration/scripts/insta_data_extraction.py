@@ -54,7 +54,7 @@ parser = argparse.ArgumentParser(description="Scientific camera data extraction 
 parser.add_argument(
     "--input-video-filename",
     type=str,
-    default=R"Z:\rick\dataset\pano-pos-zhujiang\1749886845390413448_00.insv",
+    default=R"Z:\rick\dataset\q9000\MT20260424-112349-fisheye\VID_20260424_112349_00_189.insv",
     help="Input video file path",
 )
 
@@ -62,7 +62,7 @@ parser.add_argument(
 parser.add_argument(
     "--output-dir",
     type=str,
-    default=R"Z:\rick\dataset\pano-pos-zhujiang\output\images",
+    default=R"Z:\rick\dataset\q9000\MT20260424-112349-fisheye\output\images",
     help="Output directory",
 )
 
@@ -70,7 +70,7 @@ parser.add_argument(
 parser.add_argument(
     "--time-offset",
     type=float,
-    default=1749886846.3733861,
+    default=1749886801.779175,
     help="Time offset in seconds",
 )
 
@@ -301,23 +301,27 @@ def extract_frames_from_video(
     all_timestamps,
 ):
     """
-    从视频文件提取帧到多个摄像头目录，支持采样和时间戳对应
+    从视频文件提取帧到多个摄像头目录，并按固定 0.5s 步长重命名
 
     参数:
         input_video_path: 输入视频文件路径 (.insv 或 .mp4)
         output_base_dir: 输出基础目录
         quality: 视频质量 (0-31, 越低越好)
         num_streams: 流的数量 (默认2个: cam0, cam1)
-        frame_sample_rate: 采样率，每隔N帧取1帧 (1表示取所有帧, 2表示每2帧取1帧)
-        all_timestamps: 所有帧的时间戳列表，用于重命名文件
+        frame_sample_rate: 保留原接口参数，当前鱼眼导出不再做采样删除
+        all_timestamps: 时间戳列表，仅使用首个时间戳作为起点
 
     返回:
-        包含采样后的时间戳和每个摄像头的图片列表的字典
+        包含导出后的时间戳和每个摄像头的图片列表的字典
         {'timestamps': [...], 'cam0': [...], 'cam1': [...], ...}
     """
     input_video_path = str(input_video_path)
     output_base_dir = str(output_base_dir)
-    sampled_timestamps = []
+    if not all_timestamps:
+        raise ValueError("all_timestamps is required for fisheye export")
+
+    base_timestamp = all_timestamps[0]
+    exported_timestamps = []
 
     # 创建输出目录，并清空旧的帧文件
     for i in range(num_streams):
@@ -367,49 +371,36 @@ def extract_frames_from_video(
             )
             print(f"  [OK] Extracted {len(temp_frames)} frames for cam{stream_idx}")
 
-            # 根据采样率进行采样并重命名文件
-            sampled_images = []
-            sampled_timestamps = []
-            for idx in range(0, len(temp_frames), frame_sample_rate):
-                temp_frame = temp_frames[idx]
+            # 与全景导出保持一致：首帧对应首个 timestamp，后续每帧 +0.5s
+            exported_images = []
+            current_stream_timestamps = []
+            for frame_idx, temp_frame in enumerate(temp_frames):
                 temp_path = os.path.join(cam_dir, temp_frame)
 
-                # 确定新文件名
-                if all_timestamps and idx < len(all_timestamps):
-                    timestamp = all_timestamps[idx]
-                    new_name = format_timestamp_filename(timestamp, image_type="jpg")
-                else:
-                    continue  # 跳过没有时间戳的帧，确保文件名与时间戳对应
+                timestamp = base_timestamp + frame_idx * 0.5
+                new_name = format_timestamp_filename(timestamp, image_type="jpg")
 
                 new_path = os.path.join(cam_dir, new_name)
 
                 # 重命名文件
                 try:
                     os.rename(temp_path, new_path)
-                    sampled_images.append(new_name)
-                    sampled_timestamps.append(all_timestamps[idx])
+                    exported_images.append(new_name)
+                    current_stream_timestamps.append(timestamp)
                 except Exception as e:
                     print(f"  [WARN] Failed to rename file {temp_frame}: {e}")
                     continue
 
-            # 删除未采样的临时文件
-            remaining_temps = [
-                f
-                for f in os.listdir(cam_dir)
-                if f.startswith("temp_") and f.endswith(".jpg")
-            ]
-            for temp_file in remaining_temps:
-                try:
-                    os.remove(os.path.join(cam_dir, temp_file))
-                except Exception as e:
-                    print(f"  [WARN] Failed to delete unsampled file {temp_file}: {e}")
+            if not exported_timestamps:
+                exported_timestamps = current_stream_timestamps
 
             print(
-                f"  [OK] cam{stream_idx} sampling complete: {len(sampled_images)} frames (sample rate: {frame_sample_rate})"
+                f"  [OK] cam{stream_idx} export complete: {len(exported_images)} frames"
+                f" (base_ts={base_timestamp:.6f}, step=0.5s)"
             )
 
             # 保存图片列表
-            image_lists[f"cam{stream_idx}"] = sampled_images
+            image_lists[f"cam{stream_idx}"] = exported_images
 
         except subprocess.CalledProcessError as e:
             print(f"[ERROR] Failed to extract frames for cam{stream_idx}")
@@ -420,7 +411,7 @@ def extract_frames_from_video(
             raise
 
     # 将时间戳添加到返回值
-    result = {"timestamps": sampled_timestamps}
+    result = {"timestamps": exported_timestamps}
     result.update(image_lists)
 
     return result
@@ -632,22 +623,30 @@ panorama_output_size = detect_panorama_output_size(INPUT_VIDEO)
 
 # 调用函数提取帧
 print("\n" + "=" * 60)
-print(f"Starting panorama frame extraction (sample rate: {FRAME_SAMPLE_RATE})...")
+print("Starting fisheye frame extraction...")
 print("=" * 60)
-result = extract_panorama_frames_from_mediasdk(
+# result = extract_panorama_frames_from_mediasdk(
+#     input_video_path=INPUT_VIDEO,
+#     output_base_dir=OUTPUT_DIRECTORY,
+#     media_sdk_exe=MEDIASDK_EXE,
+#     camera_index=PANORAMA_CAMERA_INDEX,
+#     frame_sample_rate=FRAME_SAMPLE_RATE,
+#     all_timestamps=all_timestamps,
+#     stitch_type=PANORAMA_STITCH_TYPE,
+#     image_type=PANORAMA_IMAGE_TYPE,
+#     output_size=panorama_output_size,
+# )
+result = extract_frames_from_video(
     input_video_path=INPUT_VIDEO,
     output_base_dir=OUTPUT_DIRECTORY,
-    media_sdk_exe=MEDIASDK_EXE,
-    camera_index=PANORAMA_CAMERA_INDEX,
+    quality=QUALITY,
+    num_streams=NUM_STREAMS,
     frame_sample_rate=FRAME_SAMPLE_RATE,
     all_timestamps=all_timestamps,
-    stitch_type=PANORAMA_STITCH_TYPE,
-    image_type=PANORAMA_IMAGE_TYPE,
-    output_size=panorama_output_size,
 )
 
 # 从返回结果中分离时间戳和图片列表
-sampled_timestamps = result["timestamps"]
+exported_timestamps = result["timestamps"]
 image_lists = {k: v for k, v in result.items() if k != "timestamps"}
 
 # 统计提取的帧数
@@ -658,10 +657,10 @@ for cam, images in image_lists.items():
     print(f"  {cam}: {len(images)} frames")
 
 print(f"\n[OK] Original timestamp count: {len(all_timestamps)}")
-print(f"  Sampled timestamp count: {len(sampled_timestamps)}")
-print(f"  Sample rate: {FRAME_SAMPLE_RATE}")
-if len(sampled_timestamps) > 0:
-    print(f"  Timestamp range: {sampled_timestamps[0]:.6f} to {sampled_timestamps[-1]:.6f}")
+print(f"  Exported timestamp count: {len(exported_timestamps)}")
+print("  Timestamp rule: base timestamp + 0.5s per frame")
+if len(exported_timestamps) > 0:
+    print(f"  Timestamp range: {exported_timestamps[0]:.6f} to {exported_timestamps[-1]:.6f}")
 
 # 验证帧数和时间戳是否匹配
 print("\n" + "=" * 60)
@@ -669,9 +668,9 @@ print("Frame and timestamp validation:")
 print("=" * 60)
 frame_counts = {cam: len(images) for cam, images in image_lists.items()}
 for cam, frame_count in frame_counts.items():
-    match_status = "[OK] match" if frame_count == len(sampled_timestamps) else "[ERROR] mismatch"
+    match_status = "[OK] match" if frame_count == len(exported_timestamps) else "[ERROR] mismatch"
     print(
-        f"  {cam}: {frame_count} frames vs {len(sampled_timestamps)} timestamps {match_status}"
+        f"  {cam}: {frame_count} frames vs {len(exported_timestamps)} timestamps {match_status}"
     )
 
 # 保存到 rosbag（可选）
@@ -682,7 +681,7 @@ if SAVE_TO_ROSBAG:
     save_to_rosbag(
         output_dir=OUTPUT_DIRECTORY,
         imu_msg_list=imu_msg_list,
-        timestamps=sampled_timestamps,
+        timestamps=exported_timestamps,
         num_streams=NUM_STREAMS,
         timeoffset_secs=TIME_OFFSET_SECS,
     )

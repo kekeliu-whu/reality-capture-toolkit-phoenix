@@ -20,15 +20,142 @@ Expected folder structure:
 import argparse
 import numpy as np
 import csv
+import json
 from pathlib import Path
 from proto.calib_pb2 import SensorCalib
 import re
+import cv2
 from scipy.spatial.transform import Rotation, Slerp
 
 from spdlog_compat import init_spdlog_like_logger
 
 
 LOGGER = init_spdlog_like_logger()
+
+
+def find_first_image_in_folder(cam_folder):
+    for img_path in sorted(cam_folder.rglob("*")):
+        if img_path.is_file() and img_path.suffix.lower() in {".jpg", ".jpeg", ".png"}:
+            return img_path
+    return None
+
+
+def get_camera_image_size(cam_folder):
+    sample_image = find_first_image_in_folder(cam_folder)
+    if sample_image is None:
+        raise FileNotFoundError(f"No image found under {cam_folder}")
+
+    image = cv2.imread(str(sample_image), cv2.IMREAD_UNCHANGED)
+    if image is None:
+        raise RuntimeError(f"Failed to read image for size detection: {sample_image}")
+
+    height, width = image.shape[:2]
+    return width, height
+
+
+def invert_transform(rotation, translation):
+    rotation_inv = rotation.inv()
+    translation_inv = -rotation_inv.apply(translation)
+    return rotation_inv, translation_inv
+
+
+def compose_transform(lhs_rotation, lhs_translation, rhs_rotation, rhs_translation):
+    rotation = lhs_rotation * rhs_rotation
+    translation = lhs_rotation.apply(rhs_translation) + lhs_translation
+    return rotation, translation
+
+
+def compute_relative_rotation(cam_rotation, ref_rotation):
+    return cam_rotation * ref_rotation.inv()
+
+
+def rotation_to_wxyz(rotation):
+    qx, qy, qz, qw = rotation.as_quat()
+    return [float(qw), float(qx), float(qy), float(qz)]
+
+
+def build_rig_camera_entry(cam_idx, cam_param, cam_folder, ref_rotation, ref_translation):
+    width, height = get_camera_image_size(cam_folder)
+    entry = {
+        "image_prefix": f"cam{cam_idx}/",
+        "ref_sensor": cam_idx == 0,
+        "camera_model": "CameraModelId.OPENCV_FISHEYE",
+        "image_width": width,
+        "image_height": height,
+        "camera_params": [
+            float(cam_param.fx),
+            float(cam_param.fy),
+            float(cam_param.cx),
+            float(cam_param.cy),
+            float(cam_param.k1),
+            float(cam_param.k2),
+            float(cam_param.k3),
+            float(cam_param.k4),
+        ],
+        "cam_from_rig_rotation": [1.0, 0.0, 0.0, 0.0],
+        "cam_from_rig_translation": [0.0, 0.0, 0.0],
+    }
+
+    if cam_idx != 0:
+        cam_rotation = Rotation.from_quat(
+            [
+                cam_param.extrinsic.rx,
+                cam_param.extrinsic.ry,
+                cam_param.extrinsic.rz,
+                cam_param.extrinsic.rw,
+            ]
+        )
+        cam_translation = np.array(
+            [cam_param.extrinsic.tx, cam_param.extrinsic.ty, cam_param.extrinsic.tz]
+        )
+        rel_rotation = cam_rotation.inv() * ref_rotation
+        rel_translation = cam_rotation.inv().apply(ref_translation - cam_translation)
+        entry["cam_from_rig_rotation"] = rotation_to_wxyz(rel_rotation)
+        entry["cam_from_rig_translation"] = [
+            float(value) for value in rel_translation.tolist()
+        ]
+
+    return entry
+
+
+def write_rig_json(image_folder, calib, camera_folders):
+    """Write rig.json under the images folder from calibration.dat camera params."""
+    rig_path = Path(image_folder) / "rig.json"
+    ref_cam_param = calib.camera_param[0]
+    ref_rotation = Rotation.from_quat(
+        [
+            ref_cam_param.extrinsic.rx,
+            ref_cam_param.extrinsic.ry,
+            ref_cam_param.extrinsic.rz,
+            ref_cam_param.extrinsic.rw,
+        ]
+    )
+    ref_translation = np.array(
+        [
+            ref_cam_param.extrinsic.tx,
+            ref_cam_param.extrinsic.ty,
+            ref_cam_param.extrinsic.tz,
+        ]
+    )
+
+    rig_config = [{"cameras": []}]
+    for cam_idx in sorted(camera_folders.keys()):
+        rig_config[0]["cameras"].append(
+            build_rig_camera_entry(
+                cam_idx,
+                calib.camera_param[cam_idx],
+                camera_folders[cam_idx],
+                ref_rotation,
+                ref_translation,
+            )
+        )
+
+    with open(rig_path, "w", encoding="utf-8") as f:
+        json.dump(rig_config, f, indent=2)
+        f.write("\n")
+
+    print(f"[OK] Wrote rig config to {rig_path}")
+    return rig_path
 
 
 def extract_timestamp_from_filename(filename):
@@ -217,6 +344,7 @@ def process_poses(poses_file, calib_file, image_folder, output_file, image_list=
     # Load calibration
     calib = load_calibration_from_pb(calib_file)
 
+    print(f"calib {calib}")
     print(f"[OK] Loaded calibration from {calib_file}")
 
     # Get camera-IMU extrinsic parameters
@@ -243,6 +371,11 @@ def process_poses(poses_file, calib_file, image_folder, output_file, image_list=
     print(
         f"[OK] Found {len(camera_folders)} camera folder(s): {sorted(camera_folders.keys())}"
     )
+
+    if 0 in camera_folders:
+        write_rig_json(image_folder, calib, camera_folders)
+    else:
+        print("[WARN] Skipping rig.json generation because cam0 is not present")
 
     # Write output
     processed_files = set()  # Track processed files to avoid duplicates
@@ -279,10 +412,10 @@ def process_poses(poses_file, calib_file, image_folder, output_file, image_list=
             extrinsic = {
                 "position": np.array([ext.tx, ext.ty, ext.tz]),
                 "quaternion": np.array([ext.rx, ext.ry, ext.rz, ext.rw]),
-                "time_offset": cam_imu_ext.extrinsic.time_offset,
+                "time_offset": cam_imu_ext.extrinsic.time_offset - 0.5,
             }
 
-            print(f"\n  Processing cam{cam_idx}...")
+            print(f"\n  Processing cam{cam_idx}... (time_offset={extrinsic['time_offset']:.6f}s)")
 
             # Recursively find images in this camera folder
             image_files = sorted(
@@ -372,25 +505,25 @@ def main():
     parser.add_argument(
         "--poses-file",
         "-p",
-        default=r"D:/output/trajectory.txt",
+        default=R"Z:\rick\dataset\q9000\MT20260424-112349-fisheye\output\trajectory_opt.txt",
         help="Path to IMU trajectory file (text format) (default: D:\\output\\trajectory.txt)",
     )
     parser.add_argument(
         "--calib-file",
         "-c",
-        default=r"D:/output/calibration.dat",
+        default=R"Z:\rick\dataset\q9000\MT20260424-112349-fisheye\output\calibration.dat",
         help="Path to calibration file with camera extrinsics (protobuf) (default: D:\\output\\calibration.dat)",
     )
     parser.add_argument(
         "--image-folder",
         "-i",
-        default=r"D:/output/images",
+        default=R"Z:\rick\dataset\q9000\MT20260424-112349-fisheye\output\images",
         help="Path to parent folder containing cam0, cam1, ... subdirectories (default: D:\\output\\images)",
     )
     parser.add_argument(
         "--output",
         "-o",
-        default=r"D:/output/images/ImgPose.txt",
+        default=R"Z:\rick\dataset\q9000\MT20260424-112349-fisheye\output\images\ImgPose.txt",
         help="Output file path (default: D:\\output\\images\\ImgPose.txt)",
     )
     parser.add_argument(

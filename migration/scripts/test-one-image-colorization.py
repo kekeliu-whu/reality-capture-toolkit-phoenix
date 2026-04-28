@@ -140,7 +140,7 @@ def get_camera_calibration(calibs: dict, cam_name: str) -> dict:
 
 
 def resolve_las_path(base_dir: str) -> str:
-    candidates = ["map.las", "colorized.las", "rtk_all.las"]
+    candidates = ["map_opt.las", "colorized.las", "rtk_all.las", "map.las"]
     for filename in candidates:
         path = os.path.join(base_dir, filename)
         if os.path.exists(path):
@@ -258,7 +258,7 @@ def colorize_pointcloud(seed: int | None = None) -> None:
 
     # ── 加载位姿 & 标定 ──
     poses = load_img_poses(os.path.join(BASE_DIR, "images", "ImgPose.txt"))
-    calibs = load_calibration(os.path.join(BASE_DIR, "calibration.json"))
+    calibs = load_calibration(os.path.join(BASE_DIR, "calibration.dat"))
     print(f"位姿条目：{len(poses)} 条")
 
     existing_poses = [
