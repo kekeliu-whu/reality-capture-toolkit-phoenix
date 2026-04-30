@@ -66,7 +66,7 @@ $xsfm_pre_exe = Join-Path $BUILD_PACK "xsfm_pre.exe"
   --image_path "$dataDir\images" `
   --database_path "$dataDir\xsfm\xsfm.db" `
   --ImageReader.camera_model OPENCV_FISHEYE `
-  --ImageReader.camera_params "772.145464779917775,772.145464779917775,1440,1440,0.037416683931696879,-0.0051502247212099643,0.0064400644003639101,-0.002301772325582836" `
+  --ImageReader.camera_params "1030.1467091090503,1028.8008312807606,1949.5400400646813,1914.7835423220931,0.042605851463874037,-0.007532224456171745,0.0070007420682475438,-0.0023540347797643482" `
   --ImageReader.single_camera_per_folder 1 `
   --SiftExtraction.max_num_features 8000
 
@@ -77,6 +77,17 @@ if ($LASTEXITCODE -ne 0) {
 
 # Step 3: Sequential matching with xsfm_pre.exe
 Write-Host "Step 3: Sequential matching..." -ForegroundColor Green
+& $xsfm_pre_exe sequential_matcher `
+  --database_path "$dataDir\xsfm\xsfm.db" `
+  --SequentialMatching.overlap 30 `
+  --SequentialMatching.quadratic_overlap 0 `
+  --SequentialMatching.loop_detection 0
+
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "Error in Step 3 (overlap matcher)" -ForegroundColor Red
+  exit 1
+}
+
 & $xsfm_pre_exe sequential_matcher `
   --database_path "$dataDir\xsfm\xsfm.db" `
   --SequentialMatching.vocab_tree_path "$BUILD_PACK\vocab_tree_faiss_flickr100K_words32K.bin" `
