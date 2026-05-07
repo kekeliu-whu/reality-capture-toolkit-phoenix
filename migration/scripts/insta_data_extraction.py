@@ -54,7 +54,7 @@ parser = argparse.ArgumentParser(description="Scientific camera data extraction 
 parser.add_argument(
     "--input-video-filename",
     type=str,
-    default=R"Z:\rick\dataset\q9000\MT20260424-112349-fisheye\VID_20260424_112349_00_189.insv",
+    default=R"Z:\rick\dataset\q9000\MT20260430-102731-24fps-video\VID_20260430_102730_00_033.insv",
     help="Input video file path",
 )
 
@@ -62,7 +62,7 @@ parser.add_argument(
 parser.add_argument(
     "--output-dir",
     type=str,
-    default=R"Z:\rick\dataset\q9000\MT20260424-112349-fisheye\output\images",
+    default=R"Z:\rick\dataset\q9000\MT20260430-102731-24fps-video\output\images",
     help="Output directory",
 )
 
@@ -301,15 +301,15 @@ def extract_frames_from_video(
     all_timestamps,
 ):
     """
-    从视频文件提取帧到多个摄像头目录，并按固定 0.5s 步长重命名
+    从视频文件提取帧到多个摄像头目录，并按 all_timestamps 采样重命名
 
     参数:
         input_video_path: 输入视频文件路径 (.insv 或 .mp4)
         output_base_dir: 输出基础目录
         quality: 视频质量 (0-31, 越低越好)
         num_streams: 流的数量 (默认2个: cam0, cam1)
-        frame_sample_rate: 保留原接口参数，当前鱼眼导出不再做采样删除
-        all_timestamps: 时间戳列表，仅使用首个时间戳作为起点
+        frame_sample_rate: 每 N 帧保留 1 帧
+        all_timestamps: 与视频帧索引对应的时间戳列表，同样每 N 个取 1 个
 
     返回:
         包含导出后的时间戳和每个摄像头的图片列表的字典
@@ -319,8 +319,9 @@ def extract_frames_from_video(
     output_base_dir = str(output_base_dir)
     if not all_timestamps:
         raise ValueError("all_timestamps is required for fisheye export")
+    if frame_sample_rate <= 0:
+        raise ValueError("frame_sample_rate must be greater than 0")
 
-    base_timestamp = all_timestamps[0]
     exported_timestamps = []
 
     # 创建输出目录，并清空旧的帧文件
@@ -367,17 +368,37 @@ def extract_frames_from_video(
                     f
                     for f in os.listdir(cam_dir)
                     if f.startswith("temp_") and f.endswith(".jpg")
-                ]
+                ],
+                key=lambda name: natural_sort_key(Path(name)),
             )
             print(f"  [OK] Extracted {len(temp_frames)} frames for cam{stream_idx}")
 
-            # 与全景导出保持一致：首帧对应首个 timestamp，后续每帧 +0.5s
+            aligned_frame_count = min(len(temp_frames), len(all_timestamps))
+            if len(temp_frames) != len(all_timestamps):
+                print(
+                    "  [WARN] Extracted frame count "
+                    f"({len(temp_frames)}) differs from timestamp count "
+                    f"({len(all_timestamps)}); using first {aligned_frame_count} "
+                    "aligned entries"
+                )
+
+            sampled_frame_indices = build_sampled_frame_indices(
+                aligned_frame_count,
+                frame_sample_rate,
+            )
+            print(
+                f"  Sampling every {frame_sample_rate} frame(s): "
+                f"keeping {len(sampled_frame_indices)} frames"
+            )
+
+            # 图片和时间戳使用相同原始帧索引采样：0, N, 2N, ...
             exported_images = []
             current_stream_timestamps = []
-            for frame_idx, temp_frame in enumerate(temp_frames):
+            for frame_idx in sampled_frame_indices:
+                temp_frame = temp_frames[frame_idx]
                 temp_path = os.path.join(cam_dir, temp_frame)
 
-                timestamp = base_timestamp + frame_idx * 0.5
+                timestamp = all_timestamps[frame_idx]
                 new_name = format_timestamp_filename(timestamp, image_type="jpg")
 
                 new_path = os.path.join(cam_dir, new_name)
@@ -391,12 +412,20 @@ def extract_frames_from_video(
                     print(f"  [WARN] Failed to rename file {temp_frame}: {e}")
                     continue
 
+            for temp_frame in temp_frames:
+                temp_path = os.path.join(cam_dir, temp_frame)
+                if os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except Exception as e:
+                        print(f"  [WARN] Failed to delete unsampled file {temp_frame}: {e}")
+
             if not exported_timestamps:
                 exported_timestamps = current_stream_timestamps
 
             print(
                 f"  [OK] cam{stream_idx} export complete: {len(exported_images)} frames"
-                f" (base_ts={base_timestamp:.6f}, step=0.5s)"
+                f" (sample_rate={frame_sample_rate})"
             )
 
             # 保存图片列表
@@ -658,7 +687,7 @@ for cam, images in image_lists.items():
 
 print(f"\n[OK] Original timestamp count: {len(all_timestamps)}")
 print(f"  Exported timestamp count: {len(exported_timestamps)}")
-print("  Timestamp rule: base timestamp + 0.5s per frame")
+print(f"  Timestamp rule: all_timestamps sampled every {FRAME_SAMPLE_RATE} frame(s)")
 if len(exported_timestamps) > 0:
     print(f"  Timestamp range: {exported_timestamps[0]:.6f} to {exported_timestamps[-1]:.6f}")
 
