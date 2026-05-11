@@ -11,34 +11,52 @@ if(POLICY CMP0146)
 endif()
 
 set(_vcpkg_root "")
-if(DEFINED CMAKE_TOOLCHAIN_FILE AND EXISTS "${CMAKE_TOOLCHAIN_FILE}")
-    get_filename_component(_vcpkg_scripts_dir "${CMAKE_TOOLCHAIN_FILE}" DIRECTORY)
-    get_filename_component(_vcpkg_root "${_vcpkg_scripts_dir}/../.." ABSOLUTE)
-elseif(DEFINED ENV{VCPKG_ROOT} AND EXISTS "$ENV{VCPKG_ROOT}")
-    file(TO_CMAKE_PATH "$ENV{VCPKG_ROOT}" _vcpkg_root)
-elseif(EXISTS "D:/vcpkg")
-    set(_vcpkg_root "D:/vcpkg")
+set(_vcpkg_triplet "x64-windows")
+if(DEFINED VCPKG_TARGET_TRIPLET AND NOT VCPKG_TARGET_TRIPLET STREQUAL "")
+    set(_vcpkg_triplet "${VCPKG_TARGET_TRIPLET}")
 endif()
 
-if(_vcpkg_root)
-    set(_vcpkg_triplet "x64-windows")
-    if(DEFINED VCPKG_TARGET_TRIPLET AND NOT VCPKG_TARGET_TRIPLET STREQUAL "")
-        set(_vcpkg_triplet "${VCPKG_TARGET_TRIPLET}")
-    endif()
+set(_vcpkg_candidate_roots "")
+if(DEFINED VCPKG_INSTALLED_DIR AND NOT VCPKG_INSTALLED_DIR STREQUAL "")
+    get_filename_component(_vcpkg_installed_root "${VCPKG_INSTALLED_DIR}" DIRECTORY)
+    list(APPEND _vcpkg_candidate_roots "${_vcpkg_installed_root}")
+endif()
 
-    set(_vcpkg_installed "${_vcpkg_root}/installed/${_vcpkg_triplet}")
-    if(EXISTS "${_vcpkg_installed}")
-        list(PREPEND CMAKE_PREFIX_PATH
-            "${CMAKE_CURRENT_SOURCE_DIR}/cmake"
-            "${_vcpkg_installed}"
-            "${_vcpkg_installed}/share/opencv4"
-            "${_vcpkg_installed}/share/colmap")
-        list(PREPEND CMAKE_MODULE_PATH
-            "${CMAKE_CURRENT_SOURCE_DIR}/cmake"
-            "${_vcpkg_installed}/share/cudss"
-            "${_vcpkg_installed}/share/jxr"
-            "${_vcpkg_installed}/share/colmap/cmake")
+if(DEFINED CMAKE_TOOLCHAIN_FILE AND EXISTS "${CMAKE_TOOLCHAIN_FILE}")
+    get_filename_component(_vcpkg_scripts_dir "${CMAKE_TOOLCHAIN_FILE}" DIRECTORY)
+    get_filename_component(_vcpkg_from_toolchain "${_vcpkg_scripts_dir}/../.." ABSOLUTE)
+    list(APPEND _vcpkg_candidate_roots "${_vcpkg_from_toolchain}")
+endif()
+
+if(DEFINED ENV{VCPKG_ROOT} AND EXISTS "$ENV{VCPKG_ROOT}")
+    file(TO_CMAKE_PATH "$ENV{VCPKG_ROOT}" _vcpkg_env_root)
+    list(APPEND _vcpkg_candidate_roots "${_vcpkg_env_root}")
+endif()
+
+list(APPEND _vcpkg_candidate_roots "D:/vcpkg")
+list(REMOVE_DUPLICATES _vcpkg_candidate_roots)
+
+foreach(_candidate_root IN LISTS _vcpkg_candidate_roots)
+    set(_candidate_installed "${_candidate_root}/installed/${_vcpkg_triplet}")
+    if(EXISTS "${_candidate_installed}/share/colmap" AND EXISTS "${_candidate_installed}/share/cudss")
+        set(_vcpkg_root "${_candidate_root}")
+        set(_vcpkg_installed "${_candidate_installed}")
+        break()
     endif()
+endforeach()
+
+if(_vcpkg_installed)
+    message(STATUS "Using vcpkg installed tree: ${_vcpkg_installed}")
+    list(PREPEND CMAKE_PREFIX_PATH
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake"
+        "${_vcpkg_installed}"
+        "${_vcpkg_installed}/share/opencv4"
+        "${_vcpkg_installed}/share/colmap")
+    list(PREPEND CMAKE_MODULE_PATH
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake"
+        "${_vcpkg_installed}/share/cudss"
+        "${_vcpkg_installed}/share/jxr"
+        "${_vcpkg_installed}/share/colmap/cmake")
 endif()
 
 # --------------------------------------------------------------------------
@@ -143,7 +161,11 @@ target_link_libraries(sfm_phoenix PUBLIC
 
 if(MSVC)
     target_compile_options(sfm_phoenix PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/MP /utf-8 /W3>)
-    target_compile_options(sfm_phoenix PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>)
+    target_compile_options(sfm_phoenix PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/wd4819>
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/wd9002>)
 else()
     target_compile_options(sfm_phoenix PRIVATE -Wall -Wextra)
 endif()
@@ -207,6 +229,16 @@ function(copy_phoenix_runtime_assets target_name)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${_vcpkg_installed}/tools/crashpad_handler.exe"
                     "${PHOENIX_RUNTIME_OUTPUT_DIR}/crashpad_handler.exe")
+    endif()
+
+    if(_vcpkg_installed AND EXISTS "${_vcpkg_installed}/bin")
+        file(GLOB _vcpkg_runtime_dlls "${_vcpkg_installed}/bin/*.dll")
+        foreach(_dll IN LISTS _vcpkg_runtime_dlls)
+            list(APPEND _copy_commands
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_dll}"
+                        "${PHOENIX_RUNTIME_OUTPUT_DIR}")
+        endforeach()
     endif()
 
     if(_vcpkg_installed AND EXISTS "${_vcpkg_installed}/tools/colmap")

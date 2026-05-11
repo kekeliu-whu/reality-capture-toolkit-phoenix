@@ -1,4 +1,5 @@
 #include "sfm_phoenix/bridges/colmap_bridge.h"
+#include "sfm_phoenix/internal/runtime_utils.h"
 
 #include <algorithm>
 #include <cmath>
@@ -53,11 +54,13 @@ std::vector<float> ToMatcherDescriptors(
 }
 
 int DescriptorDim(const colmap::FeatureDescriptors& descriptors) {
-  if (descriptors.cols() % static_cast<int>(sizeof(float)) != 0) {
+  const int64_t cols = descriptors.cols();
+  if (cols % static_cast<int64_t>(sizeof(float)) != 0) {
     throw std::runtime_error(
         "Descriptor byte width is not divisible by sizeof(float)");
   }
-  return descriptors.cols() / static_cast<int>(sizeof(float));
+  return internal::CheckedIntCast(
+      cols / static_cast<int64_t>(sizeof(float)), "Descriptor dimension");
 }
 
 colmap::FeatureMatches ToColmapMatches(const MatchResult& result) {

@@ -1,7 +1,7 @@
 #include "sfm_phoenix/pipelines/feature_pipeline.h"
+#include "sfm_phoenix/internal/runtime_utils.h"
 
 #include <chrono>
-#include <cstdlib>
 #include <iostream>
 
 namespace sfm_phoenix {
@@ -48,7 +48,7 @@ MatchResult FeaturePipeline::match(const AlikedResult& r0,
 PairResult FeaturePipeline::detect_and_match_gpu(const cv::Mat& image0_bgr,
                                                   const cv::Mat& image1_bgr) {
     PairResult result;
-    static bool profile = (std::getenv("PROFILE") != nullptr);
+    static bool profile = internal::EnvVarEnabled("PROFILE");
 
     std::chrono::high_resolution_clock::time_point t[4];
     if (profile) t[0] = std::chrono::high_resolution_clock::now();
@@ -90,7 +90,7 @@ PairResult FeaturePipeline::detect_and_match_gpu(const cv::Mat& image0_bgr,
 PairResult FeaturePipeline::detect_and_match_gpu(
     GpuDetectResult&& cached_det0, const cv::Mat& image1_bgr) {
     PairResult result;
-    static bool profile = (std::getenv("PROFILE") != nullptr);
+    static bool profile = internal::EnvVarEnabled("PROFILE");
 
     std::chrono::high_resolution_clock::time_point t[3];
     if (profile) t[0] = std::chrono::high_resolution_clock::now();

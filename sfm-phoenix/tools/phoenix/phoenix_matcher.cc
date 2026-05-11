@@ -14,6 +14,7 @@
 #include <Eigen/Core>
 
 #include <cuda_runtime.h>
+#include <cuda_fp16.h>
 
 #include <spdlog/spdlog.h>
 
@@ -89,7 +90,7 @@ uint64_t PairKey(const colmap::image_t image_id1,
 }
 
 std::filesystem::path DefaultRetrievalModelPath() {
-  return std::filesystem::current_path() / "sfm-phoenix" / "models" /
+  return sfm_phoenix::GetExecutableDirectory() /
          "dinov3_vitb16_pretrain_lvd1689m.onnx";
 }
 
@@ -148,6 +149,8 @@ std::vector<std::vector<float>> ExtractDinoEmbeddings(
     const int batch_size) {
   const int n = static_cast<int>(image_names.size());
   const int pixels = 3 * kDinoInputSize * kDinoInputSize;
+  const auto input_dtype = engine.data_type("pixel_values");
+  const auto output_dtype = engine.data_type("embeddings");
 
   cudaStream_t stream = nullptr;
   cudaStreamCreate(&stream);
@@ -155,6 +158,14 @@ std::vector<std::vector<float>> ExtractDinoEmbeddings(
   std::vector<float> batch_input(static_cast<size_t>(batch_size) * pixels);
   std::vector<float> batch_output(
       static_cast<size_t>(batch_size) * kDinoEmbedDim);
+  std::vector<__half> batch_input_fp16;
+  std::vector<__half> batch_output_fp16;
+  if (input_dtype == nvinfer1::DataType::kHALF) {
+    batch_input_fp16.resize(static_cast<size_t>(batch_size) * pixels);
+  }
+  if (output_dtype == nvinfer1::DataType::kHALF) {
+    batch_output_fp16.resize(static_cast<size_t>(batch_size) * kDinoEmbedDim);
+  }
   std::vector<std::vector<float>> result(n);
   ResourceSnapshot previous_snapshot = CaptureResourceSnapshot();
 
@@ -173,17 +184,47 @@ std::vector<std::vector<float>> ExtractDinoEmbeddings(
 
     engine.set_input_shape("pixel_values",
                            {actual, 3, kDinoInputSize, kDinoInputSize});
-    engine.set_input("pixel_values",
-                     batch_input.data(),
-                     static_cast<size_t>(actual) * pixels * sizeof(float),
-                     stream);
+    if (input_dtype == nvinfer1::DataType::kHALF) {
+      const size_t input_count = static_cast<size_t>(actual) * pixels;
+      for (size_t idx = 0; idx < input_count; ++idx) {
+        batch_input_fp16[idx] = __float2half(batch_input[idx]);
+      }
+      engine.set_input("pixel_values",
+                       batch_input_fp16.data(),
+                       input_count * sizeof(__half),
+                       stream);
+    } else if (input_dtype == nvinfer1::DataType::kFLOAT) {
+      engine.set_input("pixel_values",
+                       batch_input.data(),
+                       static_cast<size_t>(actual) * pixels * sizeof(float),
+                       stream);
+    } else {
+      throw std::runtime_error("Unsupported retrieval input dtype");
+    }
     engine.infer(stream);
-    engine.get_output(
-        "embeddings",
-        batch_output.data(),
-        static_cast<size_t>(actual) * kDinoEmbedDim * sizeof(float),
-        stream);
+    if (output_dtype == nvinfer1::DataType::kHALF) {
+      const size_t output_count = static_cast<size_t>(actual) * kDinoEmbedDim;
+      engine.get_output("embeddings",
+                        batch_output_fp16.data(),
+                        output_count * sizeof(__half),
+                        stream);
+    } else if (output_dtype == nvinfer1::DataType::kFLOAT) {
+      engine.get_output(
+          "embeddings",
+          batch_output.data(),
+          static_cast<size_t>(actual) * kDinoEmbedDim * sizeof(float),
+          stream);
+    } else {
+      throw std::runtime_error("Unsupported retrieval output dtype");
+    }
     cudaStreamSynchronize(stream);
+
+    if (output_dtype == nvinfer1::DataType::kHALF) {
+      const size_t output_count = static_cast<size_t>(actual) * kDinoEmbedDim;
+      for (size_t idx = 0; idx < output_count; ++idx) {
+        batch_output[idx] = __half2float(batch_output_fp16[idx]);
+      }
+    }
     const ResourceSnapshot current_snapshot = CaptureResourceSnapshot();
 
     for (int j = 0; j < actual; ++j) {

@@ -94,6 +94,9 @@ public:
     /// Get the current shape of a binding (after set_input_shape / infer).
     std::vector<int> shape(const std::string& name) const;
 
+    /// Get the TensorRT data type for a named tensor.
+    nvinfer1::DataType data_type(const std::string& name) const;
+
     /// Get the max shape allowed by optimization profile 0 for a tensor.
     std::vector<int> max_profile_shape(const std::string& name) const;
 

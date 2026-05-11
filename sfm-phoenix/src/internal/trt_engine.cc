@@ -1,4 +1,5 @@
 #include "sfm_phoenix/internal/trt_engine.h"
+#include "sfm_phoenix/internal/runtime_utils.h"
 
 #include <NvInfer.h>
 #include <NvInferPlugin.h>
@@ -50,6 +51,18 @@ nvinfer1::Dims MakeDims(const std::vector<int>& shape) {
         dims.d[i] = shape[i];
     }
     return dims;
+}
+
+size_t ElementSize(const nvinfer1::DataType dtype) {
+    switch (dtype) {
+        case nvinfer1::DataType::kFLOAT: return 4;
+        case nvinfer1::DataType::kHALF:  return 2;
+        case nvinfer1::DataType::kINT32: return 4;
+        case nvinfer1::DataType::kINT64: return 8;
+        case nvinfer1::DataType::kINT8:  return 1;
+        case nvinfer1::DataType::kBOOL:  return 1;
+        default:                         return sizeof(float);
+    }
 }
 
 }  // namespace
@@ -256,19 +269,7 @@ size_t TrtEngine::tensor_bytes(const std::string& name) const {
     for (int d = 0; d < dims.nbDims; ++d) {
         count *= dims.d[d];
     }
-    // Determine element size from data type
-    auto dtype = engine_->getTensorDataType(name.c_str());
-    size_t elem_size = sizeof(float);  // default float32
-    switch (dtype) {
-        case nvinfer1::DataType::kFLOAT: elem_size = 4; break;
-        case nvinfer1::DataType::kHALF:  elem_size = 2; break;
-        case nvinfer1::DataType::kINT32: elem_size = 4; break;
-        case nvinfer1::DataType::kINT64: elem_size = 8; break;
-        case nvinfer1::DataType::kINT8:  elem_size = 1; break;
-        case nvinfer1::DataType::kBOOL:  elem_size = 1; break;
-        default: elem_size = 4; break;
-    }
-    return static_cast<size_t>(count) * elem_size;
+    return static_cast<size_t>(count) * ElementSize(data_type(name));
 }
 
 void TrtEngine::ensure_buffer(const std::string& name, size_t bytes) {
@@ -299,7 +300,14 @@ void TrtEngine::set_input_shape(const std::string& name,
 
 void TrtEngine::set_input(const std::string& name, const void* host_data,
                           size_t bytes, cudaStream_t stream) {
-    ensure_buffer(name, bytes);
+    const size_t expected_bytes = tensor_bytes(name);
+    if (bytes != expected_bytes) {
+        throw std::runtime_error(
+            "TensorRT input byte size mismatch for '" + name + "': expected " +
+            std::to_string(expected_bytes) + ", got " +
+            std::to_string(bytes));
+    }
+    ensure_buffer(name, expected_bytes);
     cudaError_t err;
     if (stream) {
         err = cudaMemcpyAsync(buffers_[name].ptr, host_data, bytes,
@@ -357,6 +365,13 @@ void TrtEngine::get_output(const std::string& name, void* host_data,
     if (it == buffers_.end()) {
         throw std::runtime_error("Unknown tensor: " + name);
     }
+    const size_t expected_bytes = tensor_bytes(name);
+    if (bytes != expected_bytes) {
+        throw std::runtime_error(
+            "TensorRT output byte size mismatch for '" + name + "': expected " +
+            std::to_string(expected_bytes) + ", got " +
+            std::to_string(bytes));
+    }
     cudaError_t err;
     if (stream) {
         err = cudaMemcpyAsync(host_data, it->second.ptr, bytes,
@@ -386,8 +401,14 @@ const void* TrtEngine::device_ptr(const std::string& name) const {
 std::vector<int> TrtEngine::shape(const std::string& name) const {
     auto dims = context_->getTensorShape(name.c_str());
     std::vector<int> s(dims.nbDims);
-    for (int i = 0; i < dims.nbDims; ++i) s[i] = dims.d[i];
+    for (int i = 0; i < dims.nbDims; ++i) {
+        s[i] = internal::CheckedIntCast(dims.d[i], "TensorRT tensor dimension");
+    }
     return s;
+}
+
+nvinfer1::DataType TrtEngine::data_type(const std::string& name) const {
+    return engine_->getTensorDataType(name.c_str());
 }
 
 std::vector<int> TrtEngine::max_profile_shape(const std::string& name) const {
@@ -396,7 +417,8 @@ std::vector<int> TrtEngine::max_profile_shape(const std::string& name) const {
                                          nvinfer1::OptProfileSelector::kMAX);
     std::vector<int> s(dims.nbDims);
     for (int i = 0; i < dims.nbDims; ++i) {
-        s[i] = dims.d[i];
+        s[i] = internal::CheckedIntCast(dims.d[i],
+                                        "TensorRT profile dimension");
     }
     return s;
 }

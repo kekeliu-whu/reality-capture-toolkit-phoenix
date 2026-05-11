@@ -1,5 +1,6 @@
 #include "sfm_phoenix/extractors/aliked.h"
 #include "sfm_phoenix/internal/preprocess_cuda.h"
+#include "sfm_phoenix/internal/runtime_utils.h"
 
 #include <opencv2/imgproc.hpp>
 
@@ -7,7 +8,6 @@
 #include <cassert>
 #include <chrono>
 #include <cmath>
-#include <cstdlib>
 #include <spdlog/spdlog.h>
 #include <vector>
 
@@ -126,7 +126,7 @@ void AlikedDetector::preprocess(const cv::Mat& image,
 
 int AlikedDetector::run_pipeline(const cv::Mat& image,
                                  const bool input_is_rgb) {
-    static bool profile = (std::getenv("PROFILE") != nullptr);
+    static bool profile = internal::EnvVarEnabled("PROFILE");
     std::chrono::high_resolution_clock::time_point tp[5];
 
     if (profile) tp[0] = std::chrono::high_resolution_clock::now();

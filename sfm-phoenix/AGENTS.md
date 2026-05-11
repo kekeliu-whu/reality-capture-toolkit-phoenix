@@ -196,6 +196,39 @@ $env:PATH = "d:\codes\tmp\colmap-x64-windows-cuda\bin;" +
 
 `compare_py_cpp.py` 与 `benchmark_cpp.py` 当前已支持 `--max-edge`，在 8GB GPU 上建议先用 `--max-edge 1024` 做性能对比。
 
+### `phoenix.exe automatic_reconstructor` 测试（`cam0`）
+
+`automatic_reconstructor` 会依次执行特征提取、顺序匹配和 COLMAP mapper。
+对 `fisheye_x5_VID_20251017_113930_00_052_cam0` 这组图像，建议**从仓库根目录**
+`D:\ProjectX\project-3d\reality-capture-toolkit` 执行；Phoenix 的 ALIKED /
+LightGlue 与回环检索用的 DINOv3 ONNX 现在都默认从**可执行文件目录**解析。
+从仓库根目录执行仍然是推荐方式，但不再要求依赖 `current_path()/sfm-phoenix/models`
+这类工作目录约束。
+
+```powershell
+Set-Location D:\ProjectX\project-3d\reality-capture-toolkit
+
+# 如需干净重跑，可先删除旧数据库和输出目录
+# Remove-Item -Force D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\tmp\1.db
+# Remove-Item -Recurse -Force D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\tmp\xsfm
+
+& D:\ProjectX\project-3d\reality-capture-toolkit\sfm-phoenix\build\RelWithDebInfo\phoenix.exe automatic_reconstructor `
+  --database_path D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\tmp\1.db `
+  --output_path D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\tmp\xsfm `
+  --ImageReader.camera_model OPENCV_FISHEYE `
+  --ImageReader.camera_params 1031.66461370906,1034.5058937955631,1914.3722986500428,1917.9345703270592,0.041781485017779785,-0.010811908919748141,0.009255437639592589,-0.0028007624722588866 `
+  --SequentialMatching.loop_detection_period 6 `
+  --SequentialMatching.loop_detection_num_images 50 `
+  --image_path D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\tmp\camera\fisheye_x5_VID_20251017_113930_00_052_cam0
+```
+
+补充说明：
+
+- 上述 `camera_params` 对应 `cam0` 使用的 fisheye 内参。
+- 若未显式传入 mapper 相关参数，`automatic_reconstructor` 当前会自动附加
+  `--Mapper.multiple_models 0` 与 `--Mapper.max_num_models 1`，避免同一序列生成多个模型。
+- 成功后数据库会写入 `tmp/1.db`，稀疏重建结果会输出到 `tmp/xsfm/`。
+
 ### 测试结果（2026-04-19, `d:\codes\tmp\images`, `max-edge=1024`）
 
 > 说明：该机器在 8GB 显存下构建 `1600x1600` backbone engine 会触发 TensorRT

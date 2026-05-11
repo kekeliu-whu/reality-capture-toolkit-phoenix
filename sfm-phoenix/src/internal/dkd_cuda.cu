@@ -87,7 +87,6 @@ __global__ void nms_suppress_kernel(const float* __restrict__ scores,
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= HW) return;
 
-    bool is_max = max_mask[idx] > 0.0f;
     bool is_supp = max_mask_pooled[idx] > 0.0f;
     float ss = is_supp ? 0.0f : scores[idx];
     supp_scores[idx] = ss;
