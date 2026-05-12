@@ -9,11 +9,11 @@
 5. 将带颜色的点云保存为 recolored.las
 """
 
+import argparse
 import json
 import os
 import random
 import shutil
-import sys
 import time
 
 import numpy as np
@@ -26,9 +26,46 @@ try:
 except ImportError:
     calib_pb2 = None
 
-BASE_DIR = R"D:\ProjectX\project-3d\data\abc"
-target_img = "cam0/1749886787_819981.jpg"  # 默认图片
-MAX_POINTS = 20_000_000
+
+# ============================================================================
+# [CONFIG] 命令行参数默认值 - 修改此处便于手动运行
+# ============================================================================
+
+DEFAULT_BASE_DIR = R"D:\ProjectX\project-3d\data\abc"
+DEFAULT_TARGET_IMG = "cam0/1749886787_819981.jpg"
+DEFAULT_MAX_POINTS = 20_000_000
+DEFAULT_SEED = None
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Use one selected image to colorize a point cloud"
+    )
+    parser.add_argument(
+        "--base-dir",
+        type=str,
+        default=DEFAULT_BASE_DIR,
+        help="Base directory containing images, calibration, and LAS files",
+    )
+    parser.add_argument(
+        "--target-img",
+        type=str,
+        default=DEFAULT_TARGET_IMG,
+        help="Preferred image path relative to images/",
+    )
+    parser.add_argument(
+        "--max-points",
+        type=int,
+        default=DEFAULT_MAX_POINTS,
+        help="Maximum number of points to process after downsampling",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=DEFAULT_SEED,
+        help="Random seed used when the target image is unavailable",
+    )
+    return parser.parse_args()
 
 
 # ──────────────────────────────────────────────
@@ -232,17 +269,22 @@ def project_fisheye(
 # ──────────────────────────────────────────────
 # 5. 主流程
 # ──────────────────────────────────────────────
-def colorize_pointcloud(seed: int | None = None) -> None:
+def colorize_pointcloud(
+    base_dir: str,
+    target_img: str,
+    max_points: int,
+    seed: int | None = None,
+) -> None:
     if seed is not None:
         random.seed(seed)
 
     # ── 加载点云（步长降采样）──
-    las_path = resolve_las_path(BASE_DIR)
+    las_path = resolve_las_path(base_dir)
     las = laspy.read(las_path)
     total = len(las.points)
 
     # 控制默认处理规模，避免超大点云在交互环境中被中断。
-    step = max(1, (total + MAX_POINTS - 1) // MAX_POINTS)
+    step = max(1, (total + max_points - 1) // max_points)
     idx = np.arange(0, total, step)
     las.points = las.points[idx]
     pts_world = np.vstack([las.x, las.y, las.z]).T  # (N, 3)
@@ -257,12 +299,12 @@ def colorize_pointcloud(seed: int | None = None) -> None:
     print(f"  Z: [{pts_world_local[:,2].min():.4f}, {pts_world_local[:,2].max():.4f}]")
 
     # ── 加载位姿 & 标定 ──
-    poses = load_img_poses(os.path.join(BASE_DIR, "images", "ImgPose.txt"))
-    calibs = load_calibration(os.path.join(BASE_DIR, "calibration.dat"))
+    poses = load_img_poses(os.path.join(base_dir, "images", "ImgPose.txt"))
+    calibs = load_calibration(os.path.join(base_dir, "calibration.dat"))
     print(f"位姿条目：{len(poses)} 条")
 
     existing_poses = [
-        p for p in poses if os.path.exists(resolve_image_path(BASE_DIR, p["img_path"]))
+        p for p in poses if os.path.exists(resolve_image_path(base_dir, p["img_path"]))
     ]
     print(f"可用图片位姿：{len(existing_poses)} 条")
     if not existing_poses:
@@ -286,7 +328,7 @@ def colorize_pointcloud(seed: int | None = None) -> None:
 
     img_rel = pose["img_path"]
     cam_name = infer_camera_name(img_rel)
-    img_path = resolve_image_path(BASE_DIR, img_rel)
+    img_path = resolve_image_path(base_dir, img_rel)
     pose_position = pose["position"].astype(np.float64)
     t_c2w_local = pose_position - world_origin
 
@@ -353,27 +395,34 @@ def colorize_pointcloud(seed: int | None = None) -> None:
     out_las.green = (colors[:, 1].astype(np.uint16)) << 8
     out_las.blue = (colors[:, 2].astype(np.uint16)) << 8
 
-    out_path = os.path.join(BASE_DIR, "recolored.las")
+    out_path = os.path.join(base_dir, "recolored.las")
     out_las.write(out_path)
     print(f"\n已保存（局部坐标，无全局偏移）：{out_path}")
 
-    camera_center_path = os.path.join(BASE_DIR, "camera_center.pcd")
+    camera_center_path = os.path.join(base_dir, "camera_center.pcd")
     write_single_point_pcd(camera_center_path, t_c2w_local)
     print(f"已保存相机中心点：{camera_center_path}")
 
     image_ext = os.path.splitext(img_path)[1] or ".jpg"
-    output_image_path = os.path.join(BASE_DIR, f"selected_image{image_ext}")
+    output_image_path = os.path.join(base_dir, f"selected_image{image_ext}")
     shutil.copy2(img_path, output_image_path)
     print(f"已复制选中图片到输出目录：{output_image_path}")
 
 
+def main() -> int:
+    args = parse_args()
+    seed = args.seed
+    if seed is None:
+        seed = int(time.time() * 1e6) % (2**31)
+
+    colorize_pointcloud(
+        base_dir=args.base_dir,
+        target_img=args.target_img,
+        max_points=args.max_points,
+        seed=seed,
+    )
+    return 0
+
+
 if __name__ == "__main__":
-    seed_arg = None
-
-    if len(sys.argv) > 1:
-        seed_arg = int(sys.argv[1])
-
-    if seed_arg is None:
-        seed_arg = int(time.time() * 1e6) % (2**31)
-
-    colorize_pointcloud(seed=seed_arg)
+    raise SystemExit(main())

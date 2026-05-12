@@ -42,6 +42,25 @@ OPTIMIZATION_SEARCH_RANGE = 1.0  # 精细对齐的搜索范围 (±秒)
 # ========== 数据清理参数 ==========
 TIME_TOLERANCE = 1e-9  # 时间戳最小差异阈值，用于移除重复点
 
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="IMU time synchronization using B-spline interpolation over gyro magnitude"
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=DEFAULT_IMU_DEVICE_FILE,
+        help=f"Path to the Device IMU data file (default: {DEFAULT_IMU_DEVICE_FILE})",
+    )
+    parser.add_argument(
+        "--insta",
+        type=str,
+        default=DEFAULT_IMU_INSTA_FILE,
+        help=f"Path to the Insta IMU data file (default: {DEFAULT_IMU_INSTA_FILE})",
+    )
+    return parser.parse_args()
+
 # ============================================================================
 # matplotlib 配置（需要在导入pyplot前设置）
 # ============================================================================
@@ -606,23 +625,7 @@ def print_time_sync_results(time_delay: float) -> None:
 
 def main():
     """主程序入口"""
-    # ===== 命令行参数解析 =====
-    parser = argparse.ArgumentParser(
-        description="IMU time synchronization using B-spline interpolation over gyro magnitude"
-    )
-    parser.add_argument(
-        "--device",
-        type=str,
-        default=DEFAULT_IMU_DEVICE_FILE,
-        help=f"Path to the Device IMU data file (default: {DEFAULT_IMU_DEVICE_FILE})",
-    )
-    parser.add_argument(
-        "--insta",
-        type=str,
-        default=DEFAULT_IMU_INSTA_FILE,
-        help=f"Path to the Insta IMU data file (default: {DEFAULT_IMU_INSTA_FILE})",
-    )
-    args = parser.parse_args()
+    args = parse_args()
 
     print("\n" + "=" * 60)
     print("[INFO] Starting IMU time synchronization and alignment analysis")

@@ -47,51 +47,63 @@ except ImportError as e:
 # 配置参数和路径 (所有设置放在这里)
 # ============================================================
 
-# [CONFIG] 命令行参数默认值 - 修改此处便于手动运行
-DEFAULT_INPUT_VIDEO = (
-    R"Z:\rick\dataset\q9000\MT20260430-102731-24fps-video\VID_20260430_102730_00_033.insv"
+# 创建命令行参数解析器
+parser = argparse.ArgumentParser(description="Scientific camera data extraction tool")
+
+# --------- 输入文件路径 ---------
+parser.add_argument(
+    "--input-video-filename",
+    type=str,
+    default=R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only\insta\1749886847469595719_00.insv",
+    help="Input video file path",
 )
-DEFAULT_OUTPUT_DIR = R"Z:\rick\dataset\q9000\MT20260430-102731-24fps-video\output\images"
-DEFAULT_TIME_OFFSET_SECS = 1749886801.779175
-DEFAULT_EXPORT_FRAMES = True
-DEFAULT_FRAME_SAMPLE_RATE = 12
 
+# --------- 输出目录 ---------
+parser.add_argument(
+    "--output-dir",
+    type=str,
+    default=R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only\output\images",
+    help="Output directory",
+)
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Scientific camera data extraction tool"
-    )
-    parser.add_argument(
-        "--input-video-filename",
-        type=str,
-        default=DEFAULT_INPUT_VIDEO,
-        help="Input video file path",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=str,
-        default=DEFAULT_OUTPUT_DIR,
-        help="Output directory",
-    )
-    parser.add_argument(
-        "--time-offset",
-        type=float,
-        default=DEFAULT_TIME_OFFSET_SECS,
-        help="Time offset in seconds",
-    )
-    parser.add_argument(
-        "--export-frames",
-        action=argparse.BooleanOptionalAction,
-        default=DEFAULT_EXPORT_FRAMES,
-        help="Whether to export camera frames (default: enabled; use --no-export-frames to disable)",
-    )
-    parser.add_argument(
-        "--frame-sample-rate",
-        type=int,
-        default=DEFAULT_FRAME_SAMPLE_RATE,
-        help="Export one frame every N frames (default: 12)",
-    )
-    return parser.parse_args()
+# --------- 时间偏移参数 ---------
+parser.add_argument(
+    "--time-offset",
+    type=float,
+    default=1749886848.4768693,
+    help="Time offset in seconds",
+)
+
+# --------- 数据导出参数 ---------
+parser.add_argument(
+    "--export-frames",
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help="Whether to export camera frames (default: enabled; use --no-export-frames to disable)",
+)
+parser.add_argument(
+    "--frame-sample-rate",
+    type=int,
+    default=12,
+    help="Export one frame every N frames (default: 12)",
+)
+
+# 解析命令行参数
+args = parser.parse_args()
+
+# 从参数中获取配置值
+INPUT_VIDEO = args.input_video_filename
+OUTPUT_DIRECTORY = args.output_dir
+TIME_OFFSET_SECS = args.time_offset
+EXPORT_FRAMES = args.export_frames
+FRAME_SAMPLE_RATE = args.frame_sample_rate
+
+FIRST_FRAME_TIMESTAMP_RAW = 1749886847469595719
+FIRST_FRAME_TIMESTAMP_SECS = FIRST_FRAME_TIMESTAMP_RAW / 1_000_000_000.0
+FRAME_TIMESTAMP_STEP_SECS = 0.3333333333
+
+# IMU输出文件路径（保存在输出目录中）
+IMU_OUTPUT_FILE = os.path.join(OUTPUT_DIRECTORY, "insv.dat")
 
 # --------- 视频提取参数 ---------
 QUALITY = 2  # 0-31, 越低质量越好
@@ -118,6 +130,17 @@ def build_sampled_frame_indices(total_count, frame_sample_rate):
     if frame_sample_rate <= 0:
         raise ValueError("frame_sample_rate must be greater than 0")
     return list(range(0, total_count, frame_sample_rate))
+
+
+def build_fixed_frame_timestamps(
+    total_count,
+    first_timestamp_secs=FIRST_FRAME_TIMESTAMP_SECS,
+    frame_timestamp_step_secs=FRAME_TIMESTAMP_STEP_SECS,
+):
+    return [
+        first_timestamp_secs + frame_idx * frame_timestamp_step_secs
+        for frame_idx in range(total_count)
+    ]
 
 
 def clean_camera_output_dir(cam_dir, extensions=(".jpg",)):
@@ -191,7 +214,7 @@ def extract_panorama_frames_from_mediasdk(
     build_pack_dir = media_sdk_exe.parent.parent  # build-pack/ is parent of MediaSDK/
     media_sdk_dir = media_sdk_exe.parent
 
-    # 第一帧对应 all_timestamps[0]（即 exposure_data[0]），后续每帧 +0.5s
+    # 第一帧对应 all_timestamps[0]，后续每帧 +0.5s。
     base_timestamp = all_timestamps[0]
 
     cam_dir = Path(output_base_dir) / f"cam{camera_index}"
@@ -257,7 +280,7 @@ def extract_panorama_frames_from_mediasdk(
 
     print(f"  MediaSDK exported {len(exported_images)} images")
 
-    # 排序后按顺序分配时间戳：第 i 帧 = exposure_data[0] + i * 0.5
+    # 排序后按顺序分配时间戳：第 i 帧 = base_timestamp + i * 0.5
     sampled_images = []
     finalized_timestamps = []
     for video_idx, img_path in enumerate(exported_images):
@@ -300,8 +323,8 @@ def extract_frames_from_video(
         output_base_dir: 输出基础目录
         quality: 视频质量 (0-31, 越低越好)
         num_streams: 流的数量 (默认2个: cam0, cam1)
-        frame_sample_rate: 每 N 帧保留 1 帧
-        all_timestamps: 与视频帧索引对应的时间戳列表，同样每 N 个取 1 个
+        frame_sample_rate: 保留的兼容参数；鱼眼分支当前始终导出全部帧
+        all_timestamps: 与视频帧索引一一对应的时间戳列表
 
     返回:
         包含导出后的时间戳和每个摄像头的图片列表的字典
@@ -311,8 +334,6 @@ def extract_frames_from_video(
     output_base_dir = str(output_base_dir)
     if not all_timestamps:
         raise ValueError("all_timestamps is required for fisheye export")
-    if frame_sample_rate <= 0:
-        raise ValueError("frame_sample_rate must be greater than 0")
 
     exported_timestamps = []
 
@@ -374,19 +395,19 @@ def extract_frames_from_video(
                     "aligned entries"
                 )
 
-            sampled_frame_indices = build_sampled_frame_indices(
-                aligned_frame_count,
-                frame_sample_rate,
-            )
-            print(
-                f"  Sampling every {frame_sample_rate} frame(s): "
-                f"keeping {len(sampled_frame_indices)} frames"
-            )
+            if frame_sample_rate != 1:
+                print(
+                    "  [INFO] Fisheye export ignores frame_sample_rate="
+                    f"{frame_sample_rate} and exports all aligned frames"
+                )
 
-            # 图片和时间戳使用相同原始帧索引采样：0, N, 2N, ...
+            frame_indices = range(aligned_frame_count)
+            print(f"  Exporting all aligned frames: {aligned_frame_count}")
+
+            # 图片和时间戳使用相同原始帧索引一一对应。
             exported_images = []
             current_stream_timestamps = []
-            for frame_idx in sampled_frame_indices:
+            for frame_idx in frame_indices:
                 temp_frame = temp_frames[frame_idx]
                 temp_path = os.path.join(cam_dir, temp_frame)
 
@@ -417,7 +438,7 @@ def extract_frames_from_video(
 
             print(
                 f"  [OK] cam{stream_idx} export complete: {len(exported_images)} frames"
-                f" (sample_rate={frame_sample_rate})"
+                " (all frames exported)"
             )
 
             # 保存图片列表
@@ -582,135 +603,143 @@ def save_to_rosbag(
 # 初始化和执行逻辑
 # ============================================================
 
-def main() -> int:
-    args = parse_args()
-    input_video = args.input_video_filename
-    output_directory = args.output_dir
-    time_offset_secs = args.time_offset
-    export_frames = args.export_frames
-    frame_sample_rate = args.frame_sample_rate
-    imu_output_file = os.path.join(output_directory, "insv.dat")
+# 开始处理
+print("=" * 60)
+print("Starting data extraction and processing pipeline...")
+print("=" * 60)
 
-    print("=" * 60)
-    print("Starting data extraction and processing pipeline...")
-    print("=" * 60)
+# 初始化解析器
+tp = telemetry_parser.Parser(INPUT_VIDEO)
 
-    tp = telemetry_parser.Parser(input_video)
-    os.makedirs(output_directory, exist_ok=True)
+# 确保输出目录存在
+os.makedirs(OUTPUT_DIRECTORY, exist_ok=True)
 
-    imu_data = tp.normalized_imu()
-    imu_msg_list = ImuMsgList()
-    for imu_sample in imu_data:
-        imu_msg = imu_msg_list.imu_msgs.add()
-        imu_msg.timestamp = imu_sample["timestamp_ms"] / 1000.0
-        imu_msg.gx = imu_sample["gyro"][0] / 180.0 * math.pi
-        imu_msg.gy = imu_sample["gyro"][1] / 180.0 * math.pi
-        imu_msg.gz = imu_sample["gyro"][2] / 180.0 * math.pi
-        imu_msg.ax = imu_sample["accl"][0]
-        imu_msg.ay = imu_sample["accl"][1]
-        imu_msg.az = imu_sample["accl"][2]
+# 获取归一化的IMU数据
+imu_data = tp.normalized_imu()
 
-    with open(imu_output_file, "wb") as f:
-        f.write(imu_msg_list.SerializeToString())
+# 将IMU数据转换为protobuf格式
+imu_msg_list = ImuMsgList()
 
-    file_size = os.path.getsize(imu_output_file)
-    print(f"[OK] Wrote output to: {imu_output_file}")
-    print(f"  File size: {file_size} bytes")
-    print(f"  IMU sample count: {len(imu_msg_list.imu_msgs)}")
-    print(f"  Camera: {tp.camera}")
-    print(f"  Model: {tp.model}")
+for imu_sample in imu_data:
+    imu_msg = imu_msg_list.imu_msgs.add()
+    imu_msg.timestamp = imu_sample["timestamp_ms"] / 1000.0  # 转换为秒并加上时间偏移
+    imu_msg.gx = imu_sample["gyro"][0] / 180.0 * math.pi  # 转换为弧度
+    imu_msg.gy = imu_sample["gyro"][1] / 180.0 * math.pi
+    imu_msg.gz = imu_sample["gyro"][2] / 180.0 * math.pi
+    imu_msg.ax = imu_sample["accl"][0]
+    imu_msg.ay = imu_sample["accl"][1]
+    imu_msg.az = imu_sample["accl"][2]
 
-    if not export_frames:
-        print("\n" + "=" * 60)
-        print("[WARN] Camera frames were not exported, timestamps were not consumed")
-        print("=" * 60)
-        return 0
+# 将protobuf消息写入二进制文件
+with open(IMU_OUTPUT_FILE, "wb") as f:
+    f.write(imu_msg_list.SerializeToString())
 
+# 验证写入成功
+file_size = os.path.getsize(IMU_OUTPUT_FILE)
+print(f"[OK] Wrote output to: {IMU_OUTPUT_FILE}")
+print(f"  File size: {file_size} bytes")
+print(f"  IMU sample count: {len(imu_msg_list.imu_msgs)}")
+print(f"  Camera: {tp.camera}")
+print(f"  Model: {tp.model}")
+
+if not EXPORT_FRAMES:
     print("\n" + "=" * 60)
-    print("Preparing timestamp data...")
+    print("[WARN] Camera frames were not exported, timestamps were not consumed")
     print("=" * 60)
-    exposure_data = tp.telemetry()[0]["Exposure"]["Data"]
-    all_timestamps = [e["t"] + time_offset_secs for e in exposure_data]
-    print(f"[OK] Loaded {len(all_timestamps)} timestamps")
+    sys.exit(0)
 
-    panorama_output_size = detect_panorama_output_size(input_video)
+# 获取时间戳数据（在提取帧之前）
+print("\n" + "=" * 60)
+print("Preparing timestamp data...")
+print("=" * 60)
+exposure_data = tp.telemetry()[0]["Exposure"]["Data"]
+exposure_timestamps = [e["t"] + TIME_OFFSET_SECS for e in exposure_data]
+fisheye_timestamps = build_fixed_frame_timestamps(len(exposure_data))
+print(f"[OK] Loaded {len(fisheye_timestamps)} fisheye timestamps")
+if fisheye_timestamps:
+    print(f"  First frame timestamp: {fisheye_timestamps[0]:.6f}")
+    print(f"  Frame step: {FRAME_TIMESTAMP_STEP_SECS:.7f}s")
 
-    print("\n" + "=" * 60)
-    print("Starting fisheye frame extraction...")
-    print("=" * 60)
-    # result = extract_panorama_frames_from_mediasdk(
-    #     input_video_path=input_video,
-    #     output_base_dir=output_directory,
-    #     media_sdk_exe=MEDIASDK_EXE,
-    #     camera_index=PANORAMA_CAMERA_INDEX,
-    #     frame_sample_rate=frame_sample_rate,
-    #     all_timestamps=all_timestamps,
-    #     stitch_type=PANORAMA_STITCH_TYPE,
-    #     image_type=PANORAMA_IMAGE_TYPE,
-    #     output_size=panorama_output_size,
-    # )
-    _ = panorama_output_size
-    result = extract_frames_from_video(
-        input_video_path=input_video,
-        output_base_dir=output_directory,
-        quality=QUALITY,
-        num_streams=NUM_STREAMS,
-        frame_sample_rate=frame_sample_rate,
-        all_timestamps=all_timestamps,
+# ============================================================
+# 执行逻辑
+# ============================================================
+
+# 自动检测视频分辨率，计算全景输出尺寸
+panorama_output_size = detect_panorama_output_size(INPUT_VIDEO)
+
+# 调用函数提取帧
+print("\n" + "=" * 60)
+print("Starting fisheye frame extraction...")
+print("=" * 60)
+# result = extract_panorama_frames_from_mediasdk(
+#     input_video_path=INPUT_VIDEO,
+#     output_base_dir=OUTPUT_DIRECTORY,
+#     media_sdk_exe=MEDIASDK_EXE,
+#     camera_index=PANORAMA_CAMERA_INDEX,
+#     frame_sample_rate=FRAME_SAMPLE_RATE,
+#     all_timestamps=exposure_timestamps,
+#     stitch_type=PANORAMA_STITCH_TYPE,
+#     image_type=PANORAMA_IMAGE_TYPE,
+#     output_size=panorama_output_size,
+# )
+result = extract_frames_from_video(
+    input_video_path=INPUT_VIDEO,
+    output_base_dir=OUTPUT_DIRECTORY,
+    quality=QUALITY,
+    num_streams=NUM_STREAMS,
+    frame_sample_rate=FRAME_SAMPLE_RATE,
+    all_timestamps=fisheye_timestamps,
+)
+
+# 从返回结果中分离时间戳和图片列表
+exported_timestamps = result["timestamps"]
+image_lists = {k: v for k, v in result.items() if k != "timestamps"}
+
+# 统计提取的帧数
+print("\n" + "=" * 60)
+print("Frame extraction summary:")
+print("=" * 60)
+for cam, images in image_lists.items():
+    print(f"  {cam}: {len(images)} frames")
+
+print(f"\n[OK] Configured fisheye timestamp count: {len(fisheye_timestamps)}")
+print(f"  Exported timestamp count: {len(exported_timestamps)}")
+if fisheye_timestamps:
+    print(
+        "  Timestamp rule: first frame fixed to "
+        f"{fisheye_timestamps[0]:.6f}, then +{FRAME_TIMESTAMP_STEP_SECS:.7f}s per frame"
+    )
+if len(exported_timestamps) > 0:
+    print(f"  Timestamp range: {exported_timestamps[0]:.6f} to {exported_timestamps[-1]:.6f}")
+
+# 验证帧数和时间戳是否匹配
+print("\n" + "=" * 60)
+print("Frame and timestamp validation:")
+print("=" * 60)
+frame_counts = {cam: len(images) for cam, images in image_lists.items()}
+for cam, frame_count in frame_counts.items():
+    match_status = "[OK] match" if frame_count == len(exported_timestamps) else "[ERROR] mismatch"
+    print(
+        f"  {cam}: {frame_count} frames vs {len(exported_timestamps)} timestamps {match_status}"
     )
 
-    exported_timestamps = result["timestamps"]
-    image_lists = {k: v for k, v in result.items() if k != "timestamps"}
-
+# 保存到 rosbag（可选）
+if SAVE_TO_ROSBAG:
     print("\n" + "=" * 60)
-    print("Frame extraction summary:")
+    print("Saving data to rosbag...")
     print("=" * 60)
-    for cam, images in image_lists.items():
-        print(f"  {cam}: {len(images)} frames")
-
-    print(f"\n[OK] Original timestamp count: {len(all_timestamps)}")
-    print(f"  Exported timestamp count: {len(exported_timestamps)}")
-    print(f"  Timestamp rule: all_timestamps sampled every {frame_sample_rate} frame(s)")
-    if len(exported_timestamps) > 0:
-        print(
-            f"  Timestamp range: {exported_timestamps[0]:.6f} to {exported_timestamps[-1]:.6f}"
-        )
-
+    save_to_rosbag(
+        output_dir=OUTPUT_DIRECTORY,
+        imu_msg_list=imu_msg_list,
+        timestamps=exported_timestamps,
+        num_streams=NUM_STREAMS,
+        timeoffset_secs=TIME_OFFSET_SECS,
+    )
+else:
     print("\n" + "=" * 60)
-    print("Frame and timestamp validation:")
+    print("[WARN] Skipping rosbag export (SAVE_TO_ROSBAG = False)")
     print("=" * 60)
-    frame_counts = {cam: len(images) for cam, images in image_lists.items()}
-    for cam, frame_count in frame_counts.items():
-        match_status = (
-            "[OK] match"
-            if frame_count == len(exported_timestamps)
-            else "[ERROR] mismatch"
-        )
-        print(
-            f"  {cam}: {frame_count} frames vs {len(exported_timestamps)} timestamps {match_status}"
-        )
 
-    if SAVE_TO_ROSBAG:
-        print("\n" + "=" * 60)
-        print("Saving data to rosbag...")
-        print("=" * 60)
-        save_to_rosbag(
-            output_dir=output_directory,
-            imu_msg_list=imu_msg_list,
-            timestamps=exported_timestamps,
-            num_streams=NUM_STREAMS,
-            timeoffset_secs=time_offset_secs,
-        )
-    else:
-        print("\n" + "=" * 60)
-        print("[WARN] Skipping rosbag export (SAVE_TO_ROSBAG = False)")
-        print("=" * 60)
-
-    print("\n" + "=" * 60)
-    print("[OK] Data processing completed")
-    print("=" * 60)
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+print("\n" + "=" * 60)
+print("[OK] Data processing completed")
+print("=" * 60)

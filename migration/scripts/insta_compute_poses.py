@@ -32,6 +32,59 @@ from spdlog_compat import init_spdlog_like_logger
 LOGGER = init_spdlog_like_logger()
 
 
+# ============================================================================
+# [CONFIG] 命令行参数默认值 - 修改此处便于手动运行
+# ============================================================================
+
+DEFAULT_POSES_FILE = (
+    R"Z:\rick\dataset\q9000\MT20260424-112349-fisheye\output\trajectory_opt.txt"
+)
+DEFAULT_CALIB_FILE = (
+    R"Z:\rick\dataset\q9000\MT20260424-112349-fisheye\output\calibration.dat"
+)
+DEFAULT_IMAGE_FOLDER = R"Z:\rick\dataset\q9000\MT20260424-112349-fisheye\output\images"
+DEFAULT_OUTPUT_FILE = (
+    R"Z:\rick\dataset\q9000\MT20260424-112349-fisheye\output\images\ImgPose.txt"
+)
+DEFAULT_IMAGE_LIST = None
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Compute image poses from IMU trajectory and camera-IMU extrinsics"
+    )
+    parser.add_argument(
+        "--poses-file",
+        "-p",
+        default=DEFAULT_POSES_FILE,
+        help="Path to IMU trajectory file (text format)",
+    )
+    parser.add_argument(
+        "--calib-file",
+        "-c",
+        default=DEFAULT_CALIB_FILE,
+        help="Path to calibration file with camera extrinsics (protobuf)",
+    )
+    parser.add_argument(
+        "--image-folder",
+        "-i",
+        default=DEFAULT_IMAGE_FOLDER,
+        help="Path to parent folder containing cam0, cam1, ... subdirectories",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        default=DEFAULT_OUTPUT_FILE,
+        help="Output file path",
+    )
+    parser.add_argument(
+        "--image-list",
+        default=DEFAULT_IMAGE_LIST,
+        help="Path to file containing list of image names (one per line)",
+    )
+    return parser.parse_args()
+
+
 def invert_transform(rotation, translation):
     rotation_inv = rotation.inv()
     translation_inv = -rotation_inv.apply(translation)
@@ -473,39 +526,7 @@ def process_poses(poses_file, calib_file, image_folder, output_file, image_list=
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Compute image poses from IMU trajectory and camera-IMU extrinsics"
-    )
-    parser.add_argument(
-        "--poses-file",
-        "-p",
-        default=R"Z:\rick\dataset\q9000\MT20260424-112349-fisheye\output\trajectory_opt.txt",
-        help="Path to IMU trajectory file (text format) (default: D:\\output\\trajectory.txt)",
-    )
-    parser.add_argument(
-        "--calib-file",
-        "-c",
-        default=R"Z:\rick\dataset\q9000\MT20260424-112349-fisheye\output\calibration.dat",
-        help="Path to calibration file with camera extrinsics (protobuf) (default: D:\\output\\calibration.dat)",
-    )
-    parser.add_argument(
-        "--image-folder",
-        "-i",
-        default=R"Z:\rick\dataset\q9000\MT20260424-112349-fisheye\output\images",
-        help="Path to parent folder containing cam0, cam1, ... subdirectories (default: D:\\output\\images)",
-    )
-    parser.add_argument(
-        "--output",
-        "-o",
-        default=R"Z:\rick\dataset\q9000\MT20260424-112349-fisheye\output\images\ImgPose.txt",
-        help="Output file path (default: D:\\output\\images\\ImgPose.txt)",
-    )
-    parser.add_argument(
-        "--image-list",
-        help="Path to file containing list of image names (one per line)",
-    )
-
-    args = parser.parse_args()
+    args = parse_args()
 
     # Load image list if provided
     image_list = None
