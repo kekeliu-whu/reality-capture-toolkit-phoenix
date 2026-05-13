@@ -203,8 +203,7 @@ target_link_libraries(phoenix PRIVATE sfm_phoenix phoenix_logging TBB::tbb)
 set(PHOENIX_RUNTIME_OUTPUT_DIR "${CMAKE_BINARY_DIR}/$<CONFIG>")
 
 set(PHOENIX_RUNTIME_ASSETS
-    ${CMAKE_CURRENT_SOURCE_DIR}/models/aliked_backbone.onnx
-    ${CMAKE_CURRENT_SOURCE_DIR}/models/aliked_sddh.onnx
+    ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/cusfm/aliked.onnx
     ${CMAKE_CURRENT_SOURCE_DIR}/models/dinov3_vitb16_pretrain_lvd1689m.onnx
     ${CMAKE_CURRENT_SOURCE_DIR}/models/lightglue.onnx
 )
