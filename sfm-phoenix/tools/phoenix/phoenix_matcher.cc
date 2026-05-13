@@ -27,6 +27,7 @@
 #include <fstream>
 #include <future>
 #include <optional>
+#include <sstream>
 #include <unordered_set>
 
 namespace phoenix_tool {
@@ -453,6 +454,8 @@ void AddFeatureMatcherOptions(colmap::OptionManager* options,
                                FeatureMatchingOptions* opts) {
   options->AddDatabaseOptions();
   options->AddDefaultOption("image_path", &opts->image_path);
+  options->AddDefaultOption("pair_list_path", &opts->pair_list_path);
+  options->AddDefaultOption("Phoenix.max_edge", &opts->max_edge);
   options->AddDefaultOption("Phoenix.max_matches", &opts->max_matches);
   options->AddDefaultOption("Phoenix.retrieval_num", &opts->retrieval.num);
   options->AddDefaultOption("Phoenix.retrieval_batch_size",
@@ -482,9 +485,18 @@ int DoMatching(const std::string& database_path,
 
   int extraction_max_edge = 0;
   if (!ReadExtractionMaxEdgeMetadata(database_path, &extraction_max_edge)) {
-    throw std::runtime_error(
-        "Phoenix extraction metadata missing: extraction_max_edge not found in "
-        "database. Run feature_extractor again with this Phoenix version.");
+    if (opts.max_edge > 0) {
+      extraction_max_edge = opts.max_edge;
+      spdlog::warn(
+          "Phoenix extraction metadata missing; falling back to "
+          "Phoenix.max_edge={}",
+          extraction_max_edge);
+    } else {
+      throw std::runtime_error(
+          "Phoenix extraction metadata missing: extraction_max_edge not "
+          "found in database. Run feature_extractor again with this "
+          "Phoenix version.");
+    }
   }
 
   FeatureMatchingMetrics metrics;
@@ -511,14 +523,35 @@ int DoMatching(const std::string& database_path,
 
   const auto pair_prepare_start = Clock::now();
   std::vector<std::pair<colmap::image_t, colmap::image_t>> pairs;
-  if (opts.linear_overlap_num > 0 || opts.quadratic_overlap_num > 0) {
+  if (!opts.pair_list_path.empty()) {
+    for (const std::string& line :
+         ReadTextLines(opts.pair_list_path, /*allow_comments=*/true)) {
+      std::istringstream stream(line);
+      std::string image_name1;
+      std::string image_name2;
+      stream >> image_name1 >> image_name2;
+      if (image_name1.empty() || image_name2.empty()) {
+        spdlog::warn("Skipping malformed pair list line: {}", line);
+        continue;
+      }
+      const auto image_id1 = image_ids.find(image_name1);
+      const auto image_id2 = image_ids.find(image_name2);
+      if (image_id1 == image_ids.end() || image_id2 == image_ids.end()) {
+        spdlog::warn("Skipping unknown image pair: {} {}",
+                     image_name1,
+                     image_name2);
+        continue;
+      }
+      pairs.emplace_back(image_id1->second, image_id2->second);
+    }
+  } else if (opts.linear_overlap_num > 0 || opts.quadratic_overlap_num > 0) {
     pairs = BuildSequentialPairs(ordered_images,
                                  opts.linear_overlap_num,
                                  opts.quadratic_overlap_num);
   } else if (opts.retrieval.num <= 0) {
     pairs = BuildExhaustivePairs(ordered_images);
   }
-  if (opts.retrieval.num > 0) {
+  if (opts.pair_list_path.empty() && opts.retrieval.num > 0) {
     const auto retrieval_start = Clock::now();
     const auto retrieval_pairs =
         BuildRetrievalPairs(opts.image_path,

@@ -2,9 +2,17 @@
 Convert ONNX models to TensorRT engines with FP16 optimisation.
 
 Usage:
+    # Build ALIKED and LightGlue together (default)
     python sfm-phoenix/tools/build_trt_engines.py \
-        --input sfm-phoenix/models/ \
-        --output sfm-phoenix/engines/
+        --aliked D:\\Users\\rick\\Downloads\\aliked.onnx \
+        --lightglue sfm-phoenix/models/lightglue.onnx \
+        --output sfm-phoenix/build/RelWithDebInfo/
+
+    # Build only LightGlue
+    python sfm-phoenix/tools/build_trt_engines.py \
+        --only lightglue \
+        --lightglue sfm-phoenix/models/lightglue.onnx \
+        --output sfm-phoenix/build/RelWithDebInfo/
 """
 
 import os
@@ -79,40 +87,32 @@ def build_engine(
     print(f"  Saved: {engine_path} ({os.path.getsize(engine_path) / 1e6:.1f} MB)")
 
 
-def build_aliked_backbone(input_dir: str, output_dir: str, fp16: bool):
-    onnx = os.path.join(input_dir, 'aliked_backbone.onnx')
-    engine = os.path.join(output_dir, 'aliked_backbone.engine')
-    if not os.path.exists(onnx):
-        print(f"  Skipping backbone: {onnx} not found")
-        return
-    print(f"\n[aliked_backbone]")
-    build_engine(onnx, engine, fp16=fp16, profiles=[
-        # (input_name, min_shape, opt_shape, max_shape)
-        ('image', (1, 3, 320, 320), (1, 3, 1600, 1600), (1, 3, 1600, 1600)),
-    ])
+def build_aliked(onnx_path: str, output_dir: str, fp16: bool):
+    """Build TRT engine for the unified ALIKED ONNX model.
 
-
-def build_aliked_sddh(input_dir: str, output_dir: str, fp16: bool):
-    onnx = os.path.join(input_dir, 'aliked_sddh.onnx')
-    engine = os.path.join(output_dir, 'aliked_sddh.engine')
-    if not os.path.exists(onnx):
-        print(f"  Skipping SDDH: {onnx} not found")
+    Expected ONNX I/O (single image, batch=1):
+        input:  image         [1, 3, H, W]  float32
+        output: keypoints     [N, 2]        float32
+                descriptors   [N, 128]      float32
+                scores        [N]           float32
+    """
+    if not os.path.exists(onnx_path):
+        print(f"  Skipping ALIKED: {onnx_path} not found")
         return
-    print(f"\n[aliked_sddh]")
-    build_engine(onnx, engine, fp16=fp16, profiles=[
-        ('feature_map',    (1, 128, 320, 320), (1, 128, 1600, 1600), (1, 128, 1600, 1600)),
-        ('keypoints_wh',   (100, 2),           (5000, 2),            (5000, 2)),
-        ('feature_map_hw', (2,),               (2,),                 (2,)),
+    engine_path = os.path.splitext(onnx_path)[0] + '.engine'
+    print(f"\n[aliked]  {onnx_path}")
+    build_engine(onnx_path, engine_path, fp16=fp16, profiles=[
+        ('image', (1, 3, 320, 320), (1, 3, 1024, 1024), (1, 3, 1600, 1600)),
     ])
 
 
 def build_lightglue(input_dir: str, output_dir: str, fp16: bool):
     onnx = os.path.join(input_dir, 'lightglue.onnx')
-    engine = os.path.join(output_dir, 'lightglue.engine')
+    engine = os.path.join(output_dir, 'lightglue_b4.engine')
     if not os.path.exists(onnx):
         print(f"  Skipping LightGlue: {onnx} not found")
         return
-    print(f"\n[lightglue]")
+    print(f"\n[lightglue]  {onnx}")
     build_engine(onnx, engine, fp16=fp16, profiles=[
         # Phoenix feature matching supports batch sizes {1, 4, 8}.
         ('kpts0', (1, 100, 2),   (4, 5000, 2),   (8, 5000, 2)),
@@ -124,27 +124,41 @@ def build_lightglue(input_dir: str, output_dir: str, fp16: bool):
 
 def main():
     parser = argparse.ArgumentParser(description='Build TensorRT engines from ONNX')
-    parser.add_argument('--input', default='sfm-phoenix/models/',
-                        help='Directory containing ONNX models')
-    parser.add_argument('--output', default='sfm-phoenix/engines/',
-                        help='Output directory for TRT engines')
+    parser.add_argument('--aliked',
+                        default=r'D:\Users\rick\Downloads\aliked.onnx',
+                        help='Path to the unified ALIKED ONNX model')
+    parser.add_argument('--lightglue', default=None,
+                        help='Path to the LightGlue ONNX model '
+                             '(or the directory containing lightglue.onnx)')
+    parser.add_argument('--output', default=None,
+                        help='Output directory for TRT engines; '
+                             'defaults to the same directory as the source ONNX')
     parser.add_argument('--no-fp16', action='store_true', help='Disable FP16 for all engines')
-    parser.add_argument('--no-fp16-backbone', action='store_true',
-                        help='Disable FP16 for backbone only (DeformConv plugin is FP16-sensitive)')
-    parser.add_argument('--only', choices=['backbone', 'sddh', 'lightglue'],
+    parser.add_argument('--only', choices=['aliked', 'lightglue'],
                         help='Build only the specified engine')
     args = parser.parse_args()
 
-    os.makedirs(args.output, exist_ok=True)
     fp16 = not args.no_fp16
-    fp16_backbone = fp16 and not args.no_fp16_backbone
 
-    if not args.only or args.only == 'backbone':
-        build_aliked_backbone(args.input, args.output, fp16_backbone)
-    if not args.only or args.only == 'sddh':
-        build_aliked_sddh(args.input, args.output, fp16)
+    # Resolve LightGlue ONNX path
+    lg_onnx = None
+    if args.lightglue:
+        if os.path.isdir(args.lightglue):
+            lg_onnx = os.path.join(args.lightglue, 'lightglue.onnx')
+        else:
+            lg_onnx = args.lightglue
+
+    output_dir = args.output  # may be None → each build func derives the path
+
+    if not args.only or args.only == 'aliked':
+        build_aliked(args.aliked, output_dir, fp16)
     if not args.only or args.only == 'lightglue':
-        build_lightglue(args.input, args.output, fp16)
+        if lg_onnx is None:
+            print("Skipping LightGlue: no --lightglue path given")
+        else:
+            # Derive output dir from LightGlue ONNX if not specified
+            lg_out = output_dir or os.path.dirname(lg_onnx)
+            build_lightglue(os.path.dirname(lg_onnx), lg_out, fp16)
 
     print("\nAll engines built. Ready for C++ inference.")
 

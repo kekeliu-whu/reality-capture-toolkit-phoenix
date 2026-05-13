@@ -1,6 +1,0 @@
-.vscode
-build
-*.so
-__pycache__
-*.pyd
-output_*

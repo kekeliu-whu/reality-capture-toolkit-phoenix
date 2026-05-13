@@ -25,7 +25,7 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-constexpr int kPhoenixFixedBatchSize = 4;
+constexpr int kPhoenixFixedBatchSize = 1;
 
 int ClampSupportedPhoenixBatchSize(const int requested,
                                    const int max_supported) {
@@ -117,6 +117,9 @@ void AddFeatureExtractorOptions(colmap::OptionManager* options,
   options->AddImageOptions();
   options->AddDefaultOption("camera_mode", &cli_options->camera_mode);
   options->AddFeatureExtractionOptions();
+  options->AddDefaultOption("image_list_path", &cli_options->image_list_path);
+  options->AddDefaultOption("Phoenix.aliked_model_path",
+                            &cli_options->aliked_model_path);
   options->AddDefaultOption("Phoenix.max_edge", &cli_options->max_edge);
   options->AddDefaultOption("Phoenix.top_k", &cli_options->top_k);
   options->AddDefaultOption("Phoenix.scores_th", &cli_options->scores_th);
@@ -151,6 +154,10 @@ colmap::ImageReaderOptions BuildReaderOptionsFromPath(
   colmap::ImageReaderOptions reader_options;
   reader_options.image_path = image_path.string();
   reader_options.as_rgb = true;
+  if (!opts.image_list_path.empty()) {
+    reader_options.image_names =
+        ReadTextLines(opts.image_list_path, /*allow_comments=*/true);
+  }
 
   if (!opts.camera_model.empty()) {
     reader_options.camera_model = opts.camera_model;
@@ -176,6 +183,10 @@ colmap::ImageReaderOptions BuildReaderOptions(
   colmap::ImageReaderOptions reader_options = *options.image_reader;
   reader_options.image_path = *options.image_path;
   reader_options.as_rgb = true;
+  if (!cli_options.image_list_path.empty()) {
+    reader_options.image_names =
+        ReadTextLines(cli_options.image_list_path, /*allow_comments=*/true);
+  }
 
   if (cli_options.camera_mode >= 0) {
     ApplyCameraMode(cli_options.camera_mode, &reader_options);
@@ -277,16 +288,17 @@ bool InitializeDetector(const FeatureExtractionOptions& cli_options,
                        FeatureExtractionMetrics* metrics,
                        sfm_phoenix::AlikedDetector* detector) {
   constexpr int kMaxExtractedFeatures = 5000;
+  (void)detect_batch_size;
   const ResourceSnapshot before_init = CaptureResourceSnapshot();
   LogResourceSnapshot("extract.engine.before_init", before_init);
   const auto engine_init_start = Clock::now();
-  const auto backbone_engine =
-    sfm_phoenix::EnsurePhoenixBackboneEngine(detect_batch_size);
-  const auto sddh_engine = sfm_phoenix::EnsurePhoenixSddhEngine();
 
   sfm_phoenix::AlikedConfig detector_config;
-  detector_config.backbone_engine = backbone_engine.string();
-  detector_config.sddh_engine = sddh_engine.string();
+  if (cli_options.aliked_model_path.empty()) {
+    spdlog::error("Phoenix.aliked_model_path must be set");
+    return false;
+  }
+  detector_config.full_model_path = cli_options.aliked_model_path;
   detector_config.max_edge = cli_options.max_edge;
   detector_config.dkd.top_k = cli_options.top_k;
   detector_config.dkd.n_limit = kMaxExtractedFeatures;
@@ -305,8 +317,10 @@ bool InitializeDetector(const FeatureExtractionOptions& cli_options,
   LogResourceSnapshot("extract.engine.after_init",
                       after_init,
                       &before_init,
-                      "backbone=" + backbone_engine.filename().string() +
-                          " sddh=" + sddh_engine.filename().string());
+                      "full_model=" +
+                          std::filesystem::path(cli_options.aliked_model_path)
+                              .filename()
+                              .string());
   return true;
 }
 

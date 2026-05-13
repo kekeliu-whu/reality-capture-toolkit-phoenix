@@ -33,8 +33,9 @@ struct GpuDetectResult {
 
 /// Configuration for the ALIKED TensorRT pipeline.
 struct AlikedConfig {
-    std::string backbone_engine;   // Path to aliked_backbone.engine
-    std::string sddh_engine;      // Path to aliked_sddh.engine
+    // Optional path to a full ALIKED model (.engine or .onnx) that outputs
+    // keypoints, descriptors, and scores in one forward pass.
+    std::string full_model_path;
     dkd::DKDParams dkd;
     int max_edge = 1600;           // Resize longest edge to this (0 = no resize)
     int descriptor_dim = 128;
@@ -78,7 +79,9 @@ private:
     AlikedConfig config_;
     TrtEngine backbone_;
     TrtEngine sddh_;
+    TrtEngine full_model_;
     cudaStream_t stream_ = nullptr;
+    bool use_full_model_ = false;
 
     // Pre-allocated GPU workspace for DKD
     CudaBuffer dkd_nms_buf_;     // NMS output buffer
@@ -92,15 +95,23 @@ private:
     int pad_h_ = 0, pad_w_ = 0;  // Padded dimensions (divisible by 32)
     int orig_h_ = 0, orig_w_ = 0;
     float scale_ = 1.0f;
+    int full_input_h_ = 0;
+    int full_input_w_ = 0;
 
     /// Pre-process: BGR → RGB float, resize, pad to 32-multiple.
     void preprocess(const cv::Mat& image,
                     bool input_is_rgb,
                     int& padded_h, int& padded_w);
 
+    /// Pre-process for the one-shot ALIKED model using its fixed input size.
+    void preprocess_full(const cv::Mat& image, bool input_is_rgb);
+
     /// Run backbone + DKD + SDDH, leaving results on GPU.
     /// Returns the actual keypoint count.
     int run_pipeline(const cv::Mat& image, bool input_is_rgb);
+
+    /// Run the one-shot ALIKED model and return the detected keypoint count.
+    int run_full_model(const cv::Mat& image, bool input_is_rgb);
 };
 
 }  // namespace sfm_phoenix

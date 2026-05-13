@@ -105,6 +105,9 @@ struct FeatureExtractionOptions {
   int camera_mode = -1;
   std::string camera_model;  // e.g. "OPENCV_FISHEYE"; empty = COLMAP default
   std::string camera_params;
+  std::string image_list_path;
+  std::string aliked_model_path =
+      R"(D:\Users\rick\Downloads\aliked.onnx)";
   int max_edge = 1024;
   int top_k = 5000;
   double scores_th = 0.2;
@@ -126,6 +129,8 @@ struct FeatureMatchingOptions {
       const Preset preset = Preset::kFeatureMatcher) {}
 
   std::filesystem::path image_path;   // image root dir; used for retrieval
+  std::filesystem::path pair_list_path;
+  int max_edge = 0;
   int max_matches = 4000;
   int linear_overlap_num = 20;
   int quadratic_overlap_num = 0;

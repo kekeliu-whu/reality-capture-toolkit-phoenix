@@ -3,8 +3,7 @@
  *
  * Usage:
  *   demo_feature_matching \
- *       --backbone engines/aliked_backbone.engine \
- *       --sddh engines/aliked_sddh.engine \
+ *       --aliked D:/Users/rick/Downloads/aliked.onnx \
  *       --lightglue engines/lightglue.engine \
  *       --image0 path/to/image0.jpg \
  *       --image1 path/to/image1.jpg \
@@ -168,7 +167,8 @@ static void process_pair(FeaturePipeline& pipeline,
 }
 
 int main(int argc, char** argv) {
-    std::string backbone_path, sddh_path, lightglue_path;
+    std::string aliked_path = R"(D:\Users\rick\Downloads\aliked.onnx)";
+    std::string lightglue_path;
     std::string image0_path, image1_path, output_path = "matches.jpg";
     std::string dump_dir;
     std::string pair_list;  // batch mode: file with lines "img0 img1 dump_dir"
@@ -176,10 +176,8 @@ int main(int argc, char** argv) {
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--backbone" && i + 1 < argc)
-            backbone_path = argv[++i];
-        else if (arg == "--sddh" && i + 1 < argc)
-            sddh_path = argv[++i];
+        if (arg == "--aliked" && i + 1 < argc)
+            aliked_path = argv[++i];
         else if (arg == "--lightglue" && i + 1 < argc)
             lightglue_path = argv[++i];
         else if (arg == "--image0" && i + 1 < argc)
@@ -199,16 +197,16 @@ int main(int argc, char** argv) {
     bool single_mode = !image0_path.empty() && !image1_path.empty();
     bool batch_mode = !pair_list.empty();
 
-    if (backbone_path.empty() || sddh_path.empty() || lightglue_path.empty() ||
+    if (aliked_path.empty() || lightglue_path.empty() ||
         (!single_mode && !batch_mode)) {
         std::cerr
             << "Usage:\n"
             << "  Single pair:\n"
-            << "    demo_feature_matching --backbone <.engine> --sddh <.engine>\n"
+            << "    demo_feature_matching --aliked <.onnx/.engine>\n"
             << "      --lightglue <.engine> --image0 <path> --image1 <path>\n"
             << "      [--output <path>] [--dump <dir>]\n"
             << "  Batch mode:\n"
-            << "    demo_feature_matching --backbone <.engine> --sddh <.engine>\n"
+            << "    demo_feature_matching --aliked <.onnx/.engine>\n"
             << "      --lightglue <.engine> --pair-list <file>\n"
             << "    pair-list format: image0_path image1_path dump_dir\n"
             << std::endl;
@@ -217,8 +215,7 @@ int main(int argc, char** argv) {
 
     // Init pipeline
     PipelineConfig config;
-    config.aliked.backbone_engine = backbone_path;
-    config.aliked.sddh_engine = sddh_path;
+    config.aliked.full_model_path = aliked_path;
     config.aliked.dkd.top_k = 5000;
     config.aliked.dkd.scores_th = 0.2f;
     config.aliked.max_edge = max_edge;
