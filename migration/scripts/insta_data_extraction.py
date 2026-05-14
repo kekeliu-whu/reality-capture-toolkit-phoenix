@@ -7,25 +7,12 @@ import csv
 from pathlib import Path
 import subprocess
 import json
-import cv2
 import argparse
-import sys
 
 from spdlog_compat import init_spdlog_like_logger
 
 
 LOGGER = init_spdlog_like_logger()
-SCRIPT_PATH = Path(__file__).resolve()
-# When running as a PyInstaller .exe, sys.executable is the .exe itself (inside build-pack/).
-# Use the exe's directory as the build-pack root so MediaSDK can be found at build-pack/MediaSDK/.
-# When running as a plain script, derive paths from the repo root via __file__.
-if getattr(sys, 'frozen', False):
-    _BUILD_PACK = Path(sys.executable).parent
-    REPO_ROOT = _BUILD_PACK.parent
-    DEFAULT_MEDIASDK_EXE = _BUILD_PACK / "MediaSDK" / "MediaSDKTest.exe"
-else:
-    REPO_ROOT = SCRIPT_PATH.parents[2]
-    DEFAULT_MEDIASDK_EXE = REPO_ROOT / "build-pack" / "MediaSDK" / "MediaSDKTest.exe"
 
 # ============================================================
 # 尝试导入ROS相关库（可选）
@@ -49,12 +36,12 @@ except ImportError as e:
 
 # [CONFIG] 命令行参数默认值 - 修改此处便于手动运行
 DEFAULT_INPUT_VIDEO = (
-    R"Z:\rick\dataset\q9000\MT20260430-102731-24fps-video\VID_20260430_102730_00_033.insv"
+    R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only\insta\1749886847469595719_00.insv"
 )
-DEFAULT_OUTPUT_DIR = R"Z:\rick\dataset\q9000\MT20260430-102731-24fps-video\output\images"
-DEFAULT_TIME_OFFSET_SECS = 1749886801.779175
+DEFAULT_OUTPUT_DIR = R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only\output\images"
+DEFAULT_TIME_OFFSET_SECS = 1749886725.4903302
 DEFAULT_EXPORT_FRAMES = True
-DEFAULT_FRAME_SAMPLE_RATE = 12
+DEFAULT_FRAME_SAMPLE_RATE = 1
 
 
 def parse_args() -> argparse.Namespace:
@@ -89,17 +76,13 @@ def parse_args() -> argparse.Namespace:
         "--frame-sample-rate",
         type=int,
         default=DEFAULT_FRAME_SAMPLE_RATE,
-        help="Export one frame every N frames (default: 12)",
+        help="Keep exported frames at indices 0, N, 2N... from telemetry-aligned frames",
     )
     return parser.parse_args()
 
 # --------- 视频提取参数 ---------
 QUALITY = 2  # 0-31, 越低质量越好
 NUM_STREAMS = 2  # 摄像头流数量 (cam0, cam1等)
-MEDIASDK_EXE = str(DEFAULT_MEDIASDK_EXE)
-PANORAMA_CAMERA_INDEX = 0
-PANORAMA_STITCH_TYPE = "optflow"
-PANORAMA_IMAGE_TYPE = "jpg"
 
 # --------- ROS/Rosbag 参数 ---------
 SAVE_TO_ROSBAG = False  # 是否保存数据到rosbag文件
@@ -112,12 +95,6 @@ SAVE_TO_ROSBAG = False  # 是否保存数据到rosbag文件
 def format_timestamp_filename(timestamp, image_type="jpg"):
     timestamp_str = f"{timestamp:.6f}".replace(".", "_")
     return f"{timestamp_str}.{image_type}"
-
-
-def build_sampled_frame_indices(total_count, frame_sample_rate):
-    if frame_sample_rate <= 0:
-        raise ValueError("frame_sample_rate must be greater than 0")
-    return list(range(0, total_count, frame_sample_rate))
 
 
 def clean_camera_output_dir(cam_dir, extensions=(".jpg",)):
@@ -150,138 +127,35 @@ def parse_exported_frame_index(path_obj):
     return int(digits)
 
 
-def detect_panorama_output_size(video_path):
-    """Detect insv video resolution (n x n) and return panorama output size '2n x n'."""
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video: {video_path}")
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    cap.release()
-    n = height
-    output_size = f"{2 * n}x{n}"
-    print(f"[OK] Detected video resolution: {width}x{height} -> panorama output: {output_size}")
-    return output_size
+def build_imu_msg_list_from_telemetry(telemetry_record):
+    imu_msg_list = ImuMsgList()
 
+    meta = telemetry_record["Default"]["Metadata"]
+    first_frame_ts_us = meta["first_frame_timestamp"]
+    gyro_base_ts_us = first_frame_ts_us + round(meta["gyro_timestamp"] * 1000)
 
-def extract_panorama_frames_from_mediasdk(
-    input_video_path,
-    output_base_dir=".",
-    media_sdk_exe=DEFAULT_MEDIASDK_EXE,
-    camera_index=0,
-    frame_sample_rate=12,
-    all_timestamps=None,
-    stitch_type="optflow",
-    image_type="jpg",
-    output_size="7680x3840",
-):
-    """
-    使用 MediaSDK 导出全景图，并按时间戳重命名到 cam{N} 目录。
-
-    延时摄影视频的实际帧数 = len(all_timestamps) / frame_sample_rate，
-    因此导出全部视频帧，第 i 帧对应 all_timestamps[i * frame_sample_rate]。
-    """
-    if not all_timestamps:
-        raise ValueError("all_timestamps is required for panorama export")
-
-    media_sdk_exe = Path(media_sdk_exe)
-    if not media_sdk_exe.exists():
-        raise FileNotFoundError(f"MediaSDK executable not found: {media_sdk_exe}")
-
-    build_pack_dir = media_sdk_exe.parent.parent  # build-pack/ is parent of MediaSDK/
-    media_sdk_dir = media_sdk_exe.parent
-
-    # 第一帧对应 all_timestamps[0]（即 exposure_data[0]），后续每帧 +0.5s
-    base_timestamp = all_timestamps[0]
-
-    cam_dir = Path(output_base_dir) / f"cam{camera_index}"
-    clean_camera_output_dir(str(cam_dir), extensions=(f".{image_type}",))
-
-    temp_export_dir = cam_dir / "_mediasdk_tmp"
-    if temp_export_dir.exists():
-        for old_path in temp_export_dir.iterdir():
-            if old_path.is_file():
-                old_path.unlink()
-    else:
-        temp_export_dir.mkdir(parents=True, exist_ok=True)
-
-    # 导出全部视频帧（不传 -export_frame_index）
-    cmd = [
-        str(media_sdk_exe),
-        "-inputs",
-        str(input_video_path),
-        "-image_sequence_dir",
-        str(temp_export_dir),
-        "-output_size",
-        output_size,
-        "-stitch_type",
-        stitch_type,
-        "-image_type",
-        image_type,
-        "-disable_cuda",
-        "false",
-    ]
-
-    print(f"[OK] Processing panorama export into cam{camera_index}...")
-    print(f"  MediaSDK executable: {media_sdk_exe}")
-    print(f"  Exporting all video frames...")
-
-    env = os.environ.copy()
-    path_entries = [str(media_sdk_dir), str(build_pack_dir)]
-    existing_path = env.get("PATH", "")
-    env["PATH"] = os.pathsep.join(path_entries + ([existing_path] if existing_path else []))
-
-    try:
-        subprocess.run(
-            cmd,
-            check=True,
-            capture_output=True,
-            text=True,
-            cwd=str(media_sdk_dir),
-            env=env,
+    gyro_scale = telemetry_record["Gyroscope"]["Scale"]
+    accel_scale = telemetry_record["Accelerometer"]["Scale"]
+    for gyro_sample, accel_sample in zip(
+        telemetry_record["Gyroscope"]["Data"],
+        telemetry_record["Accelerometer"]["Data"],
+    ):
+        imu_msg = imu_msg_list.imu_msgs.add()
+        imu_msg.timestamp = (
+            round(gyro_base_ts_us + gyro_sample["t"] * 1_000_000) / 1_000_000.0
         )
-    except subprocess.CalledProcessError as e:
-        print(f"[ERROR] Failed to export panorama frames for cam{camera_index}")
-        if e.returncode == 3221225781:
-            print("  MediaSDKTest.exe is missing one or more dependent DLLs in its process PATH")
-            print(f"  PATH included: {media_sdk_dir}; {build_pack_dir}")
-        print(f"  stderr: {e.stderr}")
-        raise
+        imu_msg.gx = gyro_sample["y"] / gyro_scale * math.pi / 180.0
+        imu_msg.gy = -gyro_sample["x"] / gyro_scale * math.pi / 180.0
+        imu_msg.gz = gyro_sample["z"] / gyro_scale * math.pi / 180.0
+        imu_msg.ax = accel_sample["y"] / accel_scale
+        imu_msg.ay = -accel_sample["x"] / accel_scale
+        imu_msg.az = accel_sample["z"] / accel_scale
 
-    exported_images = sorted(
-        temp_export_dir.glob(f"*.{image_type}"),
-        key=natural_sort_key,
-    )
-    if not exported_images:
-        raise RuntimeError(f"MediaSDK produced no .{image_type} files in {temp_export_dir}")
+    return imu_msg_list
 
-    print(f"  MediaSDK exported {len(exported_images)} images")
 
-    # 排序后按顺序分配时间戳：第 i 帧 = exposure_data[0] + i * 0.5
-    sampled_images = []
-    finalized_timestamps = []
-    for video_idx, img_path in enumerate(exported_images):
-        timestamp = base_timestamp + video_idx * 0.5
-        new_name = format_timestamp_filename(timestamp, image_type=image_type)
-        new_path = cam_dir / new_name
-        img_path.replace(new_path)
-        sampled_images.append(new_name)
-        finalized_timestamps.append(timestamp)
-
-    for remaining_file in temp_export_dir.iterdir():
-        if remaining_file.is_file():
-            remaining_file.unlink()
-    temp_export_dir.rmdir()
-
-    print(
-        f"  [OK] cam{camera_index} panorama export complete: {len(sampled_images)} frames"
-        f" (base_ts={base_timestamp:.6f}, step=0.5s)"
-    )
-
-    return {
-        "timestamps": finalized_timestamps,
-        f"cam{camera_index}": sampled_images,
-    }
+def build_frame_timestamps_from_telemetry(telemetry_record, time_offset_secs):
+    return [timestamp_ms / 1000.0 + time_offset_secs for timestamp_ms in telemetry_record["Default"]["Timestamps"]]
 
 
 def extract_frames_from_video(
@@ -293,15 +167,15 @@ def extract_frames_from_video(
     all_timestamps,
 ):
     """
-    从视频文件提取帧到多个摄像头目录，并按 all_timestamps 采样重命名
+    从视频文件提取帧到多个摄像头目录，并按显式时间戳重命名
 
     参数:
         input_video_path: 输入视频文件路径 (.insv 或 .mp4)
         output_base_dir: 输出基础目录
         quality: 视频质量 (0-31, 越低越好)
         num_streams: 流的数量 (默认2个: cam0, cam1)
-        frame_sample_rate: 每 N 帧保留 1 帧
-        all_timestamps: 与视频帧索引对应的时间戳列表，同样每 N 个取 1 个
+        frame_sample_rate: 仅保留索引 0, N, 2N... 的对齐帧
+        all_timestamps: 导出图片使用的显式时间戳列表
 
     返回:
         包含导出后的时间戳和每个摄像头的图片列表的字典
@@ -365,32 +239,28 @@ def extract_frames_from_video(
             )
             print(f"  [OK] Extracted {len(temp_frames)} frames for cam{stream_idx}")
 
-            aligned_frame_count = min(len(temp_frames), len(all_timestamps))
             if len(temp_frames) != len(all_timestamps):
                 print(
                     "  [WARN] Extracted frame count "
                     f"({len(temp_frames)}) differs from timestamp count "
-                    f"({len(all_timestamps)}); using first {aligned_frame_count} "
-                    "aligned entries"
+                    f"({len(all_timestamps)}); exporting first "
+                    f"{min(len(temp_frames), len(all_timestamps))} aligned frames"
                 )
 
-            sampled_frame_indices = build_sampled_frame_indices(
-                aligned_frame_count,
-                frame_sample_rate,
-            )
+            aligned_frame_count = min(len(temp_frames), len(all_timestamps))
+            sampled_indices = range(0, aligned_frame_count, frame_sample_rate)
             print(
-                f"  Sampling every {frame_sample_rate} frame(s): "
-                f"keeping {len(sampled_frame_indices)} frames"
+                f"  Exporting sampled frames: {len(range(0, aligned_frame_count, frame_sample_rate))} "
+                f"from {aligned_frame_count} aligned frames"
             )
 
-            # 图片和时间戳使用相同原始帧索引采样：0, N, 2N, ...
             exported_images = []
             current_stream_timestamps = []
-            for frame_idx in sampled_frame_indices:
-                temp_frame = temp_frames[frame_idx]
+            for exported_idx in sampled_indices:
+                temp_frame = temp_frames[exported_idx]
                 temp_path = os.path.join(cam_dir, temp_frame)
 
-                timestamp = all_timestamps[frame_idx]
+                timestamp = all_timestamps[exported_idx]
                 new_name = format_timestamp_filename(timestamp, image_type="jpg")
 
                 new_path = os.path.join(cam_dir, new_name)
@@ -417,7 +287,7 @@ def extract_frames_from_video(
 
             print(
                 f"  [OK] cam{stream_idx} export complete: {len(exported_images)} frames"
-                f" (sample_rate={frame_sample_rate})"
+                " (explicit timestamps)"
             )
 
             # 保存图片列表
@@ -597,18 +467,15 @@ def main() -> int:
 
     tp = telemetry_parser.Parser(input_video)
     os.makedirs(output_directory, exist_ok=True)
+    telemetry_record = tp.telemetry()[0]
 
-    imu_data = tp.normalized_imu()
-    imu_msg_list = ImuMsgList()
-    for imu_sample in imu_data:
-        imu_msg = imu_msg_list.imu_msgs.add()
-        imu_msg.timestamp = imu_sample["timestamp_ms"] / 1000.0
-        imu_msg.gx = imu_sample["gyro"][0] / 180.0 * math.pi
-        imu_msg.gy = imu_sample["gyro"][1] / 180.0 * math.pi
-        imu_msg.gz = imu_sample["gyro"][2] / 180.0 * math.pi
-        imu_msg.ax = imu_sample["accl"][0]
-        imu_msg.ay = imu_sample["accl"][1]
-        imu_msg.az = imu_sample["accl"][2]
+    # save tp.telemetry() to JSON for debugging
+    telemetry_json_path = os.path.join(output_directory, "telemetry.json")
+    with open(telemetry_json_path, "w", encoding="utf-8") as f:
+        json.dump(tp.telemetry(), f, indent=2)
+    print(f"[OK] Telemetry data saved to {telemetry_json_path}")
+
+    imu_msg_list = build_imu_msg_list_from_telemetry(telemetry_record)
 
     with open(imu_output_file, "wb") as f:
         f.write(imu_msg_list.SerializeToString())
@@ -629,27 +496,12 @@ def main() -> int:
     print("\n" + "=" * 60)
     print("Preparing timestamp data...")
     print("=" * 60)
-    exposure_data = tp.telemetry()[0]["Exposure"]["Data"]
-    all_timestamps = [e["t"] + time_offset_secs for e in exposure_data]
+    all_timestamps = build_frame_timestamps_from_telemetry(telemetry_record, time_offset_secs)
     print(f"[OK] Loaded {len(all_timestamps)} timestamps")
-
-    panorama_output_size = detect_panorama_output_size(input_video)
 
     print("\n" + "=" * 60)
     print("Starting fisheye frame extraction...")
     print("=" * 60)
-    # result = extract_panorama_frames_from_mediasdk(
-    #     input_video_path=input_video,
-    #     output_base_dir=output_directory,
-    #     media_sdk_exe=MEDIASDK_EXE,
-    #     camera_index=PANORAMA_CAMERA_INDEX,
-    #     frame_sample_rate=frame_sample_rate,
-    #     all_timestamps=all_timestamps,
-    #     stitch_type=PANORAMA_STITCH_TYPE,
-    #     image_type=PANORAMA_IMAGE_TYPE,
-    #     output_size=panorama_output_size,
-    # )
-    _ = panorama_output_size
     result = extract_frames_from_video(
         input_video_path=input_video,
         output_base_dir=output_directory,
@@ -670,7 +522,7 @@ def main() -> int:
 
     print(f"\n[OK] Original timestamp count: {len(all_timestamps)}")
     print(f"  Exported timestamp count: {len(exported_timestamps)}")
-    print(f"  Timestamp rule: all_timestamps sampled every {frame_sample_rate} frame(s)")
+    print("  Timestamp rule: each exported frame uses the supplied telemetry timestamp")
     if len(exported_timestamps) > 0:
         print(
             f"  Timestamp range: {exported_timestamps[0]:.6f} to {exported_timestamps[-1]:.6f}"

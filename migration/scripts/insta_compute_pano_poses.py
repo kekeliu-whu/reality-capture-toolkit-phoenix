@@ -21,10 +21,16 @@ IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 # [CONFIG] 命令行参数默认值 - 修改此处便于手动运行
 # ============================================================================
 
-DEFAULT_OUTPUT_ROOT = None
-DEFAULT_IMAGE_POSES = None
-DEFAULT_IMAGES_DIR = None
-DEFAULT_OUTPUT = None
+DEFAULT_OUTPUT_ROOT = R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only\output"
+DEFAULT_IMAGE_POSES = (
+		R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only\output\images\ImgPose.txt"
+)
+DEFAULT_IMAGES_DIR = (
+		R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only\output\images"
+)
+DEFAULT_OUTPUT = (
+		R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only\output\xsfm\sparse\pano-poses.txt"
+)
 DEFAULT_CAMERA_PREFIX = "cam0/"
 DEFAULT_STRICT = False
 DEFAULT_INCLUDE_RPY = False
@@ -55,7 +61,7 @@ def quaternion_to_rpy_degrees(
 def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(
 			description=(
-					"Export pano-poses.txt by matching cam0 images in image-poses.txt "
+					"Export pano-poses.txt by matching cam0 images in ImgPose.txt "
 					"against the 0-based frame order under output/images."
 			)
 	)
@@ -72,7 +78,7 @@ def parse_args() -> argparse.Namespace:
 			"--image-poses",
 			type=Path,
 			default=DEFAULT_IMAGE_POSES,
-			help="Path to xsfm/sparse/image-poses.txt.",
+			help="Path to output/images/ImgPose.txt.",
 	)
 	parser.add_argument(
 			"--images-dir",
@@ -119,7 +125,7 @@ def resolve_paths(args: argparse.Namespace) -> tuple[Path, Path, Path, str]:
 
 	if args.output_root is not None:
 		output_root = args.output_root
-		image_poses = image_poses or output_root / "xsfm" / "sparse" / "image-poses.txt"
+		image_poses = image_poses or output_root / "images" / "ImgPose.txt"
 		images_dir = images_dir or output_root / "images"
 		output_path = output_path or output_root / "xsfm" / "sparse" / "pano-poses.txt"
 
@@ -154,7 +160,7 @@ def load_pose_rows(
 		strict: bool,
 ) -> tuple[list[dict[str, object]], list[str]]:
 	if not image_poses_path.is_file():
-		raise FileNotFoundError(f"image-poses.txt does not exist: {image_poses_path}")
+		raise FileNotFoundError(f"ImgPose.txt does not exist: {image_poses_path}")
 
 	rows: list[dict[str, object]] = []
 	missing_names: list[str] = []
@@ -162,10 +168,23 @@ def load_pose_rows(
 
 	with image_poses_path.open("r", encoding="utf-8") as handle:
 		header = handle.readline().strip().split()
-		expected_header = ["camera_id", "image_name", "x", "y", "z", "rw", "rx", "ry", "rz"]
+		expected_header = [
+				"image",
+				"x",
+				"y",
+				"z",
+				"roll",
+				"pitch",
+				"yaw",
+				"qx",
+				"qy",
+				"qz",
+				"qw",
+				"timestamp",
+		]
 		if header[: len(expected_header)] != expected_header:
 			raise ValueError(
-					f"Unexpected image-poses header in {image_poses_path}: {' '.join(header)}"
+					f"Unexpected ImgPose header in {image_poses_path}: {' '.join(header)}"
 			)
 
 		for line_number, line in enumerate(handle, start=2):
@@ -174,12 +193,12 @@ def load_pose_rows(
 				continue
 
 			parts = stripped.split()
-			if len(parts) < 9:
+			if len(parts) < 12:
 				raise ValueError(
 						f"Malformed line {line_number} in {image_poses_path}: {stripped}"
 				)
 
-			image_name = parts[1]
+			image_name = parts[0]
 			if not image_name.startswith(camera_prefix):
 				continue
 
@@ -193,7 +212,8 @@ def load_pose_rows(
 				missing_names.append(raw_image_name)
 				continue
 
-			x, y, z, rw, rx, ry, rz = parts[2:9]
+			x, y, z = parts[1:4]
+			rx, ry, rz, rw = parts[7:11]
 			roll, pitch, yaw = quaternion_to_rpy_degrees(
 					float(rw),
 					float(rx),
@@ -202,7 +222,7 @@ def load_pose_rows(
 			)
 			rows.append(
 					{
-							"idx_in_video": idx_in_video * 12,
+							"idx_in_video": idx_in_video,
 							"x": x,
 							"y": y,
 							"z": z,
@@ -220,7 +240,7 @@ def load_pose_rows(
 	if strict and missing_names:
 		missing_preview = ", ".join(missing_names[:5])
 		raise FileNotFoundError(
-				f"{len(missing_names)} images from image-poses.txt were not found in the "
+				f"{len(missing_names)} images from ImgPose.txt were not found in the "
 				f"images dir. First missing entries: {missing_preview}"
 		)
 

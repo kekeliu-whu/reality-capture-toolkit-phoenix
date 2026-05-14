@@ -439,7 +439,7 @@ def process_poses(poses_file, calib_file, image_folder, output_file, image_list=
             extrinsic = {
                 "position": np.array([ext.tx, ext.ty, ext.tz]),
                 "quaternion": np.array([ext.rx, ext.ry, ext.rz, ext.rw]),
-                "time_offset": cam_imu_ext.extrinsic.time_offset, # + 1.35,
+                "time_offset": cam_imu_ext.extrinsic.time_offset,
             }
 
             print(f"\n  Processing cam{cam_idx}... (time_offset={extrinsic['time_offset']:.6f}s)")
