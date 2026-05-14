@@ -30,52 +30,37 @@ except ImportError as e:
     print(f"[WARN] Failed to import ROS-related libraries: {e}")
     print("  rosbag export will be disabled, but other features remain available")
 
-# ============================================================
-# 配置参数和路径 (所有设置放在这里)
-# ============================================================
-
-# [CONFIG] 命令行参数默认值 - 修改此处便于手动运行
-DEFAULT_INPUT_VIDEO = (
-    R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only\insta\1749886847469595719_00.insv"
-)
-DEFAULT_OUTPUT_DIR = R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only\output\images"
-DEFAULT_TIME_OFFSET_SECS = 1749886725.4903302
-DEFAULT_EXPORT_FRAMES = True
-DEFAULT_FRAME_SAMPLE_RATE = 1
-
-
 def parse_args() -> argparse.Namespace:
+    # ============================================================
+    # 配置参数和路径 (所有设置放在这里)
+    # ============================================================
+
+    # [CONFIG] 命令行参数默认值 - 修改此处便于手动运行
     parser = argparse.ArgumentParser(
         description="Scientific camera data extraction tool"
     )
     parser.add_argument(
         "--input-video-filename",
         type=str,
-        default=DEFAULT_INPUT_VIDEO,
+        default=R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only-test\insta\1749886847469595719_00.insv",
         help="Input video file path",
+    )
+    parser.add_argument(
+        "--imu-file",
+        type=str,
+        default=R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only-test\output\imu.dat",
+        help="Path to device imu.dat.",
     )
     parser.add_argument(
         "--output-dir",
         type=str,
-        default=DEFAULT_OUTPUT_DIR,
+        default=R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only-test\output\images",
         help="Output directory",
-    )
-    parser.add_argument(
-        "--time-offset",
-        type=float,
-        default=DEFAULT_TIME_OFFSET_SECS,
-        help="Time offset in seconds",
-    )
-    parser.add_argument(
-        "--export-frames",
-        action=argparse.BooleanOptionalAction,
-        default=DEFAULT_EXPORT_FRAMES,
-        help="Whether to export camera frames (default: enabled; use --no-export-frames to disable)",
     )
     parser.add_argument(
         "--frame-sample-rate",
         type=int,
-        default=DEFAULT_FRAME_SAMPLE_RATE,
+        default=1,
         help="Keep exported frames at indices 0, N, 2N... from telemetry-aligned frames",
     )
     return parser.parse_args()
@@ -156,6 +141,32 @@ def build_imu_msg_list_from_telemetry(telemetry_record):
 
 def build_frame_timestamps_from_telemetry(telemetry_record, time_offset_secs):
     return [timestamp_ms / 1000.0 + time_offset_secs for timestamp_ms in telemetry_record["Default"]["Timestamps"]]
+
+
+def compute_time_offset_from_device_imu(device_imu_file, insta_imu_msg_list):
+    device_imu_file = str(device_imu_file)
+
+    if not os.path.exists(device_imu_file):
+        raise FileNotFoundError(f"Device IMU file not found: {device_imu_file}")
+
+    print("\n" + "=" * 60)
+    print("Running IMU time synchronization...")
+    print("=" * 60)
+    print(f"  Device IMU: {device_imu_file}")
+    print("  Insta IMU: telemetry-derived IMU (in-memory)")
+
+    device_imu_msg_list = ImuMsgList()
+    with open(device_imu_file, "rb") as f:
+        device_imu_msg_list.ParseFromString(f.read())
+
+    from insta_time_sync import compute_final_time_delay_from_imu_msg_lists
+
+    time_offset_secs = compute_final_time_delay_from_imu_msg_lists(
+        device_imu_msg_list,
+        insta_imu_msg_list,
+    )
+    print(f"[OK] Auto-computed time offset: {time_offset_secs:.6f} seconds")
+    return time_offset_secs
 
 
 def extract_frames_from_video(
@@ -456,10 +467,8 @@ def main() -> int:
     args = parse_args()
     input_video = args.input_video_filename
     output_directory = args.output_dir
-    time_offset_secs = args.time_offset
-    export_frames = args.export_frames
+    imu_file = args.imu_file
     frame_sample_rate = args.frame_sample_rate
-    imu_output_file = os.path.join(output_directory, "insv.dat")
 
     print("=" * 60)
     print("Starting data extraction and processing pipeline...")
@@ -477,27 +486,23 @@ def main() -> int:
 
     imu_msg_list = build_imu_msg_list_from_telemetry(telemetry_record)
 
-    with open(imu_output_file, "wb") as f:
-        f.write(imu_msg_list.SerializeToString())
-
-    file_size = os.path.getsize(imu_output_file)
-    print(f"[OK] Wrote output to: {imu_output_file}")
-    print(f"  File size: {file_size} bytes")
+    print("[OK] Built telemetry-derived IMU message list")
     print(f"  IMU sample count: {len(imu_msg_list.imu_msgs)}")
     print(f"  Camera: {tp.camera}")
     print(f"  Model: {tp.model}")
 
-    if not export_frames:
-        print("\n" + "=" * 60)
-        print("[WARN] Camera frames were not exported, timestamps were not consumed")
-        print("=" * 60)
-        return 0
+    time_offset_secs = compute_time_offset_from_device_imu(
+        imu_file,
+        imu_msg_list,
+    )
 
     print("\n" + "=" * 60)
     print("Preparing timestamp data...")
     print("=" * 60)
     all_timestamps = build_frame_timestamps_from_telemetry(telemetry_record, time_offset_secs)
-    print(f"[OK] Loaded {len(all_timestamps)} timestamps")
+    print(
+        f"[OK] Loaded {len(all_timestamps)} timestamps with time offset {time_offset_secs:.6f}s"
+    )
 
     print("\n" + "=" * 60)
     print("Starting fisheye frame extraction...")

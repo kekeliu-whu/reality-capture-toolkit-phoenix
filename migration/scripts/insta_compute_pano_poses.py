@@ -17,25 +17,6 @@ from pathlib import Path
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 
 
-# ============================================================================
-# [CONFIG] 命令行参数默认值 - 修改此处便于手动运行
-# ============================================================================
-
-DEFAULT_OUTPUT_ROOT = R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only\output"
-DEFAULT_IMAGE_POSES = (
-		R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only\output\images\ImgPose.txt"
-)
-DEFAULT_IMAGES_DIR = (
-		R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only\output\images"
-)
-DEFAULT_OUTPUT = (
-		R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only\output\xsfm\sparse\pano-poses.txt"
-)
-DEFAULT_CAMERA_PREFIX = "cam0/"
-DEFAULT_STRICT = False
-DEFAULT_INCLUDE_RPY = False
-
-
 def quaternion_to_rpy_degrees(
 		rw: float,
 		rx: float,
@@ -59,6 +40,9 @@ def quaternion_to_rpy_degrees(
 
 
 def parse_args() -> argparse.Namespace:
+	# ============================================================================
+	# [CONFIG] 命令行参数默认值 - 修改此处便于手动运行
+	# ============================================================================
 	parser = argparse.ArgumentParser(
 			description=(
 					"Export pano-poses.txt by matching cam0 images in ImgPose.txt "
@@ -68,7 +52,7 @@ def parse_args() -> argparse.Namespace:
 	parser.add_argument(
 			"--output-root",
 			type=Path,
-			default=DEFAULT_OUTPUT_ROOT,
+			default=R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only-test\output",
 			help=(
 					"Output root containing images/ and xsfm/sparse/. When set, "
 					"default input/output paths are derived from it."
@@ -77,13 +61,13 @@ def parse_args() -> argparse.Namespace:
 	parser.add_argument(
 			"--image-poses",
 			type=Path,
-			default=DEFAULT_IMAGE_POSES,
+			default=R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only-test\output\images\ImgPose.txt",
 			help="Path to output/images/ImgPose.txt.",
 	)
 	parser.add_argument(
 			"--images-dir",
 			type=Path,
-			default=DEFAULT_IMAGES_DIR,
+			default=R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only-test\output\images",
 			help=(
 					"Path to output/images or output/images/cam0. If output/images is "
 					"given, the camera subfolder is resolved automatically."
@@ -92,24 +76,24 @@ def parse_args() -> argparse.Namespace:
 	parser.add_argument(
 			"--output",
 			type=Path,
-			default=DEFAULT_OUTPUT,
+			default=R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only-test\output\xsfm\sparse\pano-poses.txt",
 			help="Path to output pano-poses.txt.",
 	)
 	parser.add_argument(
 			"--camera-prefix",
-			default=DEFAULT_CAMERA_PREFIX,
+			default="cam0/",
 			help="Image prefix to filter from image-poses.txt. Default: cam0/",
 	)
 	parser.add_argument(
 			"--strict",
 			action="store_true",
-			default=DEFAULT_STRICT,
+			default=False,
 			help="Fail when an image in image-poses.txt is missing from images dir.",
 	)
 	parser.add_argument(
 			"--include-rpy",
 			action="store_true",
-			default=DEFAULT_INCLUDE_RPY,
+			default=False,
 			help="Also output raw roll/pitch/yaw columns in addition to heading.",
 	)
 	return parser.parse_args()

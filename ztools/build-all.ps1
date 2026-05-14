@@ -89,7 +89,7 @@ if (!(Test-Path $PGO_SOURCE_DIR)) {
 # Check Python files
 $PYTHON_FILES = @(
     "insta_data_extraction.py",
-    "insta_time_sync.py",
+    "insta_compute_pano_poses.py",
     "insta_compute_poses.py",
     "insta_data_extraction_ar.py"
 )

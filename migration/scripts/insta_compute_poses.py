@@ -32,54 +32,40 @@ from spdlog_compat import init_spdlog_like_logger
 LOGGER = init_spdlog_like_logger()
 
 
-# ============================================================================
-# [CONFIG] 命令行参数默认值 - 修改此处便于手动运行
-# ============================================================================
-
-DEFAULT_POSES_FILE = (
-    R"Z:\rick\dataset\q9000\MT20260424-112349-fisheye\output\trajectory_opt.txt"
-)
-DEFAULT_CALIB_FILE = (
-    R"Z:\rick\dataset\q9000\MT20260424-112349-fisheye\output\calibration.dat"
-)
-DEFAULT_IMAGE_FOLDER = R"Z:\rick\dataset\q9000\MT20260424-112349-fisheye\output\images"
-DEFAULT_OUTPUT_FILE = (
-    R"Z:\rick\dataset\q9000\MT20260424-112349-fisheye\output\images\ImgPose.txt"
-)
-DEFAULT_IMAGE_LIST = None
-
-
 def parse_args():
+    # ============================================================================
+    # [CONFIG] 命令行参数默认值 - 修改此处便于手动运行
+    # ============================================================================
     parser = argparse.ArgumentParser(
         description="Compute image poses from IMU trajectory and camera-IMU extrinsics"
     )
     parser.add_argument(
         "--poses-file",
         "-p",
-        default=DEFAULT_POSES_FILE,
+        default=R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only-test\output\trajectory_opt.txt",
         help="Path to IMU trajectory file (text format)",
     )
     parser.add_argument(
         "--calib-file",
         "-c",
-        default=DEFAULT_CALIB_FILE,
+        default=R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only-test\output\calibration.dat",
         help="Path to calibration file with camera extrinsics (protobuf)",
     )
     parser.add_argument(
         "--image-folder",
         "-i",
-        default=DEFAULT_IMAGE_FOLDER,
+        default=R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only-test\output\images",
         help="Path to parent folder containing cam0, cam1, ... subdirectories",
     )
     parser.add_argument(
         "--output",
         "-o",
-        default=DEFAULT_OUTPUT_FILE,
+        default=R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only-test\output\images\ImgPose.txt",
         help="Output file path",
     )
     parser.add_argument(
         "--image-list",
-        default=DEFAULT_IMAGE_LIST,
+        default=None,
         help="Path to file containing list of image names (one per line)",
     )
     return parser.parse_args()

@@ -28,6 +28,10 @@ LOGGER = init_spdlog_like_logger()
 SHOW_PLOTS = False  # 是否弹出显示图形（False=仅保存，True=显示）
 SAVE_PLOTS = False  # 是否保存图形到文件（coarse_alignment_correlation.png, fine_alignment_gyro_comparison.png）
 
+# ========== 文件路径（以下通过命令行参数传入，此处为默认值）==========
+DEFAULT_IMU_DEVICE_FILE = R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only-test\output\imu.dat"
+DEFAULT_IMU_INSTA_FILE = R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only-test\output\images\insv.dat"
+
 # ========== B-spline 插值参数 ==========
 SPLINE_KNOTS = 3  # B-spline 的阶数（次数）
 SPLINE_SMOOTHING = 0  # 平滑因子 (0=精确插值，>0=平滑)
@@ -40,21 +44,20 @@ TIME_TOLERANCE = 1e-9  # 时间戳最小差异阈值，用于移除重复点
 
 
 def parse_args() -> argparse.Namespace:
-    # ========== 文件路径默认值（修改这里便于手动运行）==========
     parser = argparse.ArgumentParser(
         description="IMU time synchronization using B-spline interpolation over gyro magnitude"
     )
     parser.add_argument(
         "--device",
         type=str,
-        default=R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only-test\output\imu.dat",
-        help="Path to the Device IMU data file.",
+        default=DEFAULT_IMU_DEVICE_FILE,
+        help=f"Path to the Device IMU data file (default: {DEFAULT_IMU_DEVICE_FILE})",
     )
     parser.add_argument(
         "--insta",
         type=str,
-        default=R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only-test\output\images\insv.dat",
-        help="Path to the Insta IMU data file.",
+        default=DEFAULT_IMU_INSTA_FILE,
+        help=f"Path to the Insta IMU data file (default: {DEFAULT_IMU_INSTA_FILE})",
     )
     return parser.parse_args()
 
@@ -95,13 +98,6 @@ def load_imu_data(imu_device_path: str, imu_insta_path: str) -> tuple:
     with open(imu_insta_path, "rb") as f:
         imu_insta_msgs = ImuMsgList()
         imu_insta_msgs.ParseFromString(f.read())
-
-    return build_imu_data_from_msg_lists(imu_device_msgs, imu_insta_msgs)
-
-
-def build_imu_data_from_msg_lists(imu_device_msgs: ImuMsgList, imu_insta_msgs: ImuMsgList) -> dict:
-    """从两个 IMU 消息列表构建对齐所需的数据数组。"""
-    print("[INFO] Loading IMU data...")
 
     # 提取数据
     t_device = np.array([msg.timestamp for msg in imu_device_msgs.imu_msgs])
@@ -622,38 +618,59 @@ def print_time_sync_results(time_delay: float) -> None:
     print("  Insta timestamps should be shifted by this delay to align with Device")
 
 
-def _compute_final_time_delay_from_loaded_data(data: dict) -> float:
+# ============================================================================
+# 主程序
+# ============================================================================
+
+
+def main():
+    """主程序入口"""
+    args = parse_args()
+
+    print("\n" + "=" * 60)
+    print("[INFO] Starting IMU time synchronization and alignment analysis")
+    print("=" * 60)
+
+    # ===== 第1步: 加载数据 =====
+    data = load_imu_data(args.device, args.insta)
     t_device, t_insta = data["t_device"], data["t_insta"]
     gyro_mag_device, gyro_mag_insta = data["gyro_mag_device"], data["gyro_mag_insta"]
 
+    # ===== 第1.5步: 清理数据（移除重复的时间戳）=====
     print("[INFO] Cleaning raw timestamps...")
     t_device, gyro_mag_device = remove_duplicate_times(t_device, gyro_mag_device)
     t_insta, gyro_mag_insta = remove_duplicate_times(t_insta, gyro_mag_insta)
 
+    # ===== 第2步: 粗对齐（基于互相关系数）=====
     coarse_delay, max_corr, time_delays, correlation = find_coarse_alignment(
         t_device, t_insta, gyro_mag_device, gyro_mag_insta
     )
 
+    # ===== 找到前3个峰值 =====
     top_peaks = find_top_peaks(time_delays, correlation, num_peaks=3)
     plot_coarse_alignment(time_delays, correlation, coarse_delay, max_corr, top_peaks)
 
-    results = []
+    # ===== 第2.5步: 对每个峰值进行粗对齐和精细对齐 =====
+    results = []  # 存储 (peak_idx, coarse_delay, fine_delay, error)
+
     for peak_idx, (coarse_delay_candidate, peak_corr) in enumerate(top_peaks):
         print("\n" + "=" * 60)
         print(
-            f"[INFO] Trial {peak_idx+1}/3 using peak {peak_idx+1}: "
-            f"{coarse_delay_candidate*1000:.3f}ms"
+            f"[INFO] Trial {peak_idx+1}/3 using peak {peak_idx+1}: {coarse_delay_candidate*1000:.3f}ms"
         )
         print("=" * 60)
 
+        # 计算粗对齐后的公共时间轴
         t_insta_aligned = t_insta + coarse_delay_candidate
         t_common_start = max(t_device[0], t_insta_aligned[0])
         t_common_end = min(t_device[-1], t_insta_aligned[-1])
 
+        # 确保交集有效
         if t_common_start >= t_common_end:
             print("[ERROR] No overlapping time range after coarse alignment, skipping this peak")
             continue
 
+        # 使用较密集的采样率
         dt_device = np.mean(np.diff(t_device))
         dt_insta = np.mean(np.diff(t_insta))
         dt_common = min(dt_device, dt_insta)
@@ -661,10 +678,10 @@ def _compute_final_time_delay_from_loaded_data(data: dict) -> float:
         t_common = np.linspace(t_common_start, t_common_end, num_samples)
 
         print(
-            f"  [Range] Common time window: [{t_common_start:.3f}, {t_common_end:.3f}] "
-            f"({num_samples} samples)"
+            f"  [Range] Common time window: [{t_common_start:.3f}, {t_common_end:.3f}] ({num_samples} samples)"
         )
 
+        # 精细对齐
         fine_delay, error = optimize_time_delay(
             t_device,
             t_insta,
@@ -683,11 +700,14 @@ def _compute_final_time_delay_from_loaded_data(data: dict) -> float:
                 "fine_delay": fine_delay,
                 "error": error,
                 "peak_corr": peak_corr,
+                "t_common": t_common,
             }
         )
 
+    # ===== 第3步: 选择最好的结果（误差最小）=====
     if not results:
-        raise RuntimeError("No valid result was found, aborting")
+        print("[ERROR] No valid result was found, aborting")
+        return
 
     best_result = min(results, key=lambda x: x["error"])
     best_idx = best_result["peak_idx"]
@@ -695,16 +715,18 @@ def _compute_final_time_delay_from_loaded_data(data: dict) -> float:
     print("\n" + "=" * 60)
     print("[INFO] Optimization results for the three candidate peaks")
     print("=" * 60)
-    for result in results:
-        marker = " [best]" if result["peak_idx"] == best_idx else ""
+    for r in results:
+        marker = " [best]" if r["peak_idx"] == best_idx else ""
         print(
-            f"  Peak {result['peak_idx']+1}: coarse delay "
-            f"{result['coarse_delay']*1000:8.3f}ms, "
-            f"fine delay {result['fine_delay']*1000:8.3f}ms, "
-            f"error {result['error']:.6f}{marker}"
+            f"  Peak {r['peak_idx']+1}: coarse delay {r['coarse_delay']*1000:8.3f}ms, "
+            f"fine delay {r['fine_delay']*1000:8.3f}ms, "
+            f"error {r['error']:.6f}{marker}"
         )
 
     time_delay = best_result["fine_delay"]
+    t_common = best_result["t_common"]
+
+    # 绘制精细对齐后的IMU波形对比
     plot_fine_alignment_gyro_comparison(
         t_device,
         t_insta,
@@ -714,42 +736,10 @@ def _compute_final_time_delay_from_loaded_data(data: dict) -> float:
         best_result["coarse_delay"],
     )
 
+    # ===== 打印时间同步结果 =====
     print_time_sync_results(time_delay)
-    final_time_delay = time_delay - data["offset"]
-    plain_print("final time delay (s):", final_time_delay)
-    return final_time_delay
 
-
-def compute_final_time_delay_from_imu_msg_lists(
-    imu_device_msgs: ImuMsgList,
-    imu_insta_msgs: ImuMsgList,
-) -> float:
-    """直接从内存中的两个 IMU 消息列表计算最终时间偏移。"""
-    print("\n" + "=" * 60)
-    print("[INFO] Starting IMU time synchronization and alignment analysis")
-    print("=" * 60)
-    data = build_imu_data_from_msg_lists(imu_device_msgs, imu_insta_msgs)
-    return _compute_final_time_delay_from_loaded_data(data)
-
-
-def compute_final_time_delay(imu_device_path: str, imu_insta_path: str) -> float:
-    """计算并打印最终的 Insta-to-Device 时间偏移（秒）。"""
-    print("\n" + "=" * 60)
-    print("[INFO] Starting IMU time synchronization and alignment analysis")
-    print("=" * 60)
-    data = load_imu_data(imu_device_path, imu_insta_path)
-    return _compute_final_time_delay_from_loaded_data(data)
-
-
-# ============================================================================
-# 主程序
-# ============================================================================
-
-
-def main():
-    """主程序入口"""
-    args = parse_args()
-    compute_final_time_delay(args.device, args.insta)
+    plain_print("final time delay (s):", time_delay - data["offset"])
 
 
 if __name__ == "__main__":

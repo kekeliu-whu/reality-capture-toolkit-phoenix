@@ -31,11 +31,10 @@ except ImportError:
 # [CONFIG] 命令行参数默认值 - 修改此处便于手动运行
 # ============================================================================
 
-DEFAULT_BASE_DIR = R"D:\ProjectX\project-3d\data\abc"
-DEFAULT_TARGET_IMG = "cam0/1749886787_819981.jpg"
+DEFAULT_BASE_DIR = R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only\output"
+DEFAULT_TARGET_IMG = "cam1/1749887118_188812.jpg"
 DEFAULT_MAX_POINTS = 20_000_000
 DEFAULT_SEED = None
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(

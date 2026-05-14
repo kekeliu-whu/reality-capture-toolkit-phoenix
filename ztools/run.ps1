@@ -71,7 +71,6 @@ $PYTHON_TOOLS = $BUILD_PACK
 
 $convert_manifold_exe = Join-Path $BUILD_PACK "convert_manifold.exe"
 $insta_extraction_exe = Join-Path $PYTHON_TOOLS "insta_data_extraction.exe"
-$insta_sync_exe = Join-Path $PYTHON_TOOLS "insta_time_sync.exe"
 $insta_poses_exe = Join-Path $PYTHON_TOOLS "insta_compute_poses.exe"
 $lasermapping_exe = Join-Path $NATIVE_TOOLS "slam.exe"
 $slam_post_exe = Join-Path $NATIVE_TOOLS "slam_post.exe"
@@ -109,14 +108,20 @@ Write-Host "=== Step 1: Converting Manifold Livox/IMU data ===" -ForegroundColor
     Write-Host "[WARN] convert_manifold.exe not found at: $convert_manifold_exe" -ForegroundColor Yellow
 }
 
-# Step 2: Extract camera data from INSV
-Write-Host "`n=== Step 2: Extracting camera data ===" -ForegroundColor Cyan
+# Step 2: Extract, synchronize, and export camera data from INSV
+Write-Host "`n=== Step 2: Extracting and synchronizing camera data ===" -ForegroundColor Cyan
 $camera_dir = Join-Path $outputdir "images"
+$device_imu_dat = Join-Path $outputdir "imu.dat"
+
+if (!(Test-Path $device_imu_dat)) {
+    Write-Host "ERROR: Device IMU file not found: $device_imu_dat" -ForegroundColor Red
+    exit 1
+}
 
 & $insta_extraction_exe `
     --input-video-filename $insvpath `
     --output-dir $camera_dir `
-    --no-export-frames
+    --imu-file $device_imu_dat
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Data extraction failed" -ForegroundColor Red
@@ -125,93 +130,8 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "[OK] Camera data extracted to: $camera_dir" -ForegroundColor Green
 
-
-# Step 3: Run time synchronization and pose computation tools
-Write-Host "`n=== Step 3: Synchronizing IMU data ===" -ForegroundColor Cyan
-
-# Check if time sync tool exists
-if (!(Test-Path $insta_sync_exe)) {
-    Write-Host "ERROR: insta_time_sync.exe not found at $insta_sync_exe" -ForegroundColor Red
-    exit 1
-}
-
-$imu_insv_dat = Join-Path $camera_dir "insv.dat"
-$device_imu_dat = Join-Path $outputdir "imu.dat"
-
-# Check if required input files exist
-if (!(Test-Path $device_imu_dat)) {
-    Write-Host "ERROR: Device IMU file not found: $device_imu_dat" -ForegroundColor Red
-    exit 1
-}
-
-if (!(Test-Path $imu_insv_dat)) {
-    Write-Host "ERROR: Insta IMU file not found: $imu_insv_dat" -ForegroundColor Red
-    exit 1
-}
-
-Write-Host "Running IMU time synchronization..." -ForegroundColor Yellow
-
-$sync_cmd = "$insta_sync_exe --device $device_imu_dat --insta $imu_insv_dat"
-Write-Host "Running: $sync_cmd" -ForegroundColor Gray
-
-# Capture output to extract time delay
-$stdout_file = [System.IO.Path]::GetTempFileName()
-$stderr_file = [System.IO.Path]::GetTempFileName()
-
-try {
-    $sync_proc = Start-Process `
-        -FilePath $insta_sync_exe `
-        -ArgumentList @("--device", $device_imu_dat, "--insta", $imu_insv_dat) `
-        -NoNewWindow `
-        -Wait `
-        -PassThru `
-        -RedirectStandardOutput $stdout_file `
-        -RedirectStandardError $stderr_file
-
-    $sync_exit_code = $sync_proc.ExitCode
-    $stdout_text = if (Test-Path $stdout_file) { Get-Content -Path $stdout_file -Raw } else { "" }
-    $stderr_text = if (Test-Path $stderr_file) { Get-Content -Path $stderr_file -Raw } else { "" }
-    $output_text = ($stdout_text + "`n" + $stderr_text).Trim()
-}
-finally {
-    Remove-Item -Path $stdout_file -ErrorAction SilentlyContinue
-    Remove-Item -Path $stderr_file -ErrorAction SilentlyContinue
-}
-
-# Convert output to string for regex matching
-if ($output_text) {
-    Write-Host $output_text
-}
-
-if ($sync_exit_code -ne 0) {
-    Write-Host "ERROR: insta_time_sync failed with exit code $sync_exit_code" -ForegroundColor Red
-    exit $sync_exit_code
-}
-
-# Extract time delay from output: "final time delay (s): NUMBER"
-if ($output_text -match 'final time delay \(s\):\s*([\d\-\.]+)') {
-    $time_offset = [double]$matches[1]
-    Write-Host "[OK] Extracted time delay: $time_offset seconds" -ForegroundColor Green
-} else {
-    Write-Host "ERROR: Could not extract time delay from insta_time_sync output" -ForegroundColor Red
-    Write-Host "Expected to find: 'final time delay (s): <number>'" -ForegroundColor Red
-    exit 1
-}
-
-# Step 4: Extract images with timestamp offsets (using extracted time delay)
-& $insta_extraction_exe `
-    --input-video-filename $insvpath `
-    --output-dir $camera_dir `
-    --time-offset $time_offset `
-    --export-frames
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: Data extraction failed" -ForegroundColor Red
-    exit 1
-}
-
-# Step 5: Run lasermapping
-Write-Host "`n=== Step 5: Computing trajectory from lidar data ===" -ForegroundColor Yellow
+# Step 3: Run lasermapping
+Write-Host "`n=== Step 3: Computing trajectory from lidar data ===" -ForegroundColor Yellow
     Write-Host "[WARN] This step requires pre-processed lidar data from Manifold conversion" -ForegroundColor Yellow
     Write-Host "  Note: slam needs pre-processed .dat files in $outputdir" -ForegroundColor Yellow
     Write-Host "  - calibration.dat" -ForegroundColor Gray
@@ -244,8 +164,8 @@ Write-Host "`n=== Step 5: Computing trajectory from lidar data ===" -ForegroundC
         Write-Host "  To process: Run Manifold conversion first or extract .dat files manually" -ForegroundColor Yellow
     }
 
-# Step 6: Run slam_post.exe to refine trajectory (if slam.exe succeeded)
-Write-Host "`n=== Step 6: Refining trajectory with slam_post.exe ===" -ForegroundColor Cyan
+# Step 4: Run slam_post.exe to refine trajectory (if slam.exe succeeded)
+Write-Host "`n=== Step 4: Refining trajectory with slam_post.exe ===" -ForegroundColor Cyan
 if (Test-Path $slam_post_exe) {
     $pgo_config_file = Join-Path $BUILD_PACK "pgo.json"
     if (-not (Test-Path $pgo_config_file)) {
@@ -266,8 +186,8 @@ if (Test-Path $slam_post_exe) {
     Write-Host "[WARN] slam_post.exe not found, skipping trajectory refinement" -ForegroundColor Yellow
 }
 
-# Step 7: Compute camera poses
-Write-Host "`n=== Step 7: Computing camera poses ===" -ForegroundColor Cyan
+# Step 5: Compute camera poses
+Write-Host "`n=== Step 5: Computing camera poses ===" -ForegroundColor Cyan
 
 if (Test-Path $insta_poses_exe) {
     # Look for pose file in laser mapping output directory
