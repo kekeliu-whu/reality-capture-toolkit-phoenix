@@ -79,7 +79,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "Step 3: Sequential matching..." -ForegroundColor Green
 & $xsfm_pre_exe sequential_matcher `
   --database_path "$dataDir\xsfm\xsfm.db" `
-  --SequentialMatching.overlap 30 `
+  --SequentialMatching.overlap 20 `
   --SequentialMatching.quadratic_overlap 0 `
   --SequentialMatching.loop_detection 0
 
@@ -92,7 +92,7 @@ if ($LASTEXITCODE -ne 0) {
   --database_path "$dataDir\xsfm\xsfm.db" `
   --SequentialMatching.vocab_tree_path "$BUILD_PACK\vocab_tree_faiss_flickr100K_words32K.bin" `
   --SequentialMatching.loop_detection 1 `
-  --SequentialMatching.loop_detection_period 1 `
+  --SequentialMatching.loop_detection_period 8 `
   --SequentialMatching.loop_detection_num_nearest_neighbors 4 `
   --SequentialMatching.loop_detection_num_images 70 `
   --TwoViewGeometry.filter_stationary_matches 1
