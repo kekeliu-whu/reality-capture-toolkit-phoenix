@@ -32,6 +32,7 @@ MASK_EXT = ".png"
 DEPTH_EXT = ".png"
 DEPTH_TILE_SIZE = 16
 DEFAULT_DEPTH_CHUNK_SIZE = 10_000_000
+DEFAULT_MASK_EXPAND_PIXELS = 8
 ROTATION_MATRIX_ATOL = 1e-5
 MAX_SPLAT_ELEMENTS = 8_000_000
 
@@ -63,13 +64,6 @@ class PcdHeader:
 
 
 @dataclass(frozen=True)
-class SourceCameraSpec:
-    cx: float
-    cy: float
-    max_radius_sq: float
-
-
-@dataclass(frozen=True)
 class FaceExportPlan:
     face_name: str
     image_id: int
@@ -85,9 +79,11 @@ class ImageJob:
     total: int
     image_name: str
     source_camera_id: int
+    split_source_camera: bool
     source_rotation: np.ndarray
     source_translation: np.ndarray
     point3d_ids: np.ndarray
+    source_projected_points: np.ndarray
     world_xyz: np.ndarray
     face_plans: tuple[FaceExportPlan, ...]
 
@@ -149,45 +145,37 @@ def validate_rotation_matrix(name: str, rotation: np.ndarray, atol: float = ROTA
         )
 
 
-def rotation_matrix_x(angle_degrees: float) -> np.ndarray:
-    angle_radians = np.deg2rad(angle_degrees)
-    cos_angle = np.cos(angle_radians)
-    sin_angle = np.sin(angle_radians)
-    return np.array(
-        [[1.0, 0.0, 0.0], [0.0, cos_angle, -sin_angle], [0.0, sin_angle, cos_angle]],
-        dtype=np.float64,
-    )
+def build_face_specs() -> tuple[FaceSpec, ...]:
+    sq2 = np.sqrt(2.0)
+    sq3 = np.sqrt(3.0)
+    sq6 = np.sqrt(6.0)
 
-
-def rotation_matrix_y(angle_degrees: float) -> np.ndarray:
-    angle_radians = np.deg2rad(angle_degrees)
-    cos_angle = np.cos(angle_radians)
-    sin_angle = np.sin(angle_radians)
-    return np.array(
-        [[cos_angle, 0.0, sin_angle], [0.0, 1.0, 0.0], [-sin_angle, 0.0, cos_angle]],
-        dtype=np.float64,
-    )
-
-
-def build_face_specs(side_angle_degrees: float) -> tuple[FaceSpec, ...]:
-    if not (0.0 < side_angle_degrees < 180.0):
-        raise ValueError("--side-angle-degrees must be in the range (0, 180).")
+    v1 = np.array([1.0 / sq2, 1.0 / sq6, 1.0 / sq3], dtype=np.float64)
+    v2 = np.array([-1.0 / sq2, 1.0 / sq6, 1.0 / sq3], dtype=np.float64)
+    v3 = np.array([0.0, -np.sqrt(2.0 / 3.0), 1.0 / sq3], dtype=np.float64)
 
     face_specs = (
-        FaceSpec("front", np.eye(3, dtype=np.float64)),
-        FaceSpec("right", rotation_matrix_y(side_angle_degrees)),
-        FaceSpec("left", rotation_matrix_y(-side_angle_degrees)),
-        FaceSpec("up", rotation_matrix_x(-side_angle_degrees)),
-        FaceSpec("down", rotation_matrix_x(side_angle_degrees)),
+        FaceSpec("face0", np.column_stack((v2, v3, v1))),
+        FaceSpec("face1", np.column_stack((v3, v1, v2))),
+        FaceSpec("face2", np.column_stack((v1, v2, v3))),
     )
     for face_spec in face_specs:
         validate_rotation_matrix(face_spec.name, face_spec.rotation_face_to_source)
     return face_specs
 
 
+def get_camera_model_name(source_camera: pycolmap.Camera) -> str:
+    model_name = getattr(source_camera, "model_name", getattr(source_camera, "model", ""))
+    return str(model_name).upper()
+
+
+def is_fisheye_camera(source_camera: pycolmap.Camera) -> bool:
+    return "FISHEYE" in get_camera_model_name(source_camera)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Convert COLMAP model to front-plus-side cameras with automatic masking."
+        description="Convert COLMAP model to a symmetric 3-camera setup with automatic masking."
     )
     parser.add_argument(
         "--model-dir",
@@ -229,7 +217,13 @@ def parse_args() -> argparse.Namespace:
         "--mask-threshold",
         type=float,
         default=0.92,
-        help="Fisheye mask radius ratio (default 0.9 = half width). Reduce to crop more.",
+        help="Legacy compatibility option; ignored by the current black-border mask generation.",
+    )
+    parser.add_argument(
+        "--mask-expand-pixels",
+        type=int,
+        default=DEFAULT_MASK_EXPAND_PIXELS,
+        help="Expand the generated black-border mask by this many output pixels.",
     )
     parser.add_argument(
         "--model-format",
@@ -261,19 +255,19 @@ def parse_args() -> argparse.Namespace:
         "--side-short-fov",
         type=float,
         default=40.0,
-        help="Short-side full FOV in degrees for non-front cameras. Used to derive side-camera principal points.",
+        help="Legacy compatibility option; ignored by the current symmetric 3-camera export.",
     )
     parser.add_argument(
         "--side-long-fov",
         type=float,
         default=90.0,
-        help="Long-side full FOV in degrees for non-front cameras. Used to derive side-camera principal points.",
+        help="Legacy compatibility option; ignored by the current symmetric 3-camera export.",
     )
     parser.add_argument(
         "--side-angle-degrees",
         type=float,
         default=70.0,
-        help="Angle in degrees between the front camera and each side camera orientation.",
+        help="Legacy compatibility option; ignored by the current symmetric 3-camera export.",
     )
     parser.add_argument(
         "--depth-mode",
@@ -324,12 +318,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--image-step must be >= 1")
     if args.num_workers < 1:
         parser.error("--num-workers must be >= 1")
-    if not (0.0 < args.side_short_fov < 180.0):
-        parser.error("--side-short-fov must be in the range (0, 180)")
-    if not (0.0 < args.side_long_fov < 180.0):
-        parser.error("--side-long-fov must be in the range (0, 180)")
-    if not (0.0 < args.side_angle_degrees < 180.0):
-        parser.error("--side-angle-degrees must be in the range (0, 180)")
+    if args.mask_expand_pixels < 0:
+        parser.error("--mask-expand-pixels must be >= 0")
     args.skip_depths = not args.generate_depths
     return args
 
@@ -341,33 +331,17 @@ def pixels_from_full_fov(focal: float, fov_degrees: float) -> int:
 def build_face_intrinsics(
     face_specs: tuple[FaceSpec, ...],
     shared_focal: float,
-    args: argparse.Namespace,
 ) -> dict[str, FaceIntrinsics]:
-    if not (0.0 < args.side_short_fov < 180.0 and 0.0 < args.side_long_fov < 180.0):
-        raise ValueError("Side FOV values must be in the range (0, 180) degrees.")
-
-    front_width = ensure_even_size(pixels_from_full_fov(shared_focal, 90.0))
-    front_height = ensure_even_size(pixels_from_full_fov(shared_focal, 90.0))
-    short_size = ensure_even_size(pixels_from_full_fov(shared_focal, args.side_short_fov))
-    long_size = ensure_even_size(pixels_from_full_fov(shared_focal, args.side_long_fov))
-
-    face_sizes = {
-        "front": (front_width, front_height),
-        "right": (short_size, long_size),
-        "left": (short_size, long_size),
-        "up": (long_size, short_size),
-        "down": (long_size, short_size),
-    }
+    size = ensure_even_size(pixels_from_full_fov(shared_focal, 90.0))
 
     intrinsics_by_name: dict[str, FaceIntrinsics] = {}
     for face_spec in face_specs:
-        width, height = face_sizes[face_spec.name]
         intrinsics_by_name[face_spec.name] = FaceIntrinsics(
-            width=width,
-            height=height,
+            width=size,
+            height=size,
             focal=shared_focal,
-            cx=width / 2.0,
-            cy=height / 2.0,
+            cx=size / 2.0,
+            cy=size / 2.0,
         )
     return intrinsics_by_name
 
@@ -1040,7 +1014,7 @@ def build_remap_tables(
     per_camera_intrinsics: dict[int, dict[str, FaceIntrinsics]],
 ) -> dict[int, dict[str, tuple[np.ndarray, np.ndarray]]]:
     remap_tables = {}
-    for camera_id in reconstruction.cameras:
+    for camera_id in sorted(per_camera_intrinsics.keys()):
         source_camera = reconstruction.camera(camera_id)
         remap_tables[camera_id] = {}
         for face_spec in face_specs:
@@ -1067,23 +1041,105 @@ def assign_faces(points_in_source: np.ndarray, face_specs: tuple[FaceSpec, ...])
 def write_image(output_path: Path, image: np.ndarray, quality: int) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     params = [cv2.IMWRITE_JPEG_QUALITY, quality] if output_path.suffix.lower() in [".jpg", ".jpeg"] else []
-    cv2.imwrite(str(output_path), image, params)
+    success, encoded = cv2.imencode(output_path.suffix, image, params)
+    if not success:
+        raise RuntimeError(f"Failed to encode image: {output_path}")
+    output_path.write_bytes(encoded.tobytes())
 
 
-def build_source_camera_specs(
-    reconstruction: pycolmap.Reconstruction,
-    mask_threshold: float,
-) -> dict[int, SourceCameraSpec]:
-    camera_specs: dict[int, SourceCameraSpec] = {}
-    for camera_id in reconstruction.cameras:
-        source_camera = reconstruction.camera(camera_id)
-        max_radius = (source_camera.width / 2.0) * mask_threshold
-        camera_specs[camera_id] = SourceCameraSpec(
-            cx=float(source_camera.params[2]),
-            cy=float(source_camera.params[3]),
-            max_radius_sq=float(max_radius * max_radius),
+def build_linked_points2d(
+    projected_points: np.ndarray,
+    point3d_ids: np.ndarray,
+) -> list[pycolmap.Point2D]:
+    if projected_points.shape[0] != point3d_ids.shape[0]:
+        raise ValueError(
+            "Projected point count and Point3D id count must match: "
+            f"{projected_points.shape[0]} != {point3d_ids.shape[0]}"
         )
-    return camera_specs
+
+    points2d = []
+    for point, point3d_id in zip(projected_points, point3d_ids):
+        point2d = pycolmap.Point2D(point)
+        point2d.point3D_id = int(point3d_id)
+        points2d.append(point2d)
+    return points2d
+
+
+def load_source_image(source_path: Path) -> np.ndarray | None:
+    try:
+        encoded = np.frombuffer(source_path.read_bytes(), dtype=np.uint8)
+    except OSError:
+        return None
+    if encoded.size == 0:
+        return None
+    return cv2.imdecode(encoded, cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
+
+
+def build_mask_from_generated_image(generated_image: np.ndarray, expand_pixels: int) -> np.ndarray:
+    if generated_image.ndim == 2:
+        black_pixels = generated_image == 0
+    else:
+        black_pixels = np.all(generated_image == 0, axis=2)
+
+    if not np.any(black_pixels):
+        return np.zeros(black_pixels.shape, dtype=np.uint8)
+
+    _, labels = cv2.connectedComponents(black_pixels.astype(np.uint8), connectivity=4)
+    border_labels = np.unique(
+        np.concatenate((labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]))
+    )
+    border_labels = border_labels[border_labels != 0]
+    invalid_mask = np.isin(labels, border_labels)
+
+    if expand_pixels > 0:
+        kernel_size = 2 * expand_pixels + 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        invalid_mask = cv2.dilate(invalid_mask.astype(np.uint8), kernel, iterations=1) > 0
+
+    return np.where(invalid_mask, 255, 0).astype(np.uint8)
+
+
+def build_face_masks_from_reference_images(
+    reconstruction: pycolmap.Reconstruction,
+    image_ids: list[int],
+    face_specs: tuple[FaceSpec, ...],
+    image_dir: Path,
+    remap_tables: dict[int, dict[str, tuple[np.ndarray, np.ndarray]]],
+    expand_pixels: int,
+) -> dict[tuple[int, str], np.ndarray]:
+    reference_images_by_camera: dict[int, int] = {}
+    for image_id in image_ids:
+        source_image = reconstruction.image(image_id)
+        if source_image.camera_id not in remap_tables:
+            continue
+        reference_images_by_camera.setdefault(source_image.camera_id, image_id)
+
+    face_masks: dict[tuple[int, str], np.ndarray] = {}
+    for camera_id, image_id in sorted(reference_images_by_camera.items()):
+        source_image = reconstruction.image(image_id)
+        source_path = image_dir / source_image.name
+        source_pixels = load_source_image(source_path)
+        if source_pixels is None:
+            raise FileNotFoundError(
+                f"Failed to read source image for mask generation: {source_path}"
+            )
+
+        for face_spec in face_specs:
+            map_x, map_y = remap_tables[camera_id][face_spec.name]
+            generated_image = cv2.remap(
+                source_pixels,
+                map_x,
+                map_y,
+                cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=0,
+            )
+            face_masks[(camera_id, face_spec.name)] = build_mask_from_generated_image(
+                generated_image,
+                expand_pixels=expand_pixels,
+            )
+
+    return face_masks
 
 
 def build_image_job(
@@ -1097,36 +1153,58 @@ def build_image_job(
     next_image_id: int,
 ) -> tuple[ImageJob, int]:
     source_image = reconstruction.image(source_image_id)
+    source_camera = reconstruction.camera(source_image.camera_id)
+    split_source_camera = is_fisheye_camera(source_camera)
     source_pose = np.asarray(source_image.cam_from_world().matrix(), dtype=np.float64)
     validate_rotation_matrix(f"source image {source_image.name}", source_pose[:, :3])
 
     point3d_ids_list = [int(point.point3D_id) for point in source_image.points2D if point.has_point3D()]
+    source_projected_points_list = [
+        np.asarray(point.xy, dtype=np.float64)
+        for point in source_image.points2D
+        if point.has_point3D()
+    ]
     if point3d_ids_list:
         point3d_ids = np.asarray(point3d_ids_list, dtype=np.int64)
+        source_projected_points = np.asarray(source_projected_points_list, dtype=np.float64)
         world_xyz = np.asarray(
             [reconstruction.point3D(point3d_id).xyz for point3d_id in point3d_ids_list],
             dtype=np.float64,
         )
     else:
         point3d_ids = np.empty((0,), dtype=np.int64)
+        source_projected_points = np.empty((0, 2), dtype=np.float64)
         world_xyz = np.empty((0, 3), dtype=np.float64)
 
     face_plans = []
-    rel_path = Path(source_image.name).parent.name
-    stem = Path(source_image.name).stem
-    for face_spec in face_specs:
-        face_rot = face_spec.rotation_face_to_source.T @ source_pose[:, :3]
-        validate_rotation_matrix(f"{source_image.name} {face_spec.name}", face_rot)
-        face_trans = face_spec.rotation_face_to_source.T @ source_pose[:, 3]
-        out_name = f"{rel_path}_{face_spec.name}/{stem}{image_ext}"
+    if split_source_camera:
+        rel_path = Path(source_image.name).parent.name
+        stem = Path(source_image.name).stem
+        for face_spec in face_specs:
+            face_rot = face_spec.rotation_face_to_source.T @ source_pose[:, :3]
+            validate_rotation_matrix(f"{source_image.name} {face_spec.name}", face_rot)
+            face_trans = face_spec.rotation_face_to_source.T @ source_pose[:, 3]
+            out_name = f"{rel_path}_{face_spec.name}/{stem}{image_ext}"
+            face_plans.append(
+                FaceExportPlan(
+                    face_name=face_spec.name,
+                    image_id=next_image_id,
+                    camera_id=face_camera_id_map[(source_image.camera_id, face_spec.name)],
+                    output_name=out_name,
+                    rotation=np.asarray(face_rot, dtype=np.float64),
+                    translation=np.asarray(face_trans, dtype=np.float64),
+                )
+            )
+            next_image_id += 1
+    else:
         face_plans.append(
             FaceExportPlan(
-                face_name=face_spec.name,
+                face_name="original",
                 image_id=next_image_id,
-                camera_id=face_camera_id_map[(source_image.camera_id, face_spec.name)],
-                output_name=out_name,
-                rotation=np.asarray(face_rot, dtype=np.float64),
-                translation=np.asarray(face_trans, dtype=np.float64),
+                camera_id=face_camera_id_map[(source_image.camera_id, "original")],
+                output_name=source_image.name,
+                rotation=np.asarray(source_pose[:, :3], dtype=np.float64),
+                translation=np.asarray(source_pose[:, 3], dtype=np.float64),
             )
         )
         next_image_id += 1
@@ -1137,9 +1215,11 @@ def build_image_job(
             total=total_images,
             image_name=source_image.name,
             source_camera_id=source_image.camera_id,
+            split_source_camera=split_source_camera,
             source_rotation=np.asarray(source_pose[:, :3], dtype=np.float64),
             source_translation=np.asarray(source_pose[:, 3], dtype=np.float64),
             point3d_ids=point3d_ids,
+            source_projected_points=source_projected_points,
             world_xyz=world_xyz,
             face_plans=tuple(face_plans),
         ),
@@ -1150,7 +1230,7 @@ def build_image_job(
 def process_image_job(
     job: ImageJob,
     face_specs: tuple[FaceSpec, ...],
-    camera_specs: dict[int, SourceCameraSpec],
+    face_masks: dict[tuple[int, str], np.ndarray],
     per_camera_intrinsics: dict[int, dict[str, FaceIntrinsics]],
     depth_intrinsics: dict[int, dict[str, FaceIntrinsics]],
     remap_tables: dict[int, dict[str, tuple[np.ndarray, np.ndarray]]],
@@ -1158,18 +1238,27 @@ def process_image_job(
     config: ExportConfig,
 ) -> ImageExportResult:
     source_path = config.image_dir / job.image_name
-    source_pixels = cv2.imread(str(source_path))
+    source_pixels = load_source_image(source_path)
     if source_pixels is None:
         raise FileNotFoundError(f"Failed to read source image: {source_path}")
 
-    projected_by_face: dict[str, tuple[np.ndarray, np.ndarray]] = {
-        face_spec.name: (
-            np.empty((0,), dtype=np.int64),
-            np.empty((0, 2), dtype=np.float64),
-        )
-        for face_spec in face_specs
-    }
-    if job.world_xyz.shape[0] != 0:
+    if job.split_source_camera:
+        projected_by_face: dict[str, tuple[np.ndarray, np.ndarray]] = {
+            face_spec.name: (
+                np.empty((0,), dtype=np.int64),
+                np.empty((0, 2), dtype=np.float64),
+            )
+            for face_spec in face_specs
+        }
+    else:
+        projected_by_face = {
+            "original": (
+                np.asarray(job.point3d_ids, dtype=np.int64, copy=False),
+                np.asarray(job.source_projected_points, dtype=np.float64, copy=False),
+            )
+        }
+
+    if job.split_source_camera and job.world_xyz.shape[0] != 0:
         pts_in_src = job.world_xyz @ job.source_rotation.T + job.source_translation
         face_idx = assign_faces(pts_in_src, face_specs)
 
@@ -1197,28 +1286,39 @@ def process_image_job(
                 projected[valid],
             )
 
-    camera_spec = camera_specs[job.source_camera_id]
     face_results = []
     for face_plan in job.face_plans:
-        map_x, map_y = remap_tables[job.source_camera_id][face_plan.face_name]
-        resampled_image = cv2.remap(
-            source_pixels,
-            map_x,
-            map_y,
-            cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=0,
-        )
-        dist_sq = (map_x - camera_spec.cx) ** 2 + (map_y - camera_spec.cy) ** 2
-        resampled_mask = np.where(dist_sq <= camera_spec.max_radius_sq, 0, 255).astype(np.uint8)
+        if job.split_source_camera:
+            map_x, map_y = remap_tables[job.source_camera_id][face_plan.face_name]
+            resampled_image = cv2.remap(
+                source_pixels,
+                map_x,
+                map_y,
+                cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=0,
+            )
+            resampled_mask = face_masks[(job.source_camera_id, face_plan.face_name)]
+        else:
+            resampled_image = source_pixels
+            resampled_mask = np.zeros(source_pixels.shape[:2], dtype=np.uint8)
 
         mask_name = str(Path(face_plan.output_name).with_suffix(MASK_EXT))
-        write_image(config.img_out / face_plan.output_name, resampled_image, config.jpeg_quality)
+        if job.split_source_camera:
+            write_image(config.img_out / face_plan.output_name, resampled_image, config.jpeg_quality)
+        else:
+            output_path = config.img_out / face_plan.output_name
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source_path, output_path)
         write_image(config.mask_out / mask_name, resampled_mask, config.jpeg_quality)
 
         depth_name = None
         depth_metadata = None
         if depth_points_world is not None and config.depth_out is not None:
+            if not job.split_source_camera:
+                raise NotImplementedError(
+                    "Depth export is not supported for passthrough non-fisheye cameras."
+                )
             depth_intr = depth_intrinsics[job.source_camera_id][face_plan.face_name]
             depth_name, depth_metadata = export_depth_for_face(
                 depth_points_world=depth_points_world,
@@ -1251,7 +1351,7 @@ def export_images_with_workers(
     image_ids: list[int],
     face_specs: tuple[FaceSpec, ...],
     face_camera_id_map: dict[tuple[int, str], int],
-    camera_specs: dict[int, SourceCameraSpec],
+    face_masks: dict[tuple[int, str], np.ndarray],
     per_camera_intrinsics: dict[int, dict[str, FaceIntrinsics]],
     depth_intrinsics: dict[int, dict[str, FaceIntrinsics]],
     remap_tables: dict[int, dict[str, tuple[np.ndarray, np.ndarray]]],
@@ -1288,7 +1388,7 @@ def export_images_with_workers(
             result = process_image_job(
                 job,
                 face_specs,
-                camera_specs,
+                face_masks,
                 per_camera_intrinsics,
                 depth_intrinsics,
                 remap_tables,
@@ -1315,7 +1415,7 @@ def export_images_with_workers(
                 process_image_job,
                 job,
                 face_specs,
-                camera_specs,
+                face_masks,
                 per_camera_intrinsics,
                 depth_intrinsics,
                 remap_tables,
@@ -1361,20 +1461,48 @@ def main() -> None:
         shutil.rmtree(args.output_dir)
 
     reconstruction = pycolmap.Reconstruction(str(args.model_dir))
-    face_specs = build_face_specs(args.side_angle_degrees)
+    face_specs = build_face_specs()
+    fisheye_camera_ids = {
+        camera_id
+        for camera_id in reconstruction.cameras
+        if is_fisheye_camera(reconstruction.camera(camera_id))
+    }
+    non_fisheye_camera_ids = set(reconstruction.cameras.keys()) - fisheye_camera_ids
+    if not args.skip_depths and non_fisheye_camera_ids:
+        raise NotImplementedError(
+            "Depth export is only supported when all cameras are fisheye-split. "
+            "Use --skip-depths to keep non-fisheye cameras unchanged."
+        )
     
     per_camera_intrinsics = {
         cam_id: build_face_intrinsics(
             face_specs,
             reconstruction.camera(cam_id).mean_focal_length(),
-            args,
         )
-        for cam_id in reconstruction.cameras
+        for cam_id in fisheye_camera_ids
     }
     depth_intrinsics = build_scaled_intrinsics(per_camera_intrinsics, args.depth_scale)
-    camera_specs = build_source_camera_specs(reconstruction, args.mask_threshold)
     print("[Setup] Building remap tables", flush=True)
     remap_tables = build_remap_tables(reconstruction, face_specs, per_camera_intrinsics)
+
+    image_ids = sorted(
+        reconstruction.images.keys(),
+        key=lambda image_id: reconstruction.image(image_id).name,
+    )
+    if args.image_step > 1:
+        image_ids = image_ids[::args.image_step]
+    if args.limit > 0:
+        image_ids = image_ids[:args.limit]
+
+    print("[Setup] Building shared masks from reference face images", flush=True)
+    face_masks = build_face_masks_from_reference_images(
+        reconstruction,
+        image_ids,
+        face_specs,
+        args.image_dir,
+        remap_tables,
+        args.mask_expand_pixels,
+    )
 
     depth_points_world = None
     if not args.skip_depths:
@@ -1406,22 +1534,26 @@ def main() -> None:
     face_camera_id_map = {}
     cam_counter = 1
     for src_cam_id in sorted(reconstruction.cameras.keys()):
-        for face_spec in face_specs:
-            intr = per_camera_intrinsics[src_cam_id][face_spec.name]
-            cam = pycolmap.Camera(model="PINHOLE", width=intr.width, height=intr.height, 
-                                  params=[intr.focal, intr.focal, intr.cx, intr.cy], camera_id=cam_counter)
+        source_camera = reconstruction.camera(src_cam_id)
+        if src_cam_id in fisheye_camera_ids:
+            for face_spec in face_specs:
+                intr = per_camera_intrinsics[src_cam_id][face_spec.name]
+                cam = pycolmap.Camera(model="PINHOLE", width=intr.width, height=intr.height,
+                                      params=[intr.focal, intr.focal, intr.cx, intr.cy], camera_id=cam_counter)
+                converted.add_camera_with_trivial_rig(cam)
+                face_camera_id_map[(src_cam_id, face_spec.name)] = cam_counter
+                cam_counter += 1
+        else:
+            cam = pycolmap.Camera(
+                model=str(source_camera.model_name),
+                width=source_camera.width,
+                height=source_camera.height,
+                params=[float(value) for value in source_camera.params],
+                camera_id=cam_counter,
+            )
             converted.add_camera_with_trivial_rig(cam)
-            face_camera_id_map[(src_cam_id, face_spec.name)] = cam_counter
+            face_camera_id_map[(src_cam_id, "original")] = cam_counter
             cam_counter += 1
-
-    image_ids = sorted(
-        reconstruction.images.keys(),
-        key=lambda image_id: reconstruction.image(image_id).name,
-    )
-    if args.image_step > 1:
-        image_ids = image_ids[::args.image_step]
-    if args.limit > 0:
-        image_ids = image_ids[:args.limit]
 
     depth_mode_summary = f"cuda/{args.depth_mode}" if not args.skip_depths else "skipped"
     print(
@@ -1448,7 +1580,7 @@ def main() -> None:
         image_ids,
         face_specs,
         face_camera_id_map,
-        camera_specs,
+        face_masks,
         per_camera_intrinsics,
         depth_intrinsics,
         remap_tables,
@@ -1459,7 +1591,10 @@ def main() -> None:
 
     for image_result in image_results:
         for face_result in image_result.face_results:
-            points2d = [pycolmap.Point2D(point) for point in face_result.projected_points]
+            points2d = build_linked_points2d(
+                face_result.projected_points,
+                face_result.point3d_ids,
+            )
             converted.add_image_with_trivial_frame(
                 pycolmap.Image(
                     name=face_result.output_name,
