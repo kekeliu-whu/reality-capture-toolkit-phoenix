@@ -112,6 +112,7 @@ class ImageExportResult:
 @dataclass(frozen=True)
 class ExportConfig:
     image_dir: Path
+    mask_dir: Path | None
     img_out: Path
     mask_out: Path
     depth_out: Path | None
@@ -180,25 +181,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model-dir",
         type=Path,
-        default=R"Z:\rick\dataset\q9000\MT20260430-102731-24fps-video\output\xsfm\sparse\0",
+        default=R"Z:\raw_data\ZJGHDSDataForGSTest\XGRIDS-K2\mipmap\sparse",
         help="Input COLMAP model directory.",
     )
     parser.add_argument(
         "--image-dir",
         type=Path,
-        default=R"Z:\rick\dataset\q9000\MT20260430-102731-24fps-video\output\images",
+        default=R"Z:\raw_data\ZJGHDSDataForGSTest\XGRIDS-K2\GZPI_2026-05-22-105830\images",
         help="Source image directory.",
+    )
+    parser.add_argument(
+        "--mask-dir",
+        type=Path,
+        default=R"Z:\raw_data\ZJGHDSDataForGSTest\XGRIDS-K2\GZPI_2026-05-22-105830\masks",
+        help="Optional source mask directory. Masks are matched by image-relative path.",
+    )
+    parser.add_argument(
+        "--no-source-masks",
+        dest="mask_dir",
+        action="store_const",
+        const=None,
+        help="Disable per-image source masks and generate masks from remapped black borders.",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=R"Z:\rick\dataset\q9000\MT20260430-102731-24fps-video\output\cubemap_colmap",
+        default=R"Z:\raw_data\ZJGHDSDataForGSTest\XGRIDS-K2\mipmap\cubemap_colmap",
         help="Output directory.",
     )
     parser.add_argument(
         "--point-cloud-path",
         type=Path,
-        default=R"Z:\rick\dataset\q9000\MT20260430-102731-24fps-video\output\map_opt_filter.las",
+        default=R"Z:\raw_data\ZJGHDSDataForGSTest\XGRIDS-K2\GZPI_2026-05-22-105830\GZPI_2026-05-22-105830.las",
         help="Point cloud used for depth rendering.",
     )
     parser.add_argument(
@@ -288,7 +302,7 @@ def parse_args() -> argparse.Namespace:
         action="store_false",
         help="Skip depth-map generation.",
     )
-    parser.set_defaults(generate_depths=True)
+    parser.set_defaults(generate_depths=False)
     parser.add_argument(
         "--depth-scale",
         type=float,
@@ -1075,6 +1089,56 @@ def load_source_image(source_path: Path) -> np.ndarray | None:
     return cv2.imdecode(encoded, cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
 
 
+def load_source_mask(mask_path: Path) -> np.ndarray | None:
+    try:
+        encoded = np.frombuffer(mask_path.read_bytes(), dtype=np.uint8)
+    except OSError:
+        return None
+    if encoded.size == 0:
+        return None
+    return cv2.imdecode(encoded, cv2.IMREAD_GRAYSCALE | cv2.IMREAD_IGNORE_ORIENTATION)
+
+
+def find_source_mask_path(mask_dir: Path, image_name: str) -> Path | None:
+    relative_image_path = Path(image_name)
+    candidates = (
+        mask_dir / f"{image_name}{MASK_EXT}",
+        mask_dir / relative_image_path.with_suffix(MASK_EXT),
+        mask_dir / relative_image_path,
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def load_optional_source_mask(mask_dir: Path, image_name: str) -> np.ndarray | None:
+    source_mask_path = find_source_mask_path(mask_dir, image_name)
+    if source_mask_path is None:
+        return None
+    source_mask = load_source_mask(source_mask_path)
+    if source_mask is None:
+        raise FileNotFoundError(f"Failed to read source mask: {source_mask_path}")
+    return source_mask
+
+
+def remap_source_mask(source_mask: np.ndarray, map_x: np.ndarray, map_y: np.ndarray) -> np.ndarray:
+    if source_mask.ndim == 3:
+        source_mask = cv2.cvtColor(source_mask, cv2.COLOR_BGR2GRAY)
+    return cv2.remap(
+        source_mask,
+        map_x,
+        map_y,
+        cv2.INTER_NEAREST,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
+
+
+def build_full_valid_source_mask(source_pixels: np.ndarray) -> np.ndarray:
+    return np.full(source_pixels.shape[:2], 255, dtype=np.uint8)
+
+
 def build_mask_from_generated_image(generated_image: np.ndarray, expand_pixels: int) -> np.ndarray:
     if generated_image.ndim == 2:
         black_pixels = generated_image == 0
@@ -1242,6 +1306,16 @@ def process_image_job(
     if source_pixels is None:
         raise FileNotFoundError(f"Failed to read source image: {source_path}")
 
+    source_mask = None
+    if config.mask_dir is not None:
+        source_mask = load_optional_source_mask(config.mask_dir, job.image_name)
+        if source_mask is None:
+            print(
+                f"[Mask] Missing source mask for {job.image_name}; using full-valid mask",
+                flush=True,
+            )
+            source_mask = build_full_valid_source_mask(source_pixels)
+
     if job.split_source_camera:
         projected_by_face: dict[str, tuple[np.ndarray, np.ndarray]] = {
             face_spec.name: (
@@ -1298,10 +1372,16 @@ def process_image_job(
                 borderMode=cv2.BORDER_CONSTANT,
                 borderValue=0,
             )
-            resampled_mask = face_masks[(job.source_camera_id, face_plan.face_name)]
+            if source_mask is not None:
+                resampled_mask = remap_source_mask(source_mask, map_x, map_y)
+            else:
+                resampled_mask = face_masks[(job.source_camera_id, face_plan.face_name)]
         else:
             resampled_image = source_pixels
-            resampled_mask = np.zeros(source_pixels.shape[:2], dtype=np.uint8)
+            if source_mask is not None:
+                resampled_mask = source_mask
+            else:
+                resampled_mask = np.zeros(source_pixels.shape[:2], dtype=np.uint8)
 
         mask_name = str(Path(face_plan.output_name).with_suffix(MASK_EXT))
         if job.split_source_camera:
@@ -1447,6 +1527,8 @@ def main() -> None:
         raise ValueError("--gpu-chunk-points must be positive.")
     if not args.skip_depths:
         ensure_cuda_available()
+    if args.mask_dir is not None and not args.mask_dir.exists():
+        raise FileNotFoundError(f"Source mask directory not found: {args.mask_dir}")
 
     if args.num_workers > 1:
         cv2.setNumThreads(1)
@@ -1494,15 +1576,19 @@ def main() -> None:
     if args.limit > 0:
         image_ids = image_ids[:args.limit]
 
-    print("[Setup] Building shared masks from reference face images", flush=True)
-    face_masks = build_face_masks_from_reference_images(
-        reconstruction,
-        image_ids,
-        face_specs,
-        args.image_dir,
-        remap_tables,
-        args.mask_expand_pixels,
-    )
+    if args.mask_dir is not None:
+        print(f"[Setup] Using per-image source masks: {args.mask_dir}", flush=True)
+        face_masks = {}
+    else:
+        print("[Setup] Building shared masks from reference face images", flush=True)
+        face_masks = build_face_masks_from_reference_images(
+            reconstruction,
+            image_ids,
+            face_specs,
+            args.image_dir,
+            remap_tables,
+            args.mask_expand_pixels,
+        )
 
     depth_points_world = None
     if not args.skip_depths:
@@ -1563,6 +1649,7 @@ def main() -> None:
     )
     export_config = ExportConfig(
         image_dir=args.image_dir,
+        mask_dir=args.mask_dir,
         img_out=img_out,
         mask_out=mask_out,
         depth_out=depth_out,
