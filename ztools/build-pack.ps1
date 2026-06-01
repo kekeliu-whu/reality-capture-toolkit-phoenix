@@ -193,14 +193,13 @@ function Copy-ExecutableFiles {
         "insta_compute_pano_poses.exe",
         "insta_compute_poses.exe",
         "insta_data_extraction_ar.exe",
-        "insta_data_extraction.exe",
-        
+        "insta_data_extraction.exe"
     )
 
     Write-Status "Copying documented executable files..."
     $copiedCount = 0
     $missing = @()
-    
+
     # Search for each executable in all build directories
     $allExeFiles = Get-ChildItem $XCOLOR_BUILD_DIR -Filter "*.exe" -ErrorAction SilentlyContinue
     $allExeFiles += Get-ChildItem $XCOLOR_MIGRATION_BUILD_DIR -Filter "*.exe" -ErrorAction SilentlyContinue
@@ -275,6 +274,23 @@ function Copy-Dependencies {
         try { Copy-Item -LiteralPath $dll.FullName -Destination $PACK_DIR -Force -ErrorAction Stop } catch { Fail "Failed to copy $($dll.Name): $($_.Exception.Message)" }
     }
     Write-Host "    Copied $($cudaDlls.Count) files"
+
+    # Copy Python tools shared _internal folder (shared bundle from PyInstaller COLLECT)
+    $pythonInternalDir = Join-Path $PYTHON_TOOLS_DIR "_internal"
+    if (Test-Path $pythonInternalDir) {
+        Write-Status "Copying Python tools shared _internal folder..."
+        $destInternalDir = Join-Path $PACK_DIR "_internal"
+        if (Test-Path $destInternalDir) { Remove-Item $destInternalDir -Recurse -Force }
+        try {
+            Copy-Item -LiteralPath $pythonInternalDir -Destination $destInternalDir -Recurse -Force -ErrorAction Stop
+            $internalFileCount = @(Get-ChildItem $destInternalDir -Recurse -File -ErrorAction SilentlyContinue).Count
+            Write-Host "    Copied _internal folder ($internalFileCount files)"
+        } catch {
+            Fail "Failed to copy Python _internal folder: $($_.Exception.Message)"
+        }
+    } else {
+        Write-Host "    WARNING: Python tools _internal folder not found at $pythonInternalDir" -ForegroundColor Yellow
+    }
 }
 
 function Download-VocabTree {
@@ -342,13 +358,39 @@ function Show-PackSummary {
     $totalSize = (Get-ChildItem -Path $PACK_DIR -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
     $totalSizeMB = if ($totalSize) { [Math]::Round($totalSize / 1MB, 2) } else { 0 }
 
+    # Check for Python tools shared bundle
+    $pythonInternalDir = Join-Path $PACK_DIR "_internal"
+    $hasPythonBundle = Test-Path $pythonInternalDir
+    if ($hasPythonBundle) {
+        $internalFileCount = @(Get-ChildItem $pythonInternalDir -Recurse -File -ErrorAction SilentlyContinue).Count
+        $internalSize = (Get-ChildItem $pythonInternalDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+        $internalSizeMB = if ($internalSize) { [Math]::Round($internalSize / 1MB, 2) } else { 0 }
+    }
+
     Write-Host ""
     Write-Host "  Total files:     $totalFiles"
     Write-Host "  EXE files:       $exeCount"
     Write-Host "  DLL files:       $dllCount"
+    if ($hasPythonBundle) {
+        Write-Host "  Python bundle:   _internal/ ($internalFileCount files, $internalSizeMB MB)"
+    }
     Write-Host "  Total size:      $totalSizeMB MB"
     Write-Host ""
     Write-Host "  Location: $PACK_DIR" -ForegroundColor Yellow
+
+    # List Python tool EXEs
+    if ($hasPythonBundle) {
+        Write-Host ""
+        Write-Host "  Python EXEs (shared bundle):" -ForegroundColor Yellow
+        $pythonExeNames = @("insta_compute_pano_poses.exe", "insta_compute_poses.exe", "insta_data_extraction_ar.exe", "insta_data_extraction.exe")
+        foreach ($name in $pythonExeNames) {
+            $path = Join-Path $PACK_DIR $name
+            if (Test-Path $path) {
+                Write-Host "    - $name" -ForegroundColor Gray
+            }
+        }
+    }
+
     Write-Host ""
 }
 
