@@ -198,6 +198,7 @@ void KD_TREE<PointType>::start_thread()
     pthread_mutex_init(&points_deleted_rebuild_mutex_lock, NULL);
     pthread_mutex_init(&working_flag_mutex, NULL);
     pthread_mutex_init(&search_flag_mutex, NULL);
+    rebuild_thread_running = true;
     pthread_create(&rebuild_thread, NULL, multi_thread_ptr, (void *)this);
     printf("Multi thread started \n");
 }
@@ -208,8 +209,10 @@ void KD_TREE<PointType>::stop_thread()
     pthread_mutex_lock(&termination_flag_mutex_lock);
     termination_flag = true;
     pthread_mutex_unlock(&termination_flag_mutex_lock);
-    if (rebuild_thread)
+    if (rebuild_thread_running) {
         pthread_join(rebuild_thread, NULL);
+        rebuild_thread_running = false;
+    }
     pthread_mutex_destroy(&termination_flag_mutex_lock);
     pthread_mutex_destroy(&rebuild_logger_mutex_lock);
     pthread_mutex_destroy(&rebuild_ptr_mutex_lock);

@@ -5,11 +5,19 @@
 #include <Eigen/Eigen>
 #include <pcl/point_types.h>
 #include <pcl/point_cloud.h>
-#include <fast_lio/Pose6D.h>
 #include <sensor_msgs/Imu.h>
-#include <nav_msgs/Odometry.h>
-#include <tf/transform_broadcaster.h>
-#include <eigen_conversions/eigen_msg.h>
+
+// Pose6D definition (replaces ROS-generated fast_lio/Pose6D message)
+namespace fast_lio {
+struct Pose6D {
+  double offset_time;
+  double acc[3];
+  double gyr[3];
+  double vel[3];
+  double pos[3];
+  double rot[9];
+};
+}  // namespace fast_lio
 
 using namespace std;
 using namespace Eigen;

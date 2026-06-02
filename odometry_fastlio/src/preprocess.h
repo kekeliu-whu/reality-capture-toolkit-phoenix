@@ -2,12 +2,13 @@
 #define PREPROCESS_H
 
 
-#include <ros/ros.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <livox_ros_driver/CustomMsg.h>
 
 using namespace std;
+
+typedef unsigned int uint;
 
 #define IS_VALID(a)  ((abs(a)>1e8) ? true : false)
 
@@ -103,7 +104,6 @@ class Preprocess
   int lidar_type, point_filter_num, N_SCANS, SCAN_RATE, time_unit;
   double blind;
   bool feature_enabled, given_offset_time;
-  ros::Publisher pub_full, pub_surf, pub_corn;
     
 
   private:

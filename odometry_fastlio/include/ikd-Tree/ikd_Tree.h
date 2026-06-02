@@ -4,7 +4,13 @@
 #include <pthread.h>
 #include <chrono>
 #include <time.h>
+#ifdef _WIN32
+#include <io.h>
+#include <windows.h>
+#define usleep(us) Sleep((us) / 1000)
+#else
 #include <unistd.h>
+#endif
 #include <math.h>
 #include <algorithm>
 #include <memory.h>
@@ -258,6 +264,7 @@ private:
     // Multi-thread Tree Rebuild
     bool termination_flag = false;
     bool rebuild_flag = false;
+    bool rebuild_thread_running = false;
     pthread_t rebuild_thread;
     pthread_mutex_t termination_flag_mutex_lock, rebuild_ptr_mutex_lock, working_flag_mutex, search_flag_mutex;
     pthread_mutex_t rebuild_logger_mutex_lock, points_deleted_rebuild_mutex_lock;
