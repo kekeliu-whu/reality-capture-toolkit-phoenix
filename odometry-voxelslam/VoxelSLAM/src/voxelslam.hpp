@@ -7,10 +7,7 @@
 #include "loop_refine.hpp"
 #include <mutex>
 #include <Eigen/Eigenvalues>
-#include <tf/transform_broadcaster.h>
-#include <visualization_msgs/MarkerArray.h>
 #include <malloc.h>
-#include <geometry_msgs/PoseArray.h>
 #include <pcl/kdtree/kdtree_flann.h>
 #include <malloc.h>
 #include <gtsam/inference/Symbol.h>
@@ -21,23 +18,86 @@
 #include <Eigen/Sparse>
 #include <Eigen/SparseQR>
 #include "BTC.h"
+#include <rosbag/bag.h>
+#include <rosbag/view.h>
+#include <yaml-cpp/yaml.h>
+#include <chrono>
 
 using namespace std;
 
-ros::Publisher pub_scan, pub_cmap, pub_init, pub_pmap;
-ros::Publisher pub_test, pub_prev_path, pub_curr_path;
-ros::Subscriber sub_imu, sub_pcl;
+// ===== Config struct (replaces ros::NodeHandle + ros::param) =====
+struct VoxelConfig {
+  // General
+  string lid_topic = "/livox/lidar";
+  string imu_topic = "/livox/imu";
+  string save_path = "/home/rick/catkin_ws/data/save_maps/";
+  string bagname = "bag_full";
+  int lidar_type = 0;
+  double blind = 0.5;
+  int point_filter_num = 3;
+  vector<double> extrinsic_tran = {-0.011, -0.02329, 0.04412};
+  vector<double> extrinsic_rota = {1,0,0, 0,1,0, 0,0,1};
+  int is_save_map = 1;
+  string previous_map = "";
 
+  // Odometry
+  double odom_cov_gyr = 0.1;
+  double odom_cov_acc = 1.0;
+  double odom_rdw_gyr = 0.0001;
+  double odom_rdw_acc = 0.0001;
+  double down_size = 0.1;
+  double dept_err = 0.02;
+  double beam_err = 0.05;
+  double voxel_size = 1.0;
+  double min_eigen_value = 0.0025;
+  int degrade_bound = 10;
+  int point_notime = 0;
+
+  // LocalBA
+  int win_size = 10;
+  int max_layer = 2;
+  double lba_cov_gyr = 0.01;
+  double lba_cov_acc = 1.0;
+  double lba_rdw_gyr = 0.0001;
+  double lba_rdw_acc = 0.0001;
+  int min_ba_point = 1;
+  vector<double> plane_eigen_value_thre = {4.0, 4.0, 4.0, 4.0};
+  double imu_coef = 0.0001;
+  int thread_num = 5;
+
+  // Loop
+  double jud_default = 0.5;
+  double icp_eigval = 10.0;
+  double ratio_drift = 0.01;
+  int curr_halt = 10;
+  int prev_halt = 10;
+  int acsize = 2;
+  int mgsize = 2;
+  int isHighFly = 0;
+
+  // GBA
+  double gba_voxel_size = 2.0;
+  double gba_min_eigen_value = 0.01;
+  vector<double> gba_eigen_value_array = {4.0, 4.0, 4.0, 4.0};
+  int total_max_iter = 6;
+
+  void loadFromYAML(const string &yaml_path);
+};
+
+// ===== Offline bag processing (streaming) =====
+bool offline_mode = false;
+string offline_bag_path;
+rosbag::Bag *offline_bag = nullptr;
+bool offline_eof = false;
+size_t offline_lidar_count = 0;
+
+void open_bag_offline(const string &bag_path);
+void close_bag_offline();
+bool offline_spin_once();
+
+// Publishers removed (no ROS pub/sub). All pub_pl_func calls become no-ops.
 template <typename T>
-void pub_pl_func(T &pl, ros::Publisher &pub)
-{
-  pl.height = 1; pl.width = pl.size();
-  sensor_msgs::PointCloud2 output;
-  pcl::toROSMsg(pl, output);
-  output.header.frame_id = "camera_init";
-  output.header.stamp = ros::Time::now();
-  pub.publish(output);
-}
+void pub_pl_func(T &pl, int) { /* no-op: offline mode, no ROS publishing */ }
 
 mutex mBuf;
 Features feat;
@@ -102,6 +162,7 @@ void pcl_handler(T &msg)
   mBuf.unlock();
 }
 
+static int g_sync_cnt = 0;
 bool sync_packages(pcl::PointCloud<PointType>::Ptr &pl_ptr, deque<sensor_msgs::Imu::Ptr> &imus, IMUEKF &p_imu)
 {
   static bool pl_ready = false;
@@ -138,7 +199,7 @@ bool sync_packages(pcl::PointCloud<PointType>::Ptr &pl_ptr, deque<sensor_msgs::I
 
   mBuf.lock();
   double imu_time = imu_buf.front()->header.stamp.toSec();
-  while((!imu_buf.empty()) && (imu_time < p_imu.pcl_end_time)) 
+  while((!imu_buf.empty()) && (imu_time < p_imu.pcl_end_time))
   {
     imu_time = imu_buf.front()->header.stamp.toSec();
     if(imu_time > p_imu.pcl_end_time) break;
@@ -153,6 +214,10 @@ bool sync_packages(pcl::PointCloud<PointType>::Ptr &pl_ptr, deque<sensor_msgs::I
   }
 
   pl_ready = false;
+
+  g_sync_cnt++;
+  if(g_sync_cnt % 500 == 0)
+    printf("[SYNC] %d packages synced, imus=%zu pcl_buf=%zu\n", g_sync_cnt, imus.size(), pcl_buf.size());
 
   if(imus.size() > 4)
     return true;
@@ -278,7 +343,7 @@ double get_memory()
   return mem / (1048576);
 }
 
-void icp_check(pcl::PointCloud<PointType> &pl_src, pcl::PointCloud<PointType> &pl_tar, ros::Publisher &pub_src, ros::Publisher &pub_tar, pair<Eigen::Vector3d, Eigen::Matrix3d> &loop_transform, IMUST &xx)
+void icp_check(pcl::PointCloud<PointType> &pl_src, pcl::PointCloud<PointType> &pl_tar, int pub_src, int pub_tar, pair<Eigen::Vector3d, Eigen::Matrix3d> &loop_transform, IMUST &xx)
 {
   pcl::PointCloud<PointType> pl1, pl2;
   for(PointType ap: pl_src.points)

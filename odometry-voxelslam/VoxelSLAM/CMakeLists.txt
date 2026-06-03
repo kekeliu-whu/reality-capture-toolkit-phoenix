@@ -15,21 +15,22 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14 -pthread -std=c++0x -std=c++14 -fexceptions")
 
 find_package(catkin REQUIRED COMPONENTS
-  roscpp
-  rospy
-  std_msgs
   pcl_conversions
-  pcl_ros
-  livox_ros_driver
+  livox_ros_driver2
+  sensor_msgs
+  rosbag
 )
 
 find_package(Eigen3 REQUIRED)
 find_package(PCL REQUIRED)
-find_package(GTSAM REQUIRED QUIET)
+# GTSAM cmake config has broken CppUnitLite dependency - find manually
+set(GTSAM_INCLUDE_DIR "/usr/include")
+find_library(GTSAM_LIBRARY gtsam PATHS /usr/lib/x86_64-linux-gnu REQUIRED)
+message(STATUS "GTSAM manually configured: ${GTSAM_LIBRARY}")
 # find_package(Ceres REQUIRED)
 
 catkin_package(
-  CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs 
+  CATKIN_DEPENDS sensor_msgs pcl_conversions livox_ros_driver2 rosbag
   DEPENDS EIGEN3 PCL GTSAM
   INCLUDE_DIRS
 )
@@ -43,7 +44,7 @@ include_directories(
 )
 
 add_executable(voxelslam src/voxelslam.cpp src/BTC.cpp)
-target_link_libraries(voxelslam ${catkin_LIBRARIES} ${PCL_LIBRARIES} gtsam)
+target_link_libraries(voxelslam ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${GTSAM_LIBRARY} yaml-cpp)
 
 
 

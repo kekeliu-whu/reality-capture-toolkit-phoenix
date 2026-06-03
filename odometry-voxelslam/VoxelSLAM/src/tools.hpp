@@ -2,6 +2,14 @@
 #define TOOLS_HPP
 
 #include <Eigen/Core>
+#include <chrono>
+
+// Time helper (replaces ros::Time::now())
+inline double now_sec() {
+  static auto start = std::chrono::steady_clock::now();
+  auto now = std::chrono::steady_clock::now();
+  return std::chrono::duration<double>(now - start).count();
+}
 #include <unordered_map>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
