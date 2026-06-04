@@ -63,8 +63,8 @@
 #include "sophus/se3.hpp"
 #include "voxel_map_util.h"
 
-DEFINE_string(project_dirname, "Z:/rick/dataset/lianhuacheng-s20/2026-04-20_11-11-32_PointCloud/output", "Path to the IMU data file");
-DEFINE_string(output_dir, "Z:/rick/dataset/lianhuacheng-s20/2026-04-20_11-11-32_PointCloud/output", "Directory to save output trajectory");
+DEFINE_string(project_dirname, "D:/Users/rick/Desktop/debug-slam/raw", "Path to the IMU data file");
+DEFINE_string(output_dir, "D:/Users/rick/Desktop/debug-slam/raw", "Directory to save output trajectory");
 
 /*** Time Log Variables ***/
 bool runtime_pos_log = false, extrinsic_est_en = true;
@@ -682,23 +682,30 @@ int main(int argc, char **argv) {
 
         // Write low-frequency pose (one per LiDAR scan)
         {
+          Eigen::Quaterniond rot = g_state_point.rot * g_state_point.offset_R_L_I;
+          Eigen::Vector3d    pos = g_state_point.rot.toRotationMatrix() * g_state_point.offset_T_L_I + g_state_point.pos;
+
           auto pose_msg = traj_dat.add_pose_msgs();
           pose_msg->set_timestamp(Measures.lidar_end_time);
-          Eigen::Quaterniond q(g_state_point.rot.toRotationMatrix());
-          pose_msg->set_tx(g_state_point.pos.x());
-          pose_msg->set_ty(g_state_point.pos.y());
-          pose_msg->set_tz(g_state_point.pos.z());
-          pose_msg->set_rx(q.x());
-          pose_msg->set_ry(q.y());
-          pose_msg->set_rz(q.z());
-          pose_msg->set_rw(q.w());
+          pose_msg->set_tx(pos.x());
+          pose_msg->set_ty(pos.y());
+          pose_msg->set_tz(pos.z());
+          pose_msg->set_rx(rot.x());
+          pose_msg->set_ry(rot.y());
+          pose_msg->set_rz(rot.z());
+          pose_msg->set_rw(rot.w());
         }
 
-        auto imu_poses = p_imu->IMUpose;
-        if (!imu_poses.empty()) {
-          CorrectImuPoses(Measures.lidar_end_time - last_timestamp, state_predict, g_state_point, imu_poses);
-
-          SaveTraj(fp_traj, last_timestamp, g_state_point.offset_R_L_I, g_state_point.offset_T_L_I, imu_poses);
+        // Write low-frequency pose to traj.txt (one per LiDAR scan)
+        {
+          Eigen::Quaterniond rot = g_state_point.rot * g_state_point.offset_R_L_I;
+          Eigen::Vector3d pos = g_state_point.rot.toRotationMatrix() * g_state_point.offset_T_L_I + g_state_point.pos;
+          const Eigen::Vector3d rpy =
+              safeQuaternionToRPY(Eigen::Vector4d(rot.x(), rot.y(), rot.z(), rot.w()));
+          fp_traj << fmt::format("{:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f}",
+                                 pos(0), pos(1), pos(2), rpy.x(), rpy.y(), rpy.z(), rot.x(), rot.y(), rot.z(), rot.w(),
+                                 Measures.lidar_end_time)
+                  << std::endl;
         }
         std::cout << "Progress " << lidar_reader.getProgress() << "%" << std::endl;
       }

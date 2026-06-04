@@ -4,10 +4,12 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
 #include <vector>
 
 #include <ceres/ceres.h>
 #include <pcl/kdtree/kdtree.h>
+#include <pcl/io/pcd_io.h>
 #include <pcl/registration/gicp.h>
 #include <spdlog/spdlog.h>
 
@@ -137,7 +139,8 @@ bool MatchGICP(pcl::PointCloud<pcl::PointXYZI>::Ptr &target,
                Sophus::SE3d &T_source_to_target,
                double gicp_fitness_score_threshold,
                int gicp_max_iterations,
-               double gicp_transform_epsilon) {
+               double gicp_transform_epsilon,
+               pcl::PointCloud<pcl::PointXYZI>::Ptr aligned_source_out = nullptr) {
   pcl::GeneralizedIterativeClosestPoint<pcl::PointXYZI, pcl::PointXYZI> gicp;
   if (!source.get()) {
     spdlog::error("Check failed");
@@ -158,6 +161,10 @@ bool MatchGICP(pcl::PointCloud<pcl::PointXYZI>::Ptr &target,
   const Eigen::Matrix4d final_transform =
       gicp.getFinalTransformation().cast<double>();
   T_source_to_target = Sophus::SE3d::fitToSE3(final_transform);
+
+  if (aligned_source_out) {
+    *aligned_source_out = aligned_source;
+  }
 
   double score = CalcFitnessScore(target, source, T_source_to_target, 2.0);
   if (score < gicp_fitness_score_threshold) {
@@ -322,13 +329,60 @@ void TryAddBTCConstraintForFrame(
   const Eigen::Vector3d &t_btc = loop_transform.first;
   const Eigen::Matrix3d &R_btc = loop_transform.second;
   Sophus::SE3d T_current_to_matched(R_btc, t_btc);
+  // Save BTC rough transform before GICP overwrites it
+  const Sophus::SE3d T_btc_init = T_current_to_matched;
+
+  pcl::PointCloud<pcl::PointXYZI>::Ptr aligned_source(new pcl::PointCloud<pcl::PointXYZI>);
   const bool gicp_ok = MatchGICP(
       submaps[matched_id].cloud,
       submaps[frame_id].cloud,
       T_current_to_matched,
       config.gicp_fitness_score_threshold(),
       config.gicp_max_iterations(),
-      config.gicp_transform_epsilon());
+      config.gicp_transform_epsilon(),
+      aligned_source);
+
+  if (gicp_ok) {
+    // Compute: original trajectory relative pose vs GICP refined pose
+    const Sophus::SE3d T_original = submaps[matched_id].pose->inverse() * (*submaps[frame_id].pose);
+    // T_diff = T_original * T_gicp^{-1}: error of original pose relative to GICP
+    const Sophus::SE3d T_diff = T_original * T_current_to_matched.inverse();
+    const Eigen::Vector3d dt = T_diff.translation();
+    const double dr_deg = Eigen::AngleAxisd(T_diff.rotationMatrix()).angle() * 180.0 / M_PI;
+    spdlog::info(
+        "Loop edge submap {:4d} -> {:<4d} | "
+        "t_orig=({:+7.3f},{:+7.3f},{:+7.3f}) L={:6.2f}m | "
+        "t_gicp=({:+7.3f},{:+7.3f},{:+7.3f}) L={:6.2f}m | "
+        "dt_err=({:+6.1f},{:+6.1f},{:+6.1f})mm |d|={:6.1f}mm dr_err={:6.3f}deg | "
+        "score={:.3f} fitness={:.4f}",
+        frame_id, matched_id,
+        T_original.translation().x(), T_original.translation().y(), T_original.translation().z(),
+        T_original.translation().norm(),
+        T_current_to_matched.translation().x(), T_current_to_matched.translation().y(), T_current_to_matched.translation().z(),
+        T_current_to_matched.translation().norm(),
+        dt.x() * 1000.0, dt.y() * 1000.0, dt.z() * 1000.0, dt.norm() * 1000.0, dr_deg,
+        loop_result.second,
+        CalcFitnessScore(submaps[matched_id].cloud, submaps[frame_id].cloud, T_current_to_matched, 2.0));
+
+    // Save debug clouds for accepted loop closures only
+    const std::string debug_dir = GetEnvString("PGO_GICP_DEBUG_DIR");
+    if (!debug_dir.empty()) {
+      std::string pair_dir = fmt::format("{}/submap_{:04d}_to_{:04d}", debug_dir, frame_id, matched_id);
+      std::filesystem::create_directories(pair_dir);
+      // 1. s1 (target/matched submap) local point cloud
+      pcl::io::savePCDFileBinary(pair_dir + "/cloud1_target.pcd", *submaps[matched_id].cloud);
+      // 2. s2 transformed to s1 by original trajectory pose
+      pcl::PointCloud<pcl::PointXYZI> source_original;
+      pcl::transformPointCloud(*submaps[frame_id].cloud, source_original, T_original.matrix().cast<float>());
+      pcl::io::savePCDFileBinary(pair_dir + "/cloud2_source_original_pose.pcd", source_original);
+      // 3. s2 transformed to s1 by BTC rough pose
+      pcl::PointCloud<pcl::PointXYZI> source_btc;
+      pcl::transformPointCloud(*submaps[frame_id].cloud, source_btc, T_btc_init.matrix().cast<float>());
+      pcl::io::savePCDFileBinary(pair_dir + "/cloud3_source_btc.pcd", source_btc);
+      // 4. s2 transformed to s1 by GICP refined pose
+      pcl::io::savePCDFileBinary(pair_dir + "/cloud4_source_gicp.pcd", *aligned_source);
+    }
+  }
   if (!gicp_ok) {
     ++stats.matches_rejected_by_gicp;
     spdlog::info("BTC match {}<->{} rejected by GICP refinement",
@@ -339,7 +393,7 @@ void TryAddBTCConstraintForFrame(
   problem.AddResidualBlock(
       PoseGraphEdgeFactor::Create(T_current_to_matched.inverse(),
                                   btc_sqrt_information.toDenseMatrix()),
-      nullptr,
+      new ceres::HuberLoss(1.0),
       submaps[frame_id].pose->data(),
       submaps[matched_id].pose->data());
 
