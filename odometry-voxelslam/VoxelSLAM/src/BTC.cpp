@@ -280,8 +280,8 @@ void STDescManager::init_voxel_map(
     const pcl::PointCloud<pcl::PointXYZI>::Ptr &input_cloud,
     std::unordered_map<BTCVOXEL_LOC, BTCOctoTree *> &voxel_map) 
 {
-  uint plsize = input_cloud->size();
-  for (uint i = 0; i < plsize; i++) {
+  unsigned int plsize = input_cloud->size();
+  for (unsigned int i = 0; i < plsize; i++) {
     Eigen::Vector3d p_c(input_cloud->points[i].x, input_cloud->points[i].y,
                         input_cloud->points[i].z);
     double loc_xyz[3];

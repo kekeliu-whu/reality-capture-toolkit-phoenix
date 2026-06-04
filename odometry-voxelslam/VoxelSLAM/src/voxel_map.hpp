@@ -343,7 +343,7 @@ public:
     int g_size = voxhess.plvec_voxels.size();
     if(g_size < thd_num)
     {
-      printf("Too Less Voxel"); exit(0);
+      printf("Too Less Voxel\n"); return 0.0;
     }
     vector<thread*> mthreads(thd_num, nullptr);
     double part = 1.0 * g_size / thd_num;
@@ -1209,8 +1209,8 @@ public:
 
       if(opt_state >= int(vox_opt.pcr_adds.size()))
       {
-        printf("Error: opt_state: %d %zu\n", opt_state, vox_opt.pcr_adds.size());
-        exit(0);
+        printf("Error: opt_state: %d %zu — skipping\n", opt_state, vox_opt.pcr_adds.size());
+        return;
       }
 
       if(opt_state >= 0)

@@ -1,4 +1,5 @@
 #pragma once
+#include "platform_compat.hpp"
 
 #include "tools.hpp"
 #include "ekf_imu.hpp"
@@ -7,9 +8,7 @@
 #include "loop_refine.hpp"
 #include <mutex>
 #include <Eigen/Eigenvalues>
-#include <malloc.h>
 #include <pcl/kdtree/kdtree_flann.h>
-#include <malloc.h>
 #include <gtsam/inference/Symbol.h>
 #include <gtsam/navigation/ImuFactor.h>
 #include <gtsam/navigation/CombinedImuFactor.h>
@@ -321,26 +320,7 @@ void read_lidarstate(string filename, vector<ScanPose*> &bl_tem)
 
 double get_memory()
 {
-  ifstream infile("/proc/self/status");
-  double mem = -1;
-  string lineStr, str;
-  while(getline(infile, lineStr))
-  {
-    stringstream ss(lineStr);
-    bool is_find = false;
-    while(ss >> str)
-    {
-      if(str == "VmRSS:")
-      {
-        is_find = true; continue;
-      }
-
-      if(is_find) mem = stod(str);
-      break;
-    }
-    if(is_find) break;
-  }
-  return mem / (1048576);
+  return platform_get_memory_gb();
 }
 
 void icp_check(pcl::PointCloud<PointType> &pl_src, pcl::PointCloud<PointType> &pl_tar, int pub_src, int pub_tar, pair<Eigen::Vector3d, Eigen::Matrix3d> &loop_transform, IMUST &xx)

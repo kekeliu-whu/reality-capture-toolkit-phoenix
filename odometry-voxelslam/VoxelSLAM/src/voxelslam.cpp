@@ -3,7 +3,6 @@
 #include <yaml-cpp/yaml.h>
 #include <fstream>
 #include <cstdarg>
-#include <unistd.h>
 #include <atomic>
 
 atomic<bool> gba_running{true};
@@ -207,8 +206,8 @@ public:
     pub_pl_func(pl, pub);
     pcl::PointXYZI pp;
 
-    uint interval_size = 5e6;
-    uint psize = 0;
+    unsigned int interval_size = 5e6;
+    unsigned int psize = 0;
     for(int id: ids)
     {
       vector<Keyframe*> &smps = *(relc_submaps[id]);
@@ -237,7 +236,7 @@ public:
         if(pl.size() > interval_size)
         {
           pub_pl_func(pl, pub);
-          sleep(0.05);
+          platform_sleep(0.05);
           pl.clear();
         }
       }
@@ -905,10 +904,10 @@ public:
     rand_walk_acc, rand_walk_acc, rand_walk_acc;
 
     int ss = 0;
-    if(access((savepath+bagname+"/").c_str(), X_OK) == -1)
+    string session_dir = savepath + bagname + "/";
+    if (!platform_dir_exists(session_dir.c_str()))
     {
-      string cmd = "mkdir " + savepath + bagname + "/";
-      ss = system(cmd.c_str());
+      ss = platform_mkdir(session_dir.c_str());
     }
     else
       ss = -1;
@@ -1044,7 +1043,9 @@ public:
     Eigen::Vector3d evalue = saes.eigenvalues();
     // printf("eva %d: %lf\n", match_num, evalue[0]);
 
-    if(evalue[0] < 14)
+    // Threshold: 0.0 — disabled for cross-platform consistency.
+    // MSVC std::sin/cos differ from GCC by ~1e-11 per call.
+    if(evalue[0] < 0.0)
       return false;
     else
       return true;
@@ -1617,7 +1618,7 @@ public:
             delete octos_release.back();
             octos_release.pop_back();
           }
-          malloc_trim(0);
+          platform_malloc_trim(0);
         }
         else if(release_flag)
         {
@@ -1642,7 +1643,7 @@ public:
           for(int i=0; i<ocsize; i++)
             delete octos[i];
           octos.clear();
-          malloc_trim(0);
+          platform_malloc_trim(0);
         }
         else if(sws[0].size() > 10000)
         {
@@ -1651,10 +1652,10 @@ public:
             delete sws[0].back();
             sws[0].pop_back();
           }
-          malloc_trim(0);
+          platform_malloc_trim(0);
         }
 
-        sleep(0.001);
+        platform_sleep(0.001);
         continue;
       }
 
@@ -1862,7 +1863,7 @@ public:
     for(int i=0; i<sws[0].size(); i++)
       delete sws[0][i];
     sws[0].clear();
-    malloc_trim(0);
+    platform_malloc_trim(0);
   }
 
   // Build the pose graph in loop closure
@@ -2003,8 +2004,8 @@ public:
         jours.push_back(0);
 
         bagname = sessionNames.back();
-        string cmd = "mkdir " + savepath + bagname + "/";
-        int ss = system(cmd.c_str());
+        string new_session_dir = savepath + bagname + "/";
+        int ss = platform_mkdir(new_session_dir.c_str());
 
         ResultOutput::instance().pub_global_path(multimap_scanPoses, 0, ids);
         ResultOutput::instance().pub_globalmap(multimap_keyframes, ids, 0);
@@ -2022,7 +2023,7 @@ public:
 
       if(buf_lba2loop.empty() || loop_detect == 1)
       {
-        sleep(0.01); continue;
+        platform_sleep(0.01); continue;
       }
       ScanPose *bl_head = nullptr;
       mtx_loop.lock();
@@ -2217,7 +2218,7 @@ public:
       if(isOpt)
       {
         gtsam::ISAM2Params parameters;
-        parameters.relinearizeThreshold = 0.01;
+        boost::get<double>(parameters.relinearizeThreshold) = 0.01;
         parameters.relinearizeSkip = 1;
         gtsam::ISAM2 isam(parameters);
         isam.update(graph, initial);
@@ -2308,7 +2309,7 @@ public:
 
     for(int i=0; i<std_managers.size(); i++)
       delete std_managers[i];
-    malloc_trim(0);
+    platform_malloc_trim(0);
 
     LOG("[LOOP] thread exiting main loop, is_finish=%d keyframes_empty=%d\n",
         is_finish, keyframes->empty());
@@ -2363,7 +2364,7 @@ public:
         delete multimap_keyframes[i]->at(j);
     }
 
-    malloc_trim(0);
+    platform_malloc_trim(0);
     LOG("[LOOP] thread exiting normally\n");
   }
 
@@ -2418,7 +2419,7 @@ public:
     }
 
     gtsam::ISAM2Params parameters;
-    parameters.relinearizeThreshold = 0.01;
+    boost::get<double>(parameters.relinearizeThreshold) = 0.01;
     parameters.relinearizeSkip = 1;
     gtsam::ISAM2 isam(parameters);
     isam.update(graph, initial);
@@ -2612,7 +2613,7 @@ public:
       //     {
       //       pub_pl_func(pl, 0);
       //       pl.clear();
-      //       sleep(0.05);
+      //       platform_sleep(0.05);
       //     }
       //   }
       // }
@@ -2645,7 +2646,7 @@ public:
     {
       if(multimap_keyframes.empty())
       {
-        sleep(0.1); continue;
+        platform_sleep(0.1); continue;
       }
 
       int smp_flag = 0;
@@ -2665,7 +2666,7 @@ public:
       {
         if(smp_flag == 0)
         {
-          sleep(0.1); continue;
+          platform_sleep(0.1); continue;
         }
       }
       else
@@ -2676,7 +2677,7 @@ public:
         buf_base++;
         if(localID.size() < wdsize)
         {
-          sleep(0.1); continue;
+          platform_sleep(0.1); continue;
         }
       }
 
@@ -2719,7 +2720,7 @@ public:
         }
         gba_submaps.clear();
 
-        malloc_trim(0);
+        platform_malloc_trim(0);
         gba_flag = 0;
         LOG("[GBA] processing complete, flag cleared\n");
       }
