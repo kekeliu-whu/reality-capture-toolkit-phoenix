@@ -6,3 +6,4 @@ migration/scripts/proto/
 Voxel-SLAM-main
 *.pyc
 .worktrees/
+src/lightglue/
