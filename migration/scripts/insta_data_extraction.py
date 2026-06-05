@@ -479,10 +479,10 @@ def main() -> int:
     telemetry_record = tp.telemetry()[0]
 
     # save tp.telemetry() to JSON for debugging
-    telemetry_json_path = os.path.join(output_directory, "telemetry.json")
-    with open(telemetry_json_path, "w", encoding="utf-8") as f:
-        json.dump(tp.telemetry(), f, indent=2)
-    print(f"[OK] Telemetry data saved to {telemetry_json_path}")
+    # telemetry_json_path = os.path.join(output_directory, "telemetry.json")
+    # with open(telemetry_json_path, "w", encoding="utf-8") as f:
+    #     json.dump(tp.telemetry(), f, indent=2)
+    # print(f"[OK] Telemetry data saved to {telemetry_json_path}")
 
     imu_msg_list = build_imu_msg_list_from_telemetry(telemetry_record)
 
