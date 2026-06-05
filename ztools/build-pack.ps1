@@ -228,6 +228,24 @@ function Copy-ExecutableFiles {
     }
 
     Write-Host "    Total copied: $copiedCount files"
+
+    # Copy ffmpeg.exe alongside the Python tools (used by insta_data_extraction)
+    Write-Status "Copying ffmpeg.exe..."
+    $ffmpeg = Get-Command "ffmpeg.exe" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+    if (-not $ffmpeg) {
+        $commonPaths = @(
+            "C:\ffmpeg\bin\ffmpeg.exe",
+            "C:\ProgramData\chocolatey\bin\ffmpeg.exe",
+            "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg.exe"
+        )
+        $ffmpeg = $commonPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+    }
+    if ($ffmpeg) {
+        Copy-Item -LiteralPath $ffmpeg -Destination (Join-Path $PACK_DIR "ffmpeg.exe") -Force -ErrorAction Stop
+        Write-Host "    Copied: ffmpeg.exe ($ffmpeg)"
+    } else {
+        Write-Host "    WARNING: ffmpeg.exe not found, please install it and add to PATH" -ForegroundColor Yellow
+    }
 }
 
 function Copy-Dependencies {
@@ -371,6 +389,10 @@ function Show-PackSummary {
     Write-Host "  Total files:     $totalFiles"
     Write-Host "  EXE files:       $exeCount"
     Write-Host "  DLL files:       $dllCount"
+    $hasFfmpeg = Test-Path (Join-Path $PACK_DIR "ffmpeg.exe")
+    if ($hasFfmpeg) {
+        Write-Host "  ffmpeg.exe:      bundled" -ForegroundColor Green
+    }
     if ($hasPythonBundle) {
         Write-Host "  Python bundle:   _internal/ ($internalFileCount files, $internalSizeMB MB)"
     }

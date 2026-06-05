@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 import telemetry_parser
 from proto.sensors_pb2 import ImuMsgList
 import math
@@ -8,8 +9,25 @@ from pathlib import Path
 import subprocess
 import json
 import argparse
+import shutil
 
 from spdlog_compat import init_spdlog_like_logger
+
+
+def _find_ffmpeg() -> str:
+    """Find ffmpeg.exe — prefer bundled copy next to this script/EXE, fall back to PATH."""
+    # When running as a PyInstaller EXE, sys.executable is the EXE itself
+    bundle_dir = os.path.dirname(sys.executable)
+    bundled = os.path.join(bundle_dir, "ffmpeg.exe")
+    if os.path.isfile(bundled):
+        return bundled
+    # Fall back to PATH
+    resolved = shutil.which("ffmpeg")
+    if resolved:
+        return resolved
+    raise FileNotFoundError(
+        "ffmpeg was not found. Place ffmpeg.exe next to the executable or ensure it is in PATH."
+    )
 
 
 LOGGER = init_spdlog_like_logger()
@@ -219,8 +237,9 @@ def extract_frames_from_video(
             temp_output = os.path.join(cam_dir, "temp_%05d.jpg")
 
             # 用ffmpeg导出所有帧
+            ffmpeg_exe = _find_ffmpeg()
             cmd = [
-                "ffmpeg",
+                ffmpeg_exe,
                 "-threads",
                 "8",
                 "-hwaccel",
