@@ -1,5 +1,5 @@
 #!/usr/bin/env pwsh
-# Comprehensive build script for XColor, Odometry-Old, and Python Tools
+# Comprehensive build script for XColor, Odometry, and Python Tools
 # Builds C++ projects and compiles Python tools to EXE
 # Usage: .\build-all.ps1 [-TestOnly]
 
@@ -38,8 +38,8 @@ $VCPKG_TOOLCHAIN_FILE = "F:/Library/vcpkg/scripts/buildsystems/vcpkg.cmake"
 $BUILD_ALL_DIR = Join-Path $PROJECT_ROOT "build-all"
 $XCOLOR_SOURCE_DIR = Join-Path $PROJECT_ROOT "xcolor"
 $XCOLOR_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-xcolor"
-$ODOMETRY_OLD_SOURCE_DIR = Join-Path $PROJECT_ROOT "odometry-old"
-$ODOMETRY_OLD_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-odometry-old"
+$ODOMETRY_SOURCE_DIR = Join-Path $PROJECT_ROOT "odometry"
+$ODOMETRY_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-odometry"
 $PGO_SOURCE_DIR = Join-Path $PROJECT_ROOT "pgo"
 $PGO_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-pgo"
 $SCRIPTS_DIR = Join-Path $PROJECT_ROOT "migration\scripts"
@@ -51,7 +51,7 @@ $PYTHON_TOOLS_DIR = Join-Path $BUILD_ALL_DIR "build-python-tools"
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Complete Build System" -ForegroundColor Cyan
 Write-Host "  * XColor" -ForegroundColor Cyan
-Write-Host "  * Odometry-Old" -ForegroundColor Cyan
+Write-Host "  * Odometry" -ForegroundColor Cyan
 Write-Host "  * Python Tools" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
@@ -71,8 +71,8 @@ if (!(Test-Path $XCOLOR_SOURCE_DIR)) {
     exit 1
 }
 
-if (!(Test-Path $ODOMETRY_OLD_SOURCE_DIR)) {
-    Write-Host "ERROR: Odometry-Old source not found at $ODOMETRY_OLD_SOURCE_DIR" -ForegroundColor Red
+if (!(Test-Path $ODOMETRY_SOURCE_DIR)) {
+    Write-Host "ERROR: Odometry source not found at $ODOMETRY_SOURCE_DIR" -ForegroundColor Red
     exit 1
 }
 
@@ -122,7 +122,7 @@ New-Item -ItemType Directory -Path $BUILD_ALL_DIR -Force | Out-Null
 Write-Host ""
 Write-Host "Project Root: $PROJECT_ROOT" -ForegroundColor Gray
 Write-Host "XColor Build: $XCOLOR_BUILD_DIR" -ForegroundColor Gray
-Write-Host "Odometry-Old Build: $ODOMETRY_OLD_BUILD_DIR" -ForegroundColor Gray
+Write-Host "Odometry Build: $ODOMETRY_BUILD_DIR" -ForegroundColor Gray
 Write-Host "PGO Build: $PGO_BUILD_DIR" -ForegroundColor Gray
 Write-Host "Python Tools: $PYTHON_TOOLS_DIR" -ForegroundColor Gray
 Write-Host ""
@@ -188,20 +188,20 @@ Write-Host "[OK] XColor build completed" -ForegroundColor Green
 Write-Host ""
 
 # ============================================================
-# Stage 2: Build Odometry-Old
+# Stage 2: Build Odometry
 # ============================================================
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "Stage 2/3: Building Odometry-Old" -ForegroundColor Cyan
+Write-Host "Stage 2/3: Building Odometry" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-if (Test-Path $ODOMETRY_OLD_BUILD_DIR) {
+if (Test-Path $ODOMETRY_BUILD_DIR) {
     Write-Host "Removing existing build directory..." -ForegroundColor Gray
-    Remove-Item -Recurse -Force $ODOMETRY_OLD_BUILD_DIR
+    Remove-Item -Recurse -Force $ODOMETRY_BUILD_DIR
 }
 
 Write-Host "Creating build directory..." -ForegroundColor Gray
-New-Item -ItemType Directory -Path $ODOMETRY_OLD_BUILD_DIR -Force | Out-Null
+New-Item -ItemType Directory -Path $ODOMETRY_BUILD_DIR -Force | Out-Null
 
 Write-Host "Configuring with CMake..." -ForegroundColor Yellow
 
@@ -209,31 +209,31 @@ Write-Host "Configuring with CMake..." -ForegroundColor Yellow
     -DCMAKE_EXPORT_COMPILE_COMMANDS:BOOL=TRUE `
     "-DCMAKE_TOOLCHAIN_FILE=$VCPKG_TOOLCHAIN_FILE" `
     --no-warn-unused-cli `
-    -S $ODOMETRY_OLD_SOURCE_DIR `
-    -B $ODOMETRY_OLD_BUILD_DIR `
+    -S $ODOMETRY_SOURCE_DIR `
+    -B $ODOMETRY_BUILD_DIR `
     -G "Visual Studio 17 2022" `
     -T "host=x64" `
     -A "x64"
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: Odometry-Old CMake configuration failed" -ForegroundColor Red
+    Write-Host "ERROR: Odometry CMake configuration failed" -ForegroundColor Red
     exit 1
 }
 
 Write-Host "Building..." -ForegroundColor Yellow
 
 & $CMAKE_EXE `
-    --build $ODOMETRY_OLD_BUILD_DIR `
+    --build $ODOMETRY_BUILD_DIR `
     --config "Release" `
     --target "ALL_BUILD" `
     -j 24
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: Odometry-Old build failed" -ForegroundColor Red
+    Write-Host "ERROR: Odometry build failed" -ForegroundColor Red
     exit 1
 }
 
-Write-Host "[OK] Odometry-Old build completed" -ForegroundColor Green
+Write-Host "[OK] Odometry build completed" -ForegroundColor Green
 Write-Host ""
 
 # ============================================================
@@ -395,8 +395,8 @@ Write-Host "[OK] XColor" -ForegroundColor Green
 Write-Host "  Location: $XCOLOR_BUILD_DIR" -ForegroundColor Gray
 Write-Host ""
 
-Write-Host "[OK] Odometry-Old" -ForegroundColor Green
-Write-Host "  Location: $ODOMETRY_OLD_BUILD_DIR" -ForegroundColor Gray
+Write-Host "[OK] Odometry" -ForegroundColor Green
+Write-Host "  Location: $ODOMETRY_BUILD_DIR" -ForegroundColor Gray
 Write-Host ""
 
 Write-Host "[OK] PGO" -ForegroundColor Green

@@ -19,7 +19,7 @@ $BUILD_ALL_DIR = Join-Path $PROJECT_ROOT "build-all"
 # Build output paths
 $XCOLOR_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-xcolor\Release"
 $XCOLOR_MIGRATION_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-xcolor\migration_build\Release"
-$ODOMETRY_OLD_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-odometry-old\Release"
+$ODOMETRY_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-odometry\Release"
 $PGO_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-pgo\Release"
 $PYTHON_TOOLS_DIR = Join-Path $BUILD_ALL_DIR "build-python-tools"
 
@@ -81,9 +81,9 @@ function Test-PrerequisitesAndBuild {
         Write-Status "XColor executables found: $xcolorExeCount"
     }
 
-    # Verify specific executable from Odometry-Old
-    Write-Status "Checking Odometry-Old executables..."
-    if (-not (Test-Path (Join-Path $ODOMETRY_OLD_BUILD_DIR "slam.exe"))) {
+    # Verify specific executable from Odometry
+    Write-Status "Checking Odometry executables..."
+    if (-not (Test-Path (Join-Path $ODOMETRY_BUILD_DIR "slam.exe"))) {
         $missing += "slam.exe not found"
     } else {
         Write-Status "slam.exe found"
@@ -115,13 +115,13 @@ function Test-PrerequisitesAndBuild {
     # Check build-all Release directories for DLL dependencies
     $xcolorDllCount = @(Get-ChildItem $XCOLOR_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue).Count
     $xcolorMigrationDllCount = @(Get-ChildItem $XCOLOR_MIGRATION_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue).Count
-    $odometryDllCount = @(Get-ChildItem $ODOMETRY_OLD_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue).Count
+    $odometryDllCount = @(Get-ChildItem $ODOMETRY_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue).Count
     $totalDllCount = $xcolorDllCount + $xcolorMigrationDllCount + $odometryDllCount
     
     if ($totalDllCount -eq 0) {
         $missing += "No DLL files found in Release directories"
     } else {
-        Write-Status "Dependency DLL files: $totalDllCount (XColor: $xcolorDllCount, XColor Migration: $xcolorMigrationDllCount, Odometry-Old: $odometryDllCount)"
+        Write-Status "Dependency DLL files: $totalDllCount (XColor: $xcolorDllCount, XColor Migration: $xcolorMigrationDllCount, Odometry: $odometryDllCount)"
     }
 
     # Check CUDA DLL files
@@ -185,7 +185,7 @@ function Copy-ExecutableFiles {
         "crashpad_handler.exe",
         # XColor Migration Build
         "convert_manifold.exe",
-        # Odometry-Old Component
+        # Odometry Component
         "slam.exe",
         # PGO Component
         "slam_post.exe",
@@ -203,7 +203,7 @@ function Copy-ExecutableFiles {
     # Search for each executable in all build directories
     $allExeFiles = Get-ChildItem $XCOLOR_BUILD_DIR -Filter "*.exe" -ErrorAction SilentlyContinue
     $allExeFiles += Get-ChildItem $XCOLOR_MIGRATION_BUILD_DIR -Filter "*.exe" -ErrorAction SilentlyContinue
-    $allExeFiles += Get-ChildItem $ODOMETRY_OLD_BUILD_DIR -Filter "*.exe" -ErrorAction SilentlyContinue
+    $allExeFiles += Get-ChildItem $ODOMETRY_BUILD_DIR -Filter "*.exe" -ErrorAction SilentlyContinue
     $allExeFiles += Get-ChildItem $PGO_BUILD_DIR -Filter "*.exe" -ErrorAction SilentlyContinue
     $allExeFiles += Get-ChildItem $PYTHON_TOOLS_DIR -Filter "*.exe" -ErrorAction SilentlyContinue
 
@@ -267,9 +267,9 @@ function Copy-Dependencies {
     }
     Write-Host "    Copied $($migrationDlls.Count) files"
 
-    Write-Status "Copying Odometry-Old Release DLL files..."
-    $odometryDlls = Get-ChildItem $ODOMETRY_OLD_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue
-    if ($odometryDlls.Count -eq 0) { Fail "No DLL files found in $ODOMETRY_OLD_BUILD_DIR" }
+    Write-Status "Copying Odometry Release DLL files..."
+    $odometryDlls = Get-ChildItem $ODOMETRY_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue
+    if ($odometryDlls.Count -eq 0) { Fail "No DLL files found in $ODOMETRY_BUILD_DIR" }
     foreach ($dll in $odometryDlls) {
         try { Copy-Item -LiteralPath $dll.FullName -Destination $PACK_DIR -Force -ErrorAction Stop } catch { Fail "Failed to copy $($dll.Name): $($_.Exception.Message)" }
     }

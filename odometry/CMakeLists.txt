@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(odometry-old)
+project(odometry)
 
 if(CMAKE_TOOLCHAIN_FILE)
     include(${CMAKE_TOOLCHAIN_FILE})
@@ -20,7 +20,7 @@ endif()
 
 add_definitions(-D_USE_MATH_DEFINES)
 add_definitions(-DGLOG_USE_GLOG_EXPORT)
-add_definitions(-DROOT_DIR="D:/ProjectX/project-3d/reality-capture-toolkit/odometry-old/")
+add_definitions(-DROOT_DIR="D:/ProjectX/project-3d/reality-capture-toolkit/odometry/")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
