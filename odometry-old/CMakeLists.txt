@@ -87,4 +87,3 @@ endfunction()
 
 add_private_tool(slam src/laser_mapping.cc src/point_cloud_utils.cc)
 add_private_tool(smooth_cloud src/smooth_cloud.cc)
-add_private_tool(colorize_cloud_general src/colorize_cloud_general.cc)
