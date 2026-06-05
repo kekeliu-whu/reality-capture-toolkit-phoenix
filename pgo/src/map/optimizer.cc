@@ -5,12 +5,13 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <thread>
 #include <vector>
 
 #include <ceres/ceres.h>
-#include <pcl/kdtree/kdtree.h>
+#include <pcl/common/transforms.h>
+#include <pcl/search/kdtree.h>
 #include <pcl/io/pcd_io.h>
-#include <pcl/registration/gicp.h>
 #include <spdlog/spdlog.h>
 
 // BTC library files are located directly in pgo/src/.
@@ -28,6 +29,151 @@
 namespace {
 
 using PointT = pcl::PointXYZI;
+
+// ---------------------------------------------------------------------------
+// Ceres point-to-plane residual
+// ---------------------------------------------------------------------------
+struct P2PlResidual {
+  P2PlResidual(const Eigen::Vector3d &src, const Eigen::Vector3d &ctr,
+               const Eigen::Vector3d &nrm)
+      : src_(src), ctr_(ctr), nrm_(nrm) {}
+
+  template <typename T>
+  bool operator()(const T *const pose, T *r) const {
+    Eigen::Map<const Sophus::SE3<T>> tf(pose);
+    r[0] = ((tf * src_.cast<T>()) - ctr_.cast<T>()).dot(nrm_.cast<T>());
+    return true;
+  }
+
+  static ceres::CostFunction *Make(const Eigen::Vector3d &s,
+                                   const Eigen::Vector3d &c,
+                                   const Eigen::Vector3d &n) {
+    return new ceres::AutoDiffCostFunction<P2PlResidual, 1, 7>(
+        new P2PlResidual(s, c, n));
+  }
+
+  Eigen::Vector3d src_, ctr_, nrm_;
+};
+
+// ---------------------------------------------------------------------------
+// PCA plane fitting: (center, normal) from 8 nearest neighbors
+// ---------------------------------------------------------------------------
+struct PlaneFit {
+  Eigen::Vector3d center{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d normal{Eigen::Vector3d::UnitZ()};
+  bool valid{false};
+
+  static PlaneFit FromPoints(const std::vector<Eigen::Vector3d> &pts) {
+    PlaneFit p;
+    if (pts.size() < 3) return p;
+    for (const auto &v : pts) p.center += v;
+    p.center /= pts.size();
+
+    Eigen::Matrix3d cov = Eigen::Matrix3d::Zero();
+    for (const auto &v : pts) {
+      Eigen::Vector3d d = v - p.center;
+      cov += d * d.transpose();
+    }
+
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eig(cov);
+    if (eig.info() != Eigen::Success) return p;
+
+    const auto &ev = eig.eigenvalues();
+    int k = (ev(1) < ev(0)) ? 1 : 0;
+    k = (ev(2) < ev(k)) ? 2 : k;
+    p.normal = eig.eigenvectors().col(k).normalized();
+    p.valid  = true;
+    return p;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Correspondence: source point → target plane (center + normal)
+// ---------------------------------------------------------------------------
+struct Corr {
+  Eigen::Vector3d src_pt, center, normal;
+};
+
+void BuildCorrespondences(
+    const pcl::PointCloud<PointT> &source,
+    const pcl::PointCloud<PointT> &target,
+    const Sophus::SE3d &T,
+    const pcl::search::KdTree<PointT> &kdtree,
+    double max_p2p_dist,
+    std::vector<Corr> &corrs) {
+  corrs.clear();
+  constexpr int K = 8;
+  std::vector<int> knn_idx(K);
+  std::vector<float> knn_d2(K);
+  int n_p2p = 0, n_invalid = 0;
+
+  for (size_t i = 0; i < source.size(); ++i) {
+    const auto &pt = source[i];
+    if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) {
+      n_invalid++; continue;
+    }
+
+    PointT pt_t;
+    Eigen::Vector3d p_src(pt.x, pt.y, pt.z);
+    Eigen::Vector3d p_tgt = T * p_src;
+    pt_t.x = static_cast<float>(p_tgt.x());
+    pt_t.y = static_cast<float>(p_tgt.y());
+    pt_t.z = static_cast<float>(p_tgt.z());
+
+    kdtree.nearestKSearch(pt_t, K, knn_idx, knn_d2);
+
+    std::vector<Eigen::Vector3d> nbrs(K);
+    for (int j = 0; j < K; ++j) {
+      const auto &np = target[knn_idx[j]];
+      nbrs[j] = {np.x, np.y, np.z};
+    }
+    PlaneFit plane = PlaneFit::FromPoints(nbrs);
+    if (!plane.valid) continue;
+
+    double d = std::abs((p_tgt - plane.center).dot(plane.normal));
+    if (d > max_p2p_dist) { n_p2p++; continue; }
+
+    corrs.push_back({p_src, plane.center, plane.normal});
+  }
+
+  spdlog::info("  p2pl corrs: {} accepted, {} rejected / {}",
+               corrs.size(), n_p2p, source.size());
+}
+
+Sophus::SE3d SolveP2Pl(const std::vector<Corr> &corrs,
+                       const Sophus::SE3d &T_init) {
+  double pose[7];
+  Eigen::Map<Eigen::Quaterniond> q(pose);
+  Eigen::Map<Eigen::Vector3d> t(pose + 4);
+  q = T_init.unit_quaternion();
+  t = T_init.translation();
+
+  ceres::Problem problem;
+  problem.AddParameterBlock(pose, 7, LocalParameterizationSE3::Create());
+
+  ceres::LossFunction *loss = new ceres::HuberLoss(0.1);
+  for (const auto &c : corrs) {
+    problem.AddResidualBlock(P2PlResidual::Make(c.src_pt, c.center, c.normal),
+                             loss, pose);
+  }
+
+  ceres::Solver::Options opts;
+  opts.linear_solver_type       = ceres::DENSE_QR;
+  opts.max_num_iterations       = 10;
+  opts.num_threads              = std::thread::hardware_concurrency();
+  opts.function_tolerance       = 1e-8;
+  opts.minimizer_progress_to_stdout = false;
+
+  ceres::Solver::Summary sum;
+  ceres::Solve(opts, &problem, &sum);
+
+  spdlog::info("  p2pl ceres: {} iters, cost {:.2f} -> {:.2f}",
+               sum.iterations.size(), sum.initial_cost, sum.final_cost);
+
+  return Sophus::SE3d(q, t);
+}
+
+// ---------------------------------------------------------------------------
 
 std::string GetEnvString(const char *name) {
   const char *value = nullptr;
@@ -138,40 +284,40 @@ bool MatchGICP(pcl::PointCloud<pcl::PointXYZI>::Ptr &target,
                pcl::PointCloud<pcl::PointXYZI>::Ptr &source,
                Sophus::SE3d &T_source_to_target,
                double gicp_fitness_score_threshold,
-               int gicp_max_iterations,
-               double gicp_transform_epsilon,
+               int /*gicp_max_iterations*/,
+               double /*gicp_transform_epsilon*/,
                pcl::PointCloud<pcl::PointXYZI>::Ptr aligned_source_out = nullptr) {
-  pcl::GeneralizedIterativeClosestPoint<pcl::PointXYZI, pcl::PointXYZI> gicp;
-  if (!source.get()) {
-    spdlog::error("Check failed");
-    exit(1);
+  if (!source || !target) {
+    spdlog::error("MatchGICP: null cloud");
+    return false;
   }
-  if (!target.get()) {
-    spdlog::error("Check failed");
-    exit(1);
+
+  pcl::search::KdTree<PointT>::Ptr kdtree(new pcl::search::KdTree<PointT>());
+  kdtree->setInputCloud(target);
+
+  constexpr double kMaxP2PlDist = 0.4;
+
+  std::vector<Corr> corrs;
+  for (int iter = 0; iter < 3; ++iter) {
+    BuildCorrespondences(*source, *target, T_source_to_target,
+                         *kdtree, kMaxP2PlDist, corrs);
+    if (corrs.size() < 50) {
+      spdlog::warn("MatchGICP: too few correspondences ({})", corrs.size());
+      return false;
+    }
+
+    Sophus::SE3d T_new = SolveP2Pl(corrs, T_source_to_target);
+    T_source_to_target  = T_new;
   }
-  gicp.setInputSource(source);
-  gicp.setInputTarget(target);
-
-  gicp.setMaximumIterations(gicp_max_iterations);
-  gicp.setTransformationEpsilon(gicp_transform_epsilon);
-
-  pcl::PointCloud<pcl::PointXYZI> aligned_source;
-  gicp.align(aligned_source, T_source_to_target.matrix().cast<float>());
-  const Eigen::Matrix4d final_transform =
-      gicp.getFinalTransformation().cast<double>();
-  T_source_to_target = Sophus::SE3d::fitToSE3(final_transform);
 
   if (aligned_source_out) {
-    *aligned_source_out = aligned_source;
+    pcl::transformPointCloud(*source, *aligned_source_out,
+                             T_source_to_target.matrix().cast<float>());
   }
 
   double score = CalcFitnessScore(target, source, T_source_to_target, 2.0);
-  if (score < gicp_fitness_score_threshold) {
-    spdlog::info("good match: {}", score);
-    return true;
-  }
-  return false;
+  spdlog::info("p2pl match score: {:.4f}", score);
+  return score < gicp_fitness_score_threshold;
 }
 
 struct BTCConstraintStats {

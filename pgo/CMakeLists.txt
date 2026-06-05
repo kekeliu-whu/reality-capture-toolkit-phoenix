@@ -26,6 +26,7 @@ find_package(PCL REQUIRED COMPONENTS common io filters registration visualizatio
 find_package(Boost CONFIG COMPONENTS program_options)
 find_package(OpenCV REQUIRED)
 find_package(OpenMP REQUIRED)
+find_package(spdlog REQUIRED)
 find_package(PDAL CONFIG REQUIRED)
 find_package(Glog REQUIRED)
 find_package(PROJ CONFIG REQUIRED)
