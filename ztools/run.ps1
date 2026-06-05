@@ -72,6 +72,7 @@ $PYTHON_TOOLS = $BUILD_PACK
 $convert_manifold_exe = Join-Path $BUILD_PACK "convert_manifold.exe"
 $insta_extraction_exe = Join-Path $PYTHON_TOOLS "insta_data_extraction.exe"
 $insta_poses_exe = Join-Path $PYTHON_TOOLS "insta_compute_poses.exe"
+$insta_pano_poses_exe = Join-Path $PYTHON_TOOLS "insta_compute_pano_poses.exe"
 $lasermapping_exe = Join-Path $NATIVE_TOOLS "slam.exe"
 $slam_post_exe = Join-Path $NATIVE_TOOLS "slam_post.exe"
 
@@ -221,23 +222,35 @@ if (Test-Path $insta_poses_exe) {
     Write-Host "[WARN] insta_compute_poses.exe not found, skipping pose computation" -ForegroundColor Yellow
 }
 
-# Summary
-Write-Host "`n" + ("=" * 60) -ForegroundColor Cyan
-Write-Host "Pipeline Complete" -ForegroundColor Green
-Write-Host "=" * 60 -ForegroundColor Cyan
-Write-Host "`nOutput directory: $outputdir" -ForegroundColor Cyan
+# Step 6: Compute panorama poses
+Write-Host "`n=== Step 6: Computing panorama poses ===" -ForegroundColor Cyan
 
-# Show file tree
-if (Test-Path $outputdir) {
-    Write-Host "`nOutput files:" -ForegroundColor Yellow
-    Get-ChildItem -Path $outputdir -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-        $indent = ("  " * ($_.FullName -replace "[^\\]" | Measure-Object -Character).Characters)
-        if ($_.PSIsContainer) {
-            Write-Host "$indent[DIR] $($_.Name)/"
+if (Test-Path $insta_pano_poses_exe) {
+    $img_pose_file = Join-Path $camera_dir "ImgPose.txt"
+    $pano_pose_output = Join-Path $outputdir "xsfm" "sparse" "pano-poses.txt"
+
+    if (Test-Path $img_pose_file) {
+        Write-Host "Using image poses: $img_pose_file" -ForegroundColor Gray
+
+        & $insta_pano_poses_exe `
+            --image-poses $img_pose_file `
+            --images-dir $camera_dir `
+            --output $pano_pose_output
+
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "[OK] Panorama poses computed: $pano_pose_output" -ForegroundColor Green
         } else {
-            $size = if ($_.Length -gt 1MB) { "$([Math]::Round($_.Length/1MB, 2)) MB" } else { "$([Math]::Round($_.Length/1KB, 2)) KB" }
-            Write-Host "$indent[FILE] $($_.Name) ($size)"
+            Write-Host "[WARN] Panorama pose computation failed" -ForegroundColor Yellow
         }
+    } else {
+        Write-Host "[WARN] ImgPose.txt not found, skipping panorama pose computation" -ForegroundColor Yellow
+        Write-Host "  Expected: $img_pose_file" -ForegroundColor Yellow
+        Write-Host "  Hint: Step 5 should have generated this file" -ForegroundColor Yellow
     }
+} else {
+    Write-Host "[WARN] insta_compute_pano_poses.exe not found, skipping panorama pose computation" -ForegroundColor Yellow
 }
 
+# Summary
+Write-Host "Pipeline Complete" -ForegroundColor Green
+Write-Host "`nOutput directory: $outputdir" -ForegroundColor Cyan
