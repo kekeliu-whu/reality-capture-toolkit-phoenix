@@ -30,18 +30,25 @@ void LoadRawScans(
     exit(1);
   }
 
+  if (traj_msg_list.pose_msgs().empty()) {
+    spdlog::error("No poses loaded from {}", traj_dat_filename);
+    exit(1);
+  }
+
   std::vector<Sophus::SE3d> poses;
+  std::vector<Eigen::Vector3d> gravities;
+  // Take the last gravity as the world gravity (assuming gravity is constant in the scene)
+  Eigen::Vector3d world_gravity = Eigen::Vector3d(
+      traj_msg_list.pose_msgs().Get(traj_msg_list.pose_msgs_size() - 1).gx(),
+      traj_msg_list.pose_msgs().Get(traj_msg_list.pose_msgs_size() - 1).gy(),
+      traj_msg_list.pose_msgs().Get(traj_msg_list.pose_msgs_size() - 1).gz());
   for (const auto &pose_msg : traj_msg_list.pose_msgs()) {
     Eigen::Quaterniond q(pose_msg.rw(), pose_msg.rx(), pose_msg.ry(), pose_msg.rz());
     Eigen::Vector3d pos(pose_msg.tx(), pose_msg.ty(), pose_msg.tz());
     poses.push_back(Sophus::SE3d(q.normalized().toRotationMatrix(), pos));
+    gravities.emplace_back(world_gravity);
   }
   spdlog::info("Loaded {} poses from {}", poses.size(), traj_dat_filename);
-
-  if (poses.empty()) {
-    spdlog::error("No poses loaded from {}", traj_dat_filename);
-    exit(1);
-  }
 
   timestamped_scan_poses.clear();
   timestamped_scan_poses.reserve(poses.size());
@@ -79,6 +86,7 @@ void LoadRawScans(
     TimestampedPose timestamped_scan_pose;
     timestamped_scan_pose.timestamp = scan_timestamp;
     *timestamped_scan_pose.pose     = pose_w;
+    timestamped_scan_pose.gravity   = gravities[scan_count];
 
     TimestampedPointCloud scan;
     scan.timestamp         = scan_timestamp;

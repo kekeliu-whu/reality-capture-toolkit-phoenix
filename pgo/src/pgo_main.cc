@@ -4,8 +4,8 @@
 
 #include "map/pgo_runner.h"
 
-DEFINE_string(project_input_path, "D:/output", "Input project path");
-DEFINE_string(project_output_path, "D:/output", "Output project path");
+DEFINE_string(project_input_path, "Z:\\rick\\dataset\\jiuzhou\\zhujiangguihuadasha-1\\output", "Input project path");
+DEFINE_string(project_output_path, "Z:\\rick\\dataset\\jiuzhou\\zhujiangguihuadasha-1\\output", "Output project path");
 DEFINE_string(config_filename, std::string(PROJECT_DIR) + "/../migration/config/pgo/pgo.json", "PGO configuration filename");
 
 int main(int argc, char **argv) {

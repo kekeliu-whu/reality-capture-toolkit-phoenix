@@ -63,8 +63,8 @@
 #include "sophus/se3.hpp"
 #include "voxel_map_util.h"
 
-DEFINE_string(project_dirname, "D:/Users/rick/Desktop/debug-slam/raw", "Path to the IMU data file");
-DEFINE_string(output_dir, "D:/Users/rick/Desktop/debug-slam/raw", "Directory to save output trajectory");
+DEFINE_string(project_dirname, "Z:\\rick\\dataset\\jiuzhou\\zhujiangguihuadasha-1\\output", "Path to the IMU data file");
+DEFINE_string(output_dir, "Z:\\rick\\dataset\\jiuzhou\\zhujiangguihuadasha-1\\output", "Directory to save output trajectory");
 
 /*** Time Log Variables ***/
 bool runtime_pos_log = false, extrinsic_est_en = true;
@@ -694,6 +694,9 @@ int main(int argc, char **argv) {
           pose_msg->set_ry(rot.y());
           pose_msg->set_rz(rot.z());
           pose_msg->set_rw(rot.w());
+          pose_msg->set_gx(g_state_point.grav[0]);
+          pose_msg->set_gy(g_state_point.grav[1]);
+          pose_msg->set_gz(g_state_point.grav[2]);
         }
 
         // Write low-frequency pose to traj.txt (one per LiDAR scan)

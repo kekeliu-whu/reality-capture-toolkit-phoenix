@@ -1,48 +1,54 @@
 #pragma once
 
 #include <ceres/ceres.h>
-#include <sophus/se3.hpp>
+#include <Eigen/Dense>
 
-class GravityAlignFactor {
- public:
-  GravityAlignFactor(const Sophus::SE3d &T_origin,
-                     const Eigen::Vector3d &gravity_vector,
-                     Eigen::Matrix<double, 3, 3> sqrt_information)
-      : T_origin_(T_origin),
-        gravity_vector_(gravity_vector.normalized()),
-        sqrt_information_(std::move(sqrt_information)) {}
+// Gravity alignment constraint as a quaternion-only rotation residual.
+//
+// Given a pose's measured gravity direction in the local lidar/body frame and
+// the reference world gravity direction, this functor rotates the measured
+// local direction into world frame and penalizes deviation from the reference.
+//
+//   residual = weight * ( R(q) * g_body - g_world )
+//
+// This actively drives roll/pitch toward zero alignment with the physical
+// gravity direction, leaving yaw unconstrained.
+struct GravityCostFunctor {
+  GravityCostFunctor(const Eigen::Vector3d& body_gravity,
+                     const Eigen::Vector3d& world_gravity,
+                     double error_deg) {
+    body_gravity_  = body_gravity.normalized();
+    world_gravity_ = world_gravity.normalized();
+    double sigma_rad = error_deg * M_PI / 180.0;
+    weight_ = 1.0 / sigma_rad;
+  }
 
+  // T_now_ptr: Sophus SE3 layout  [qx, qy, qz, qw, tx, ty, tz]  (7 elements)
   template <typename T>
-  bool operator()(const T *const T_now_ptr,
-                  T *residuals_ptr) const {
-    // Convert input pointers to Sophus::SE3 objects
-    Eigen::Map<const Sophus::SE3<T>> T_now(T_now_ptr);
+  bool operator()(const T* const T_now_ptr, T* residual) const {
+    // Quaternion from Sophus order [qx,qy,qz,qw] to Eigen order [w,x,y,z]
+    Eigen::Quaternion<T> q(T_now_ptr[3], T_now_ptr[0], T_now_ptr[1], T_now_ptr[2]);
 
-    // Compute the rotation difference between T_origin and T_now
-    Sophus::SO3<T> R_origin = T_origin_.so3().cast<T>();
-    Sophus::SO3<T> R_now    = T_now.so3();
+    Eigen::Matrix<T, 3, 1> body_g(T(body_gravity_.x()),
+                                  T(body_gravity_.y()),
+                                  T(body_gravity_.z()));
+    Eigen::Matrix<T, 3, 1> estimated_world_g = q * body_g;
 
-    // Compute the residual as the difference between the rotated gravity vector and the original gravity vector
-    Eigen::Map<Eigen::Matrix<T, 3, 1>> residuals(residuals_ptr);
-    // Here "residual * 2" means the angular misalign value
-    residuals = T(2.0) * (R_now * R_origin.inverse() * gravity_vector_.cast<T>() - gravity_vector_.cast<T>());
-
-    // Apply the square root information matrix
-    residuals = sqrt_information_.template cast<T>() * residuals;
-
+    residual[0] = T(weight_) * (estimated_world_g[0] - T(world_gravity_.x()));
+    residual[1] = T(weight_) * (estimated_world_g[1] - T(world_gravity_.y()));
+    residual[2] = T(weight_) * (estimated_world_g[2] - T(world_gravity_.z()));
     return true;
   }
 
-  static ceres::CostFunction *
-  Create(const Sophus::SE3d &T_origin,
-         const Eigen::Vector3d &gravity_vector,
-         const Eigen::Matrix<double, 3, 3> &sqrt_information) {
-    return new ceres::AutoDiffCostFunction<GravityAlignFactor, 3, 7>(
-        new GravityAlignFactor(T_origin, gravity_vector, sqrt_information));
+  static ceres::CostFunction* Create(const Eigen::Vector3d& body_gravity,
+                                     const Eigen::Vector3d& world_gravity,
+                                     double error_deg) {
+    return new ceres::AutoDiffCostFunction<GravityCostFunctor, 3, 7>(
+        new GravityCostFunctor(body_gravity, world_gravity, error_deg));
   }
 
  private:
-  Sophus::SE3d T_origin_;
-  Eigen::Vector3d gravity_vector_;
-  Eigen::Matrix<double, 3, 3> sqrt_information_;
+  Eigen::Vector3d body_gravity_;
+  Eigen::Vector3d world_gravity_;
+  double weight_;
 };

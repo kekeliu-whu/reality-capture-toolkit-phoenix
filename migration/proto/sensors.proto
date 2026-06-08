@@ -77,6 +77,9 @@ message PoseMsg {
   double ry = 6;
   double rz = 7;
   double rw = 8;
+  double gx = 9;
+  double gy = 10;
+  double gz = 11;
 }
 
 message PoseMsgList {
@@ -86,6 +89,7 @@ message PoseMsgList {
 // configuration files
 // WARNING: if you change the following message, please also change file in migration/proto/config
 message PgoConfig {
+  bool use_gravity_alignment = 15;           // disabled by default
   double odom_edge_translation_error = 1;   // meters
   double odom_edge_rotation_error = 2;      // degrees
   double loop_edge_translation_error = 3;   // meters

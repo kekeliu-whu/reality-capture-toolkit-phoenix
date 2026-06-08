@@ -13,6 +13,7 @@ using PointCloud = pcl::PointCloud<PointType>;
 struct TimestampedPose {
   double timestamp = 0.0;
   std::shared_ptr<Sophus::SE3d> pose;
+  Eigen::Vector3d gravity;
 
   TimestampedPose() : pose(std::make_shared<Sophus::SE3d>()) {}
 };

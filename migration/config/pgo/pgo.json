@@ -1,9 +1,10 @@
 {
+  "use_gravity_alignment":         false,
   "odom_edge_translation_error":     0.02,
   "odom_edge_rotation_error":        0.05,
   "loop_edge_translation_error":     0.02,
   "loop_edge_rotation_error":        0.05,
-  "gravity_align_rotation_error":    0.05,
+  "gravity_align_rotation_error":    2,
 
   "submap_duration_secs":            2.0,
   "submap_downsample_resolution":    0.2,

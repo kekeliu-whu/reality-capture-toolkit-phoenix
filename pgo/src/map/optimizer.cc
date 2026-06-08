@@ -10,8 +10,8 @@
 
 #include <ceres/ceres.h>
 #include <pcl/common/transforms.h>
-#include <pcl/search/kdtree.h>
 #include <pcl/io/pcd_io.h>
+#include <pcl/search/kdtree.h>
 #include <spdlog/spdlog.h>
 
 // BTC library files are located directly in pgo/src/.
@@ -79,10 +79,10 @@ struct PlaneFit {
     if (eig.info() != Eigen::Success) return p;
 
     const auto &ev = eig.eigenvalues();
-    int k = (ev(1) < ev(0)) ? 1 : 0;
-    k = (ev(2) < ev(k)) ? 2 : k;
-    p.normal = eig.eigenvectors().col(k).normalized();
-    p.valid  = true;
+    int k          = (ev(1) < ev(0)) ? 1 : 0;
+    k              = (ev(2) < ev(k)) ? 2 : k;
+    p.normal       = eig.eigenvectors().col(k).normalized();
+    p.valid        = true;
     return p;
   }
 };
@@ -110,28 +110,32 @@ void BuildCorrespondences(
   for (size_t i = 0; i < source.size(); ++i) {
     const auto &pt = source[i];
     if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) {
-      n_invalid++; continue;
+      n_invalid++;
+      continue;
     }
 
     PointT pt_t;
     Eigen::Vector3d p_src(pt.x, pt.y, pt.z);
     Eigen::Vector3d p_tgt = T * p_src;
-    pt_t.x = static_cast<float>(p_tgt.x());
-    pt_t.y = static_cast<float>(p_tgt.y());
-    pt_t.z = static_cast<float>(p_tgt.z());
+    pt_t.x                = static_cast<float>(p_tgt.x());
+    pt_t.y                = static_cast<float>(p_tgt.y());
+    pt_t.z                = static_cast<float>(p_tgt.z());
 
     kdtree.nearestKSearch(pt_t, K, knn_idx, knn_d2);
 
     std::vector<Eigen::Vector3d> nbrs(K);
     for (int j = 0; j < K; ++j) {
       const auto &np = target[knn_idx[j]];
-      nbrs[j] = {np.x, np.y, np.z};
+      nbrs[j]        = {np.x, np.y, np.z};
     }
     PlaneFit plane = PlaneFit::FromPoints(nbrs);
     if (!plane.valid) continue;
 
     double d = std::abs((p_tgt - plane.center).dot(plane.normal));
-    if (d > max_p2p_dist) { n_p2p++; continue; }
+    if (d > max_p2p_dist) {
+      n_p2p++;
+      continue;
+    }
 
     corrs.push_back({p_src, plane.center, plane.normal});
   }
@@ -158,10 +162,10 @@ Sophus::SE3d SolveP2Pl(const std::vector<Corr> &corrs,
   }
 
   ceres::Solver::Options opts;
-  opts.linear_solver_type       = ceres::DENSE_QR;
-  opts.max_num_iterations       = 10;
-  opts.num_threads              = std::thread::hardware_concurrency();
-  opts.function_tolerance       = 1e-8;
+  opts.linear_solver_type           = ceres::DENSE_QR;
+  opts.max_num_iterations           = 10;
+  opts.num_threads                  = std::thread::hardware_concurrency();
+  opts.function_tolerance           = 1e-8;
   opts.minimizer_progress_to_stdout = false;
 
   ceres::Solver::Summary sum;
@@ -307,7 +311,7 @@ bool MatchGICP(pcl::PointCloud<pcl::PointXYZI>::Ptr &target,
     }
 
     Sophus::SE3d T_new = SolveP2Pl(corrs, T_source_to_target);
-    T_source_to_target  = T_new;
+    T_source_to_target = T_new;
   }
 
   if (aligned_source_out) {
@@ -493,8 +497,8 @@ void TryAddBTCConstraintForFrame(
     const Sophus::SE3d T_original = submaps[matched_id].pose->inverse() * (*submaps[frame_id].pose);
     // T_diff = T_original * T_gicp^{-1}: error of original pose relative to GICP
     const Sophus::SE3d T_diff = T_original * T_current_to_matched.inverse();
-    const Eigen::Vector3d dt = T_diff.translation();
-    const double dr_deg = Eigen::AngleAxisd(T_diff.rotationMatrix()).angle() * 180.0 / M_PI;
+    const Eigen::Vector3d dt  = T_diff.translation();
+    const double dr_deg       = Eigen::AngleAxisd(T_diff.rotationMatrix()).angle() * 180.0 / M_PI;
     spdlog::info(
         "Loop edge submap {:4d} -> {:<4d} | "
         "t_orig=({:+7.3f},{:+7.3f},{:+7.3f}) L={:6.2f}m | "
@@ -564,16 +568,37 @@ void AddGravityConstraits(ceres::Problem &problem,
                           std::vector<TimestampedPose> &timestamped_scan_poses,
                           std::set<ceres::ResidualBlockId> &prior_residual_blocks,
                           const proto::PgoConfig &config) {
-  Eigen::DiagonalMatrix<double, 3> gravity_align_sqrt_information;
-  gravity_align_sqrt_information.diagonal() << 1 / (config.gravity_align_rotation_error() / 180.0 * M_PI),
-      1 / (config.gravity_align_rotation_error() / 180.0 * M_PI),
-      1 / (config.gravity_align_rotation_error() / 180.0 * M_PI);
+  if (!config.use_gravity_alignment()) {
+    spdlog::info("Gravity alignment is disabled by config");
+    return;
+  }
+
+  const Eigen::Vector3d kGravityRef(0.0, 0.0, -1.0);
+  int constraints_added = 0;
 
   for (auto &scan_pose : timestamped_scan_poses) {
-    // todo
-    auto residual_block_id = problem.AddResidualBlock(GravityAlignFactor::Create(*scan_pose.pose, Eigen::Vector3d(0, 0, -1), gravity_align_sqrt_information), nullptr, scan_pose.pose->data());
+    const double gravity_norm = scan_pose.gravity.norm();
+    if (!std::isfinite(gravity_norm) || gravity_norm <= 1e-9) {
+      spdlog::warn("Skipping gravity constraint at timestamp {:.6f}: invalid gravity ({}, {}, {})",
+                   scan_pose.timestamp,
+                   scan_pose.gravity.x(),
+                   scan_pose.gravity.y(),
+                   scan_pose.gravity.z());
+      continue;
+    }
+
+    Eigen::Vector3d g_measured_body =
+        scan_pose.pose->so3().inverse() * scan_pose.gravity / gravity_norm;
+
+    auto residual_block_id = problem.AddResidualBlock(
+        GravityCostFunctor::Create(g_measured_body, kGravityRef,
+                                   config.gravity_align_rotation_error()),
+        nullptr, scan_pose.pose->data());
     prior_residual_blocks.insert(residual_block_id);
+    ++constraints_added;
   }
+  spdlog::info("Added gravity constraints for {} poses",
+               constraints_added);
 }
 
 void AddAdjacentConstraints(
@@ -728,7 +753,7 @@ void OptimizeWithGnss(std::vector<TimestampedPose> &timestamped_scan_poses,
   // Setup optimization
   AddParameters(problem, timestamped_scan_poses);
   AddAdjacentConstraints(problem, timestamped_scan_poses, prior_residual_blocks, config);
-  // AddGravityConstraits(problem, timestamped_scan_poses, prior_residual_blocks, config);
+  AddGravityConstraits(problem, timestamped_scan_poses, prior_residual_blocks, config);
 
   // Add GNSS constraints only if enabled
   if (use_rtk && !gnss_data.empty()) {
