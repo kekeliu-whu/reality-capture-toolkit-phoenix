@@ -10,9 +10,9 @@ param(
 # Project paths
 $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PROJECT_ROOT = Split-Path -Parent $SCRIPT_DIR
-$VENV_SCRIPTS_DIR = "C:/Users/rick/miniconda3/envs/cusfm/"
+$VENV_SCRIPTS_DIR = Join-Path $PROJECT_ROOT ".venv\Scripts"
 $PYTHON_EXE = Join-Path $VENV_SCRIPTS_DIR "python.exe"
-$PYINSTALLER_EXE = Join-Path $VENV_SCRIPTS_DIR "Scripts/pyinstaller.exe"
+$PYINSTALLER_EXE = Join-Path $VENV_SCRIPTS_DIR "pyinstaller.exe"
 
 # Use project-local Python tools directly instead of relying on shell activation.
 Write-Host "Checking Python virtual environment..." -ForegroundColor Yellow
