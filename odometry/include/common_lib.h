@@ -13,6 +13,7 @@
 #define DIM_STATE (18)        // Dimension of states (Let Dim(SO(3)) = 3)
 #define INIT_COV   (1)
 #define NUM_MATCH_POINTS    (5)
+#define MIN_NUM_MATCH_POINTS (3)
 #define MAX_MEAS_DIM        (10000)
 
 #define VEC_FROM_ARRAY(v)        v[0],v[1],v[2]
@@ -194,17 +195,8 @@ inline float calc_dist(PointType p1, PointType p2){
 template<typename T>
 bool esti_plane(Eigen::Matrix<T, 4, 1> &pca_result, const PointVector &point, const T &threshold)
 {
-    Eigen::Matrix<T, NUM_MATCH_POINTS, 3> A;
-    Eigen::Matrix<T, NUM_MATCH_POINTS, 1> b;
-    A.setZero();
-    b.setOnes();
-    b *= -1.0f; // BUG: If the plane passes through the origin, the normvec solved below may be extremely large, which may cause some numerical computation problems. A better way is to first calculate center and covariance, then calculate the plane normal vector through covariance
-
-    for (int j = 0; j < NUM_MATCH_POINTS; j++)
-    {
-        A(j,0) = point[j].x;
-        A(j,1) = point[j].y;
-        A(j,2) = point[j].z;
+    if (point.size() < MIN_NUM_MATCH_POINTS) {
+        return false;
     }
 
     // Principle:
@@ -212,7 +204,38 @@ bool esti_plane(Eigen::Matrix<T, 4, 1> &pca_result, const PointVector &point, co
     // A x1 + B y1 + C z1 = -D
     // A x2 + B y2 + C z2 = -D
     // ...
-    Matrix<T, 3, 1> normvec = A.colPivHouseholderQr().solve(b);
+    Eigen::Matrix<T, 3, 1> normvec;
+    if (point.size() == NUM_MATCH_POINTS) {
+        Eigen::Matrix<T, NUM_MATCH_POINTS, 3> A;
+        Eigen::Matrix<T, NUM_MATCH_POINTS, 1> b;
+        A.setZero();
+        b.setOnes();
+        b *= -1.0f; // BUG: If the plane passes through the origin, the normvec solved below may be extremely large, which may cause some numerical computation problems. A better way is to first calculate center and covariance, then calculate the plane normal vector through covariance
+
+        for (int j = 0; j < NUM_MATCH_POINTS; j++)
+        {
+            A(j,0) = point[j].x;
+            A(j,1) = point[j].y;
+            A(j,2) = point[j].z;
+        }
+
+        normvec = A.colPivHouseholderQr().solve(b);
+    } else {
+        Eigen::Matrix<T, Eigen::Dynamic, 3> A(point.size(), 3);
+        Eigen::Matrix<T, Eigen::Dynamic, 1> b(point.size());
+        A.setZero();
+        b.setOnes();
+        b *= -1.0f;
+
+        for (int j = 0; j < point.size(); j++)
+        {
+            A(j,0) = point[j].x;
+            A(j,1) = point[j].y;
+            A(j,2) = point[j].z;
+        }
+
+        normvec = A.colPivHouseholderQr().solve(b);
+    }
 
     T n = normvec.norm();
     pca_result(0) = normvec(0) / n;
@@ -220,10 +243,10 @@ bool esti_plane(Eigen::Matrix<T, 4, 1> &pca_result, const PointVector &point, co
     pca_result(2) = normvec(2) / n;
     pca_result(3) = 1.0 / n;
 
-    for (int j = 0; j < NUM_MATCH_POINTS; j++)
+    for (const auto &p : point)
     {
         // The distance from point (x,y,z) to plane Ax+By+Cz+D=0 is abs(Ax+By+Cz+D)/sqrt(A^2+B^2+C^2)
-        if (fabs(pca_result(0) * point[j].x + pca_result(1) * point[j].y + pca_result(2) * point[j].z + pca_result(3)) > threshold)
+        if (fabs(pca_result(0) * p.x + pca_result(1) * p.y + pca_result(2) * p.z + pca_result(3)) > threshold)
         {
             return false;
         }

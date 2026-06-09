@@ -57,7 +57,6 @@ add_subdirectory(../migration migration_build)
 
 set(
   PGO_PRIVATE_SRCS
-  include/voxel_map_util.cc
   include/use-ikfom.cc
   src/preprocess.cc
   src/imu_processing.cc

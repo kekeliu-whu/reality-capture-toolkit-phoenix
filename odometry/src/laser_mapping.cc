@@ -45,6 +45,7 @@
 #include <so3_math.h>
 #include <spdlog/spdlog.h>
 #include <Eigen/Core>
+#include <Eigen/Eigenvalues>
 #include <Eigen/Geometry>
 #include <algorithm>
 #include <boost/filesystem.hpp>
@@ -52,19 +53,23 @@
 #include <csignal>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <thread>
+#include <unordered_map>
 
 #include "imu_processing.h"
+#include "ivox3d/ivox3d.h"
 #include "migration/inc_las_writer.h"
 #include "migration/logging.h"
 #include "point_cloud_utils.h"
 #include "preprocess.h"
 #include "sophus/se3.hpp"
-#include "voxel_map_util.h"
 
-DEFINE_string(project_dirname, "Z:\\rick\\dataset\\jiuzhou\\zhujiangguihuadasha-1\\output", "Path to the IMU data file");
-DEFINE_string(output_dir, "Z:\\rick\\dataset\\jiuzhou\\zhujiangguihuadasha-1\\output", "Directory to save output trajectory");
+DEFINE_string(project_dirname, "Z:\\rick\\dataset\\jiuzhou\\zhujiangguihuadasha-1\\output",
+              "Path to the IMU data file");
+DEFINE_string(output_dir, "Z:\\rick\\dataset\\jiuzhou\\zhujiangguihuadasha-1\\output",
+              "Directory to save output trajectory");
 
 /*** Time Log Variables ***/
 bool runtime_pos_log = false, extrinsic_est_en = true;
@@ -98,44 +103,86 @@ state_ikfom                                  g_state_point;
 std::shared_ptr<Preprocess> p_pre(new Preprocess());
 std::shared_ptr<ImuProcess> p_imu(new ImuProcess());
 
-/////////////////// voxel map config begin ///////////////////
-double                                   ranging_cov     = 0.05;
-double                                   angle_cov       = 0.2;
-int                                      max_points_size = 100;  // 50, 100, 200
-double                                   max_voxel_size  = 0.5;
-std::vector<int>                         layer_size{5, 5, 5, 5, 5};
-double                                   min_eigen_value    = 0.01;  // 0.005
-double                                   min_plane_likeness = 0.2;
-int                                      max_layer          = 2;
-std::unordered_map<VoxelLoc, OctoTree *> voxel_map;
+/////////////////// iVox map config begin ///////////////////
+using IVoxType = faster_lio::IVox<3, faster_lio::IVoxNodeType::DEFAULT, PointType>;
 
-// point-plane match infomation list
-std::vector<ptpl> ptpl_list;
-/////////////////// voxel map config end ///////////////////
+constexpr int             kNumMatchPoints      = 8;
+constexpr int             kMinNumMatchPoints   = 8;
+double                    ivox_grid_resolution = 0.6;
+double                    ivox_nearest_range   = 5.0;
+double                    ivox_plane_threshold = 0.1;
+double                    filter_size_map_min  = 0.1;
+double                    laser_point_cov      = 0.001;
+double                    max_point_plane_distance = 0.6;
+IVoxType::Options         ivox_options;
+std::shared_ptr<IVoxType> ivox;
+
+std::vector<PointVector>     nearest_points;
+std::vector<double>          residuals;
+std::vector<char>            point_selected_surf;
+
+struct PlaneMatch {
+  V3D center = V3D::Zero();
+  V3D normal = V3D::Zero();
+};
+
+std::vector<PlaneMatch> plane_matches;
+
+struct MapSubVoxelKey {
+  int64_t ix = 0;
+  int64_t iy = 0;
+  int64_t iz = 0;
+  int64_t sx = 0;
+  int64_t sy = 0;
+  int64_t sz = 0;
+
+  bool operator==(const MapSubVoxelKey &other) const {
+    return ix == other.ix && iy == other.iy && iz == other.iz && sx == other.sx && sy == other.sy && sz == other.sz;
+  }
+};
+
+struct MapSubVoxelKeyHash {
+  std::size_t operator()(const MapSubVoxelKey &key) const {
+    std::size_t seed         = 0;
+    auto        hash_combine = [&seed](int64_t value) {
+      seed ^= std::hash<int64_t>{}(value) + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
+    };
+    hash_combine(key.ix);
+    hash_combine(key.iy);
+    hash_combine(key.iz);
+    hash_combine(key.sx);
+    hash_combine(key.sy);
+    hash_combine(key.sz);
+    return seed;
+  }
+};
+
+std::unordered_map<MapSubVoxelKey, size_t, MapSubVoxelKeyHash> map_sub_voxel_points;
+/////////////////// iVox map config end ///////////////////
 
 /**
  * @brief 将四元数转换为欧拉角(Roll, Pitch, Yaw)
  * @param q_xyzw 四元数向量，顺序为 [qx, qy, qz, qw]
  * @return Eigen::Vector3d 顺序为 [roll, pitch, yaw]，单位弧度
  */
-Eigen::Vector3d safeQuaternionToRPY(const Eigen::Vector4d& q_xyzw) {
+Eigen::Vector3d safeQuaternionToRPY(const Eigen::Vector4d &q_xyzw) {
   Eigen::Quaterniond q(q_xyzw[3], q_xyzw[0], q_xyzw[1], q_xyzw[2]);
-  Eigen::Matrix3d m = q.toRotationMatrix();
+  Eigen::Matrix3d    m = q.toRotationMatrix();
 
   double roll;
   double pitch;
   double yaw;
 
   double sin_pitch = -m(2, 0);
-  sin_pitch = std::max(-1.0, std::min(1.0, sin_pitch));
-  pitch = std::asin(sin_pitch);
+  sin_pitch        = std::max(-1.0, std::min(1.0, sin_pitch));
+  pitch            = std::asin(sin_pitch);
 
   if (std::abs(std::cos(pitch)) > 1e-6) {
     roll = std::atan2(m(2, 1), m(2, 2));
-    yaw = std::atan2(m(1, 0), m(0, 0));
+    yaw  = std::atan2(m(1, 0), m(0, 0));
   } else {
     roll = 0.0;
-    yaw = std::atan2(-m(0, 1), m(1, 1));
+    yaw  = std::atan2(-m(0, 1), m(1, 1));
   }
 
   return Eigen::Vector3d(roll, pitch, yaw);
@@ -154,12 +201,11 @@ void   SaveTraj(std::ofstream &fp, double timestamp, const Eigen::Quaterniond &o
 
     last_pose_timestamp = timestamp + pose.offset_time;
 
-    Eigen::Quaterniond rot = Eigen::Quaterniond(pose.rot) * offset_R_L_I;
-    Eigen::Vector3d    pos = pose.rot * offset_T_L_I + pose.pos;
-  const Eigen::Vector3d rpy =
-    safeQuaternionToRPY(Eigen::Vector4d(rot.x(), rot.y(), rot.z(), rot.w()));
-    fp << fmt::format("{:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f}",
-                      pos(0), pos(1), pos(2), rpy.x(), rpy.y(), rpy.z(), rot.x(), rot.y(), rot.z(), rot.w(),
+    Eigen::Quaterniond    rot = Eigen::Quaterniond(pose.rot) * offset_R_L_I;
+    Eigen::Vector3d       pos = pose.rot * offset_T_L_I + pose.pos;
+    const Eigen::Vector3d rpy = safeQuaternionToRPY(Eigen::Vector4d(rot.x(), rot.y(), rot.z(), rot.w()));
+    fp << fmt::format("{:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f}", pos(0),
+                      pos(1), pos(2), rpy.x(), rpy.y(), rpy.z(), rot.x(), rot.y(), rot.z(), rot.w(),
                       last_pose_timestamp)
        << std::endl;
   }
@@ -167,9 +213,9 @@ void   SaveTraj(std::ofstream &fp, double timestamp, const Eigen::Quaterniond &o
 
 void CorrectImuPoses(double last_dt, const state_ikfom &state_predict, const state_ikfom &state_update,
                      std::vector<Pose6D> &last_imu_poses) {
-  Sophus::SE3d T_imu_prev_to_curr = Sophus::SE3d(state_update.rot.toRotationMatrix(), state_update.pos) *
-                                    Sophus::SE3d(state_predict.rot.toRotationMatrix(), state_predict.pos).inverse();
-  auto T_imu_prev_to_curr_se3 = T_imu_prev_to_curr.log();
+  Sophus::SE3d T_imu_prev_to_curr     = Sophus::SE3d(state_update.rot.toRotationMatrix(), state_update.pos) *
+                                        Sophus::SE3d(state_predict.rot.toRotationMatrix(), state_predict.pos).inverse();
+  auto         T_imu_prev_to_curr_se3 = T_imu_prev_to_curr.log();
   for (auto &pose : last_imu_poses) {
     double factor = pose.offset_time / last_dt;
 
@@ -327,44 +373,111 @@ bool   sync_packages(MeasureGroup &meas) {
   return true;
 }
 
-std::vector<pointWithCov> ComputePvList(const state_ikfom &state) {
-  std::vector<pointWithCov> pv_list;
-  pv_list.resize(feats_down_world->size());  // 预分配空间，避免并行竞争
-#pragma omp parallel for
-  for (int i = 0; i < feats_down_world->size(); i++) {
-    pointWithCov pv;
-    V3D          point_this = feats_down_body->points[i].getVector3fMap().cast<double>();
-    CalcBodyCov(point_this, ranging_cov, angle_cov, pv.body_cov);
+int64_t FloorToInt(double value) { return static_cast<int64_t>(std::floor(value)); }
 
-    M3D point_crossmat;
-    point_crossmat << SKEW_SYM_MATRX(point_this);
-    M3D rot_L_W = (state.rot * state.offset_R_L_I).toRotationMatrix();
-    V3D pos_L_W = state.rot.toRotationMatrix() * state.offset_T_L_I + state.pos;
+MapSubVoxelKey ComputeMapSubVoxelKey(const PointType &point) {
+  const Eigen::Vector3d p  = point.getVector3fMap().cast<double>();
+  const int64_t         ix = FloorToInt(p.x() / ivox_grid_resolution);
+  const int64_t         iy = FloorToInt(p.y() / ivox_grid_resolution);
+  const int64_t         iz = FloorToInt(p.z() / ivox_grid_resolution);
+  const int64_t         max_sub_idx =
+      std::max<int64_t>(0, static_cast<int64_t>(std::ceil(ivox_grid_resolution / filter_size_map_min)) - 1);
 
-    auto &P = kf.get_P();  // must use & here
-    pv.pl   = point_this;
-    pv.pi   = state.offset_R_L_I * pv.pl + state.offset_T_L_I;
-    pv.pw   = state.rot * pv.pi + state.pos;
-    pv.cov  = rot_L_W * pv.body_cov * rot_L_W.transpose() +
-             rot_L_W * point_crossmat * P.block<3, 3>(3, 3) * point_crossmat.transpose() * rot_L_W.transpose() +
-             P.block<3, 3>(0, 0);
-    pv_list[i] = pv;  // ✓ 直接赋值，线程安全
+  const Eigen::Vector3d primary_origin(ix * ivox_grid_resolution, iy * ivox_grid_resolution, iz * ivox_grid_resolution);
+  const Eigen::Vector3d local = p - primary_origin;
+
+  MapSubVoxelKey key;
+  key.ix = ix;
+  key.iy = iy;
+  key.iz = iz;
+  key.sx = std::clamp(FloorToInt(local.x() / filter_size_map_min), int64_t{0}, max_sub_idx);
+  key.sy = std::clamp(FloorToInt(local.y() / filter_size_map_min), int64_t{0}, max_sub_idx);
+  key.sz = std::clamp(FloorToInt(local.z() / filter_size_map_min), int64_t{0}, max_sub_idx);
+  return key;
+}
+
+bool TryOccupyMapSubVoxel(const PointType &point) {
+  if (ivox_grid_resolution <= 0.0 || filter_size_map_min <= 0.0) {
+    return true;
   }
-  return pv_list;
+
+  const MapSubVoxelKey key = ComputeMapSubVoxelKey(point);
+  return map_sub_voxel_points.emplace(key, 1).second;
+}
+
+bool FitPlaneWithCenterNormal(PlaneMatch &plane, const PointVector &points, double threshold) {
+  if (points.size() < kMinNumMatchPoints) {
+    return false;
+  }
+
+  V3D center = V3D::Zero();
+  for (const auto &point : points) {
+    center += point.getVector3fMap().cast<double>();
+  }
+  center /= static_cast<double>(points.size());
+
+  M3D covariance = M3D::Zero();
+  for (const auto &point : points) {
+    const V3D delta = point.getVector3fMap().cast<double>() - center;
+    covariance += delta * delta.transpose();
+  }
+  covariance /= static_cast<double>(points.size());
+
+  Eigen::SelfAdjointEigenSolver<M3D> solver(covariance);
+  if (solver.info() != Eigen::Success) {
+    return false;
+  }
+
+  const V3D normal = solver.eigenvectors().col(0).normalized();
+  for (const auto &point : points) {
+    const double distance = normal.dot(point.getVector3fMap().cast<double>() - center);
+    if (std::abs(distance) > threshold) {
+      return false;
+    }
+  }
+
+  plane.center = center;
+  plane.normal = normal;
+  return true;
+}
+
+void AddMapPointsWithSubVoxelFilter(const PointVector &points) {
+  if (!ivox) {
+    return;
+  }
+
+  PointVector points_to_add;
+  points_to_add.reserve(points.size());
+  for (const auto &point : points) {
+    if (TryOccupyMapSubVoxel(point)) {
+      points_to_add.emplace_back(point);
+    }
+  }
+
+  ivox->AddPoints(points_to_add);
 }
 
 void map_incremental() {
+  if (!ivox) {
+    return;
+  }
+
+  PointVector points_to_add;
+  points_to_add.reserve(feats_down_size);
+
   for (int i = 0; i < feats_down_size; i++) {
     /* transform to world frame */
     PointBodyToWorld(feats_down_body->points[i].getVector3fMap(), feats_down_world->points[i].getVector3fMap(),
                      g_state_point);
     feats_down_world->points[i].intensity = feats_down_body->points[i].intensity;
+
+    PointType &point_world = feats_down_world->points[i];
+    if (TryOccupyMapSubVoxel(point_world)) {
+      points_to_add.emplace_back(point_world);
+    }
   }
 
-  // update voxelmap
-  std::vector<pointWithCov> pv_list = ComputePvList(g_state_point);
-  UpdateVoxelMap(pv_list, max_voxel_size, max_layer, layer_size, max_points_size, max_points_size, min_eigen_value,
-                 voxel_map);
+  ivox->AddPoints(points_to_add);
 }
 
 // Global variables to store timing for current frame
@@ -374,14 +487,58 @@ Eigen::Matrix<double, Eigen::Dynamic, 1> h_share_model(state_ikfom              
                                                        esekfom::dyn_share_datastruct<double> &ekfom_data) {
   double match_start = omp_get_wtime();
 
-  std::vector<pointWithCov> pv_list = ComputePvList(s);
-  std::vector<V3D>          non_match_list;
-  /** LiDAR match based on 3 sigma criterion **/
-  BuildResidualListOMP(voxel_map, max_voxel_size, 3.0, max_layer, pv_list, ptpl_list, non_match_list);
+  if (!ivox || feats_down_size < kNumMatchPoints) {
+    ekfom_data.valid = false;
+    spdlog::warn("No Effective Points!");
+    return {};
+  }
 
-  int effct_feat_num = ptpl_list.size();
+  nearest_points.resize(feats_down_size);
+  plane_matches.resize(feats_down_size);
+  residuals.resize(feats_down_size);
+  point_selected_surf.resize(feats_down_size);
+  feats_down_world->resize(feats_down_size);
 
-  if (effct_feat_num < 1) {
+#pragma omp parallel for
+  for (int i = 0; i < feats_down_size; i++) {
+    PointType &point_body  = feats_down_body->points[i];
+    PointType &point_world = feats_down_world->points[i];
+
+    PointBodyToWorld(point_body.getVector3fMap(), point_world.getVector3fMap(), s);
+    point_world.intensity = point_body.intensity;
+
+    auto &points_near = nearest_points[i];
+    if (ekfom_data.converge) {
+      points_near.clear();
+      ivox->GetClosestPoint(point_world, points_near, kNumMatchPoints, ivox_nearest_range);
+      point_selected_surf[i] = points_near.size() >= kMinNumMatchPoints;
+      if (point_selected_surf[i]) {
+        point_selected_surf[i] = FitPlaneWithCenterNormal(plane_matches[i], points_near, ivox_plane_threshold);
+      }
+    }
+
+    if (point_selected_surf[i]) {
+      const V3D   point_world_vec = point_world.getVector3fMap().cast<double>();
+      const double pd2 = plane_matches[i].normal.dot(point_world_vec - plane_matches[i].center);
+
+      if (std::abs(pd2) <= max_point_plane_distance && point_body.getVector3fMap().norm() > 81.0 * pd2 * pd2) {
+        residuals[i] = pd2;
+      } else {
+        point_selected_surf[i] = false;
+      }
+    }
+  }
+
+  std::vector<int> selected_indices;
+  selected_indices.reserve(feats_down_size);
+  for (int i = 0; i < feats_down_size; i++) {
+    if (point_selected_surf[i]) {
+      selected_indices.emplace_back(i);
+    }
+  }
+
+  int effect_feat_num = static_cast<int>(selected_indices.size());
+  if (effect_feat_num < 1) {
     ekfom_data.valid = false;
     spdlog::warn("No Effective Points!");
     return {};
@@ -391,30 +548,24 @@ Eigen::Matrix<double, Eigen::Dynamic, 1> h_share_model(state_ikfom              
   double solve_start_ = omp_get_wtime();
 
   /*** Computation of Measuremnt Jacobian matrix H and measurents vector ***/
-  ekfom_data.h_x = Eigen::MatrixXd::Zero(effct_feat_num, 12);  // 23
-  ekfom_data.h.resize(effct_feat_num);
-  ekfom_data.R.resize(effct_feat_num, 1);
+  ekfom_data.h_x = Eigen::MatrixXd::Zero(effect_feat_num, 12);  // 23
+  ekfom_data.h.resize(effect_feat_num);
+  ekfom_data.R.resize(effect_feat_num, 1);
 
-  for (int i = 0; i < effct_feat_num; i++) {
-    auto &pv = ptpl_list[i].pv;
-    V3D   point_this_be(pv.pl);
-    M3D   point_be_crossmat;
+  for (int i = 0; i < effect_feat_num; i++) {
+    int idx = selected_indices[i];
+
+    V3D point_this_be = feats_down_body->points[idx].getVector3fMap().cast<double>();
+    M3D point_be_crossmat;
     point_be_crossmat << SKEW_SYM_MATRX(point_this_be);
-    V3D point_this = pv.pi;
+    V3D point_this = s.offset_R_L_I * point_this_be + s.offset_T_L_I;
     M3D point_crossmat;
     point_crossmat << SKEW_SYM_MATRX(point_this);
 
     /*** get the normal vector of closest surface/corner ***/
-    V3D norm_vec(ptpl_list[i].normal);
-
-    double dist = norm_vec.dot(pv.pw) + ptpl_list[i].d;
-    // compute R
-    Eigen::Matrix<double, 1, 6> J_nq;
-    J_nq.block<1, 3>(0, 0) = pv.pw - ptpl_list[i].center;
-    J_nq.block<1, 3>(0, 3) = -norm_vec;
-    double sigma_l         = J_nq * ptpl_list[i].plane_cov * J_nq.transpose();
-    M3D    rot_L_W         = (s.rot * s.offset_R_L_I).toRotationMatrix();
-    ekfom_data.R(i)        = sigma_l + norm_vec.transpose() * rot_L_W * pv.body_cov * rot_L_W.transpose() * norm_vec;
+    V3D    norm_vec = plane_matches[idx].normal;
+    double dist     = residuals[idx];
+    ekfom_data.R(i) = laser_point_cov;
 
     /*** calculate the Measuremnt Jacobian matrix H ***/
     V3D C(s.rot.conjugate() * norm_vec);
@@ -467,32 +618,11 @@ int main(int argc, char **argv) {
   load_calibration_from_file(FLAGS_project_dirname + "/calibration.dat", Lidar_R_wrt_IMU, Lidar_T_wrt_IMU,
                              g_lidar_to_imu_offset);
 
-  ranging_cov = 0.05;
-  angle_cov   = 0.2;
-
-  // if (FLAGS_indoor) {
-  //   spdlog::info("Indoor mode enabled.");
-  //   max_points_size      = 200;
-  //   max_voxel_size       = 0.5;
-  //   max_layer            = 2;
-  //   layer_size           = std::vector<int>({5, 5, 5, 5, 5});
-  // } else {
-  //   spdlog::info("Outdoor mode enabled.");
-  //   max_points_size      = 200;
-  //   max_voxel_size       = 1.0;
-  //   max_layer            = 2;
-  //   layer_size           = std::vector<int>({5, 5, 5, 5, 5});
-  // }
-  max_points_size = 200;
-  max_voxel_size  = 0.8;
-  max_layer       = 2;
-  layer_size      = std::vector<int>({5, 5, 5, 5, 5});
-
-  min_eigen_value                = 0.01;
-  min_plane_likeness             = 0.2;
   int skip_to_save_first_n_scans = 50;
 
-  InitVoxelMapParams(min_plane_likeness);
+  ivox_options.resolution_  = static_cast<float>(ivox_grid_resolution);
+  ivox_options.nearby_type_ = IVoxType::NearbyType::NEARBY18;
+  ivox                      = std::make_shared<IVoxType>(ivox_options);
 
   /*** variables definition ***/
   int    effect_feat_num = 0, frame_num = 0;
@@ -603,11 +733,9 @@ int main(int argc, char **argv) {
             feats_down_world->points[i].intensity = feats_down_body->points[i].intensity;
           }
 
-          // init voxel map
-          std::vector<pointWithCov> pv_list = ComputePvList(g_state_point);
-          BuildVoxelMap(pv_list, max_voxel_size, max_layer, layer_size, max_points_size, max_points_size,
-                        min_eigen_value, voxel_map);
-          spdlog::info("Initialize voxel map done.");
+          map_sub_voxel_points.clear();
+          AddMapPointsWithSubVoxelFilter(feats_down_world->points);
+          spdlog::info("Initialize iVox map done. grids: {}, points: {}", ivox->NumValidGrids(), ivox->NumPoints());
 
           init_map = true;
         }
@@ -683,7 +811,7 @@ int main(int argc, char **argv) {
         // Write low-frequency pose (one per LiDAR scan)
         {
           Eigen::Quaterniond rot = g_state_point.rot * g_state_point.offset_R_L_I;
-          Eigen::Vector3d    pos = g_state_point.rot.toRotationMatrix() * g_state_point.offset_T_L_I + g_state_point.pos;
+          Eigen::Vector3d pos = g_state_point.rot.toRotationMatrix() * g_state_point.offset_T_L_I + g_state_point.pos;
 
           auto pose_msg = traj_dat.add_pose_msgs();
           pose_msg->set_timestamp(Measures.lidar_end_time);
@@ -703,11 +831,11 @@ int main(int argc, char **argv) {
         {
           Eigen::Quaterniond rot = g_state_point.rot * g_state_point.offset_R_L_I;
           Eigen::Vector3d pos = g_state_point.rot.toRotationMatrix() * g_state_point.offset_T_L_I + g_state_point.pos;
-          const Eigen::Vector3d rpy =
-              safeQuaternionToRPY(Eigen::Vector4d(rot.x(), rot.y(), rot.z(), rot.w()));
-          fp_traj << fmt::format("{:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f}",
-                                 pos(0), pos(1), pos(2), rpy.x(), rpy.y(), rpy.z(), rot.x(), rot.y(), rot.z(), rot.w(),
-                                 Measures.lidar_end_time)
+          const Eigen::Vector3d rpy = safeQuaternionToRPY(Eigen::Vector4d(rot.x(), rot.y(), rot.z(), rot.w()));
+          fp_traj << fmt::format(
+                         "{:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f}",
+                         pos(0), pos(1), pos(2), rpy.x(), rpy.y(), rpy.z(), rot.x(), rot.y(), rot.z(), rot.w(),
+                         Measures.lidar_end_time)
                   << std::endl;
         }
         std::cout << "Progress " << lidar_reader.getProgress() << "%" << std::endl;
