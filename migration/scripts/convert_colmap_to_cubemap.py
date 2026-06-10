@@ -302,7 +302,7 @@ def parse_args() -> argparse.Namespace:
         action="store_false",
         help="Skip depth-map generation.",
     )
-    parser.set_defaults(generate_depths=False)
+    parser.set_defaults(generate_depths=True)
     parser.add_argument(
         "--depth-scale",
         type=float,

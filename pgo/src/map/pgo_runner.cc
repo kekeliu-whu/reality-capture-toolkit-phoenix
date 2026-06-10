@@ -8,6 +8,7 @@
 
 #include "io/read_write.h"
 #include "map/optimizer.h"
+#include "migration/proto_io.h"
 #include "migration/utils.h"
 #include "pgo_runner.h"
 #include "utils.h"
@@ -100,6 +101,16 @@ void SaveOptimizedTrajectory(const std::string& output_path,
   spdlog::info("Saved optimized trajectory to {}", traj_filename);
 }
 
+void SavePgoMetrics(const std::string& output_path,
+                    const proto::PgoMetrics& metrics) {
+  const std::string metrics_filename = output_path + "/pgo_metrics.dat";
+  if (!WritePgoMetricsFile(metrics_filename, metrics)) {
+    spdlog::error("Failed to save PGO metrics to {}", metrics_filename);
+    return;
+  }
+  spdlog::info("Saved PGO metrics to {}", metrics_filename);
+}
+
 }  // namespace
 
 void PgoRunner::Run(const std::string& input_path,
@@ -124,12 +135,14 @@ void PgoRunner::Run(const std::string& input_path,
   bool use_rtk = has_gnss_data && use_rtk_constraint_;
 
   std::string proj4_string;
+  proto::PgoMetrics pgo_metrics;
   OptimizeWithGnss(timestamped_scan_poses,
                    submaps,
                    gnss_data,
                    config_,
                    use_rtk,
-                   proj4_string);
+                   proj4_string,
+                   &pgo_metrics);
 
   std::vector<TimestampedPointCloud> full_resolution_scans;
   if (!BuildFullResolutionScansForSave(input_path,
@@ -141,4 +154,5 @@ void PgoRunner::Run(const std::string& input_path,
   spdlog::info("Saving optimized map to {}", output_path + "/map_opt.las");
   SaveLasFile(full_resolution_scans, output_path + "/map_opt.las", proj4_string);
   SaveOptimizedTrajectory(output_path, timestamped_scan_poses);
+  SavePgoMetrics(output_path, pgo_metrics);
 }

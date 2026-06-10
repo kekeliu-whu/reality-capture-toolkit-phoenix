@@ -163,6 +163,10 @@ bool ReadPoseFile(const std::string &filename, proto::PoseMsgList &pose) { retur
 
 bool WritePoseFile(const std::string &filename, const proto::PoseMsgList &pose) { return WriteSingleMsgFile(filename, pose); }
 
+bool ReadPgoMetricsFile(const std::string &filename, proto::PgoMetrics &metrics) { return ReadSingleMsgFile(filename, metrics); }
+
+bool WritePgoMetricsFile(const std::string &filename, const proto::PgoMetrics &metrics) { return WriteSingleMsgFile(filename, metrics); }
+
 bool ReadSensorCalibFile(const std::string &filename, proto::SensorCalib &calib) { return ReadSingleMsgFile(filename, calib); }
 
 bool WriteSensorCalibFile(const std::string &filename, const proto::SensorCalib &calib) { return WriteSingleMsgFile(filename, calib); }

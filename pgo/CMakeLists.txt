@@ -24,7 +24,6 @@ find_package(gflags REQUIRED)
 find_package(VTK CONFIG QUIET)
 find_package(PCL REQUIRED COMPONENTS common io filters registration visualization)
 find_package(Boost CONFIG COMPONENTS program_options)
-find_package(OpenCV REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(PDAL CONFIG REQUIRED)
@@ -75,9 +74,6 @@ set(PGO_PRIVATE_LIBS
   ${CERES_LIBRARIES}
   OpenMP::OpenMP_CXX
   $<TARGET_NAME:pdalcpp>
-  opencv_core
-  opencv_highgui
-  opencv_calib3d
   PROJ::proj
 )
 if(VTK_FOUND)
@@ -97,5 +93,3 @@ function(add_private_tool name)
 endfunction()
 
 add_private_tool(slam_post src/pgo_main.cc)
-add_private_tool(process_point_cloud_std src/tools/process_point_cloud_std.cc)
-add_private_tool(calib_camera_pose src/tools/calib_camera_pose.cc)

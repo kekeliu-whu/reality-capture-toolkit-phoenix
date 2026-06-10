@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -284,6 +285,49 @@ double CalcFitnessScore(const pcl::PointCloud<PointT>::ConstPtr &cloud1,
     return (std::numeric_limits<double>::max());
 }
 
+double PoseDistance3D(const TimestampedPose &a, const TimestampedPose &b) {
+  return (a.pose->translation() - b.pose->translation()).norm();
+}
+
+double PoseDistance2D(const TimestampedPose &a, const TimestampedPose &b) {
+  const Eigen::Vector3d delta = a.pose->translation() - b.pose->translation();
+  return delta.head<2>().norm();
+}
+
+void FillTrajectoryMetrics(
+    const std::vector<TimestampedPose> &timestamped_scan_poses,
+    proto::PgoMetrics *metrics) {
+  if (metrics == nullptr || timestamped_scan_poses.empty()) {
+    return;
+  }
+
+  metrics->set_pose_count(static_cast<int>(timestamped_scan_poses.size()));
+  metrics->set_trajectory_start_timestamp(
+      timestamped_scan_poses.front().timestamp);
+  metrics->set_trajectory_end_timestamp(
+      timestamped_scan_poses.back().timestamp);
+  metrics->set_trajectory_duration_secs(
+      std::max(0.0, timestamped_scan_poses.back().timestamp -
+                        timestamped_scan_poses.front().timestamp));
+
+  double path_length_3d = 0.0;
+  double path_length_2d = 0.0;
+  for (size_t i = 1; i < timestamped_scan_poses.size(); ++i) {
+    path_length_3d += PoseDistance3D(timestamped_scan_poses[i],
+                                     timestamped_scan_poses[i - 1]);
+    path_length_2d += PoseDistance2D(timestamped_scan_poses[i],
+                                     timestamped_scan_poses[i - 1]);
+  }
+  metrics->set_path_length_3d_m(path_length_3d);
+  metrics->set_path_length_2d_m(path_length_2d);
+  metrics->set_start_end_distance_3d_m(
+      PoseDistance3D(timestamped_scan_poses.back(),
+                     timestamped_scan_poses.front()));
+  metrics->set_start_end_distance_2d_m(
+      PoseDistance2D(timestamped_scan_poses.back(),
+                     timestamped_scan_poses.front()));
+}
+
 bool MatchGICP(pcl::PointCloud<pcl::PointXYZI>::Ptr &target,
                pcl::PointCloud<pcl::PointXYZI>::Ptr &source,
                Sophus::SE3d &T_source_to_target,
@@ -332,6 +376,12 @@ struct BTCConstraintStats {
   int matches_rejected_by_gicp   = 0;
   int accepted_outside_radius    = 0;
 };
+
+BTCConstraintStats AddBTCConstraintsInternal(
+    ceres::Problem &problem,
+    std::vector<TimestampedPointCloud> &submaps,
+    const proto::PgoConfig &config,
+    proto::PgoMetrics *metrics);
 
 ConfigSetting MakeBTCConfig(const proto::PgoConfig &config,
                             double median_timestamp_gap) {
@@ -432,7 +482,8 @@ void TryAddBTCConstraintForFrame(
     const ConfigSetting &btc_cfg,
     const proto::PgoConfig &config,
     const Eigen::DiagonalMatrix<double, 6> &btc_sqrt_information,
-    BTCConstraintStats &stats) {
+    BTCConstraintStats &stats,
+    proto::PgoMetrics *metrics) {
   if (frame_id <= btc_cfg.skip_near_num_) {
     return;
   }
@@ -499,6 +550,11 @@ void TryAddBTCConstraintForFrame(
     const Sophus::SE3d T_diff = T_original * T_current_to_matched.inverse();
     const Eigen::Vector3d dt  = T_diff.translation();
     const double dr_deg       = Eigen::AngleAxisd(T_diff.rotationMatrix()).angle() * 180.0 / M_PI;
+    const double gicp_fitness =
+        CalcFitnessScore(submaps[matched_id].cloud,
+                         submaps[frame_id].cloud,
+                         T_current_to_matched,
+                         2.0);
     spdlog::info(
         "Loop edge submap {:4d} -> {:<4d} | "
         "t_orig=({:+7.3f},{:+7.3f},{:+7.3f}) L={:6.2f}m | "
@@ -512,7 +568,19 @@ void TryAddBTCConstraintForFrame(
         T_current_to_matched.translation().norm(),
         dt.x() * 1000.0, dt.y() * 1000.0, dt.z() * 1000.0, dt.norm() * 1000.0, dr_deg,
         loop_result.second,
-        CalcFitnessScore(submaps[matched_id].cloud, submaps[frame_id].cloud, T_current_to_matched, 2.0));
+        gicp_fitness);
+
+    if (metrics != nullptr) {
+      auto *loop_metric = metrics->add_loop_constraints();
+      loop_metric->set_from_submap_index(frame_id);
+      loop_metric->set_to_submap_index(matched_id);
+      loop_metric->set_score(loop_result.second);
+      loop_metric->set_time_diff_secs(time_diff);
+      loop_metric->set_prior_distance_m(spatial_dist);
+      loop_metric->set_translation_error_m(dt.norm());
+      loop_metric->set_rotation_error_deg(dr_deg);
+      loop_metric->set_gicp_fitness_score(gicp_fitness);
+    }
 
     // Save debug clouds for accepted loop closures only
     const std::string debug_dir = GetEnvString("PGO_GICP_DEBUG_DIR");
@@ -564,44 +632,62 @@ void AddParameters(ceres::Problem &problem,
   }
 }
 
-void AddGravityConstraits(ceres::Problem &problem,
+int AddGravityConstraints(ceres::Problem &problem,
                           std::vector<TimestampedPose> &timestamped_scan_poses,
+                          std::vector<TimestampedPointCloud> &submaps,
                           std::set<ceres::ResidualBlockId> &prior_residual_blocks,
                           const proto::PgoConfig &config) {
   if (!config.use_gravity_alignment()) {
     spdlog::info("Gravity alignment is disabled by config");
-    return;
+    return 0;
   }
 
   const Eigen::Vector3d kGravityRef(0.0, 0.0, -1.0);
   int constraints_added = 0;
 
-  for (auto &scan_pose : timestamped_scan_poses) {
-    const double gravity_norm = scan_pose.gravity.norm();
+  for (size_t submap_index = 0; submap_index < submaps.size(); ++submap_index) {
+    auto &submap = submaps[submap_index];
+    if (!submap.pose) {
+      spdlog::warn("Skipping gravity constraint for submap {}: missing pose",
+                   submap_index);
+      continue;
+    }
+
+    if (submap.anchor_pose_index >= timestamped_scan_poses.size()) {
+      spdlog::warn("Skipping gravity constraint for submap {}: invalid anchor pose index {}",
+                   submap_index,
+                   submap.anchor_pose_index);
+      continue;
+    }
+
+    auto &anchor_pose = timestamped_scan_poses[submap.anchor_pose_index];
+    const double gravity_norm = anchor_pose.gravity.norm();
     if (!std::isfinite(gravity_norm) || gravity_norm <= 1e-9) {
-      spdlog::warn("Skipping gravity constraint at timestamp {:.6f}: invalid gravity ({}, {}, {})",
-                   scan_pose.timestamp,
-                   scan_pose.gravity.x(),
-                   scan_pose.gravity.y(),
-                   scan_pose.gravity.z());
+      spdlog::warn("Skipping gravity constraint for submap {} at timestamp {:.6f}: invalid gravity ({}, {}, {})",
+                   submap_index,
+                   submap.timestamp,
+                   anchor_pose.gravity.x(),
+                   anchor_pose.gravity.y(),
+                   anchor_pose.gravity.z());
       continue;
     }
 
     Eigen::Vector3d g_measured_body =
-        scan_pose.pose->so3().inverse() * scan_pose.gravity / gravity_norm;
+        submap.pose->so3().inverse() * anchor_pose.gravity / gravity_norm;
 
     auto residual_block_id = problem.AddResidualBlock(
         GravityCostFunctor::Create(g_measured_body, kGravityRef,
                                    config.gravity_align_rotation_error()),
-        nullptr, scan_pose.pose->data());
+        nullptr, submap.pose->data());
     prior_residual_blocks.insert(residual_block_id);
     ++constraints_added;
   }
-  spdlog::info("Added gravity constraints for {} poses",
+  spdlog::info("Added gravity constraints for {} submaps",
                constraints_added);
+  return constraints_added;
 }
 
-void AddAdjacentConstraints(
+int AddAdjacentConstraints(
     ceres::Problem &problem,
     std::vector<TimestampedPose> &timestamped_scan_poses,
     std::set<ceres::ResidualBlockId> &prior_residual_blocks,
@@ -614,6 +700,7 @@ void AddAdjacentConstraints(
       1 / (config.odom_edge_rotation_error() / 180.0 * M_PI),
       1 / (config.odom_edge_rotation_error() / 180.0 * M_PI);
 
+  int constraints_added = 0;
   for (size_t i = 0; i + 1 < timestamped_scan_poses.size(); ++i) {
     auto &scan_pose_a = timestamped_scan_poses[i];
     auto &scan_pose_b = timestamped_scan_poses[i + 1];
@@ -623,7 +710,9 @@ void AddAdjacentConstraints(
         PoseGraphEdgeFactor::Create(T_b2a, odom_sqrt_information), nullptr,
         scan_pose_a.pose->data(), scan_pose_b.pose->data());
     prior_residual_blocks.insert(residual_block_id);
+    ++constraints_added;
   }
+  return constraints_added;
 }
 
 void RemoveNonPriorConstraints(
@@ -643,7 +732,7 @@ void RemoveNonPriorConstraints(
 
 namespace {
 
-void AddGnssConstraints(
+int AddGnssConstraints(
     ceres::Problem &problem,
     std::vector<TimestampedPose> &timestamped_scan_poses,
     const LocalENUTransformer &transformer,
@@ -651,7 +740,7 @@ void AddGnssConstraints(
     std::set<ceres::ResidualBlockId> &prior_residual_blocks) {
   if (gnss_data.empty()) {
     spdlog::warn("No GNSS data provided, skipping GNSS constraints");
-    return;
+    return 0;
   }
 
   int gnss_constraints_added = 0;
@@ -713,6 +802,7 @@ void AddGnssConstraints(
 
   spdlog::info("Added {} GNSS constraints to {} scan poses",
                gnss_constraints_added, timestamped_scan_poses.size());
+  return gnss_constraints_added;
 }
 
 }  // namespace
@@ -735,7 +825,8 @@ void OptimizeWithGnss(std::vector<TimestampedPose> &timestamped_scan_poses,
                       const std::vector<GpsData> &gnss_data,
                       const proto::PgoConfig &config,
                       bool use_rtk,
-                      std::string &proj4_string) {
+                      std::string &proj4_string,
+                      proto::PgoMetrics *metrics) {
   if (timestamped_scan_poses.empty() || submaps.empty()) {
     spdlog::error("No scan poses or submaps to optimize");
     return;
@@ -750,20 +841,54 @@ void OptimizeWithGnss(std::vector<TimestampedPose> &timestamped_scan_poses,
   ceres::Problem problem;
   std::set<ceres::ResidualBlockId> prior_residual_blocks;
 
+  if (metrics != nullptr) {
+    metrics->Clear();
+    metrics->set_schema_version("pgo_metrics.v1");
+    metrics->set_pose_count(static_cast<int>(timestamped_scan_poses.size()));
+    metrics->set_submap_count(static_cast<int>(submaps.size()));
+    metrics->set_use_rtk(use_rtk);
+    metrics->set_gnss_measurement_count(static_cast<int>(gnss_data.size()));
+  }
+
   // Setup optimization
   AddParameters(problem, timestamped_scan_poses);
-  AddAdjacentConstraints(problem, timestamped_scan_poses, prior_residual_blocks, config);
-  AddGravityConstraits(problem, timestamped_scan_poses, prior_residual_blocks, config);
+  const int adjacent_constraint_count =
+      AddAdjacentConstraints(problem, timestamped_scan_poses, prior_residual_blocks, config);
+  const int gravity_constraint_count =
+      AddGravityConstraints(problem, timestamped_scan_poses, submaps, prior_residual_blocks, config);
+  if (metrics != nullptr) {
+    metrics->set_adjacent_constraint_count(adjacent_constraint_count);
+    metrics->set_gravity_constraint_count(gravity_constraint_count);
+  }
 
   // Add GNSS constraints only if enabled
+  int gnss_constraint_count = 0;
   if (use_rtk && !gnss_data.empty()) {
     LocalENUTransformer transformer(gnss_data[0].latitude, gnss_data[0].longitude);
     proj4_string = transformer.GetProj4String();
-    AddGnssConstraints(problem, timestamped_scan_poses, transformer, gnss_data, prior_residual_blocks);
+    gnss_constraint_count =
+        AddGnssConstraints(problem, timestamped_scan_poses, transformer, gnss_data, prior_residual_blocks);
+  }
+  if (metrics != nullptr) {
+    metrics->set_gnss_constraint_count(gnss_constraint_count);
   }
 
   // Add BTC loop closure constraints
-  AddBTCConstraints(problem, submaps, config);
+  const BTCConstraintStats btc_stats =
+      AddBTCConstraintsInternal(problem, submaps, config, metrics);
+  if (metrics != nullptr) {
+    metrics->set_loop_constraint_count(btc_stats.constraints_added);
+    metrics->set_btc_frames_without_descriptors(
+        btc_stats.frames_without_descriptors);
+    metrics->set_btc_frames_without_candidate(
+        btc_stats.frames_without_candidate);
+    metrics->set_btc_matches_rejected_by_time(
+        btc_stats.matches_rejected_by_time);
+    metrics->set_btc_matches_rejected_by_gicp(
+        btc_stats.matches_rejected_by_gicp);
+    metrics->set_btc_accepted_outside_radius(
+        btc_stats.accepted_outside_radius);
+  }
 
   ceres::Solver::Options options;
   options.minimizer_progress_to_stdout = true;
@@ -773,16 +898,30 @@ void OptimizeWithGnss(std::vector<TimestampedPose> &timestamped_scan_poses,
   spdlog::info("Optimization iteration (with GNSS fusion)...");
   ceres::Solve(options, &problem, &summary);
   spdlog::info("{}", summary.FullReport());
+  if (metrics != nullptr) {
+    metrics->set_initial_cost(summary.initial_cost);
+    metrics->set_final_cost(summary.final_cost);
+    metrics->set_solver_iterations(static_cast<int>(summary.iterations.size()));
+    metrics->set_solver_summary(ceres::TerminationTypeToString(
+        summary.termination_type));
+    metrics->set_solver_brief_report(summary.BriefReport());
+    FillTrajectoryMetrics(timestamped_scan_poses, metrics);
+  }
 
   spdlog::info("GNSS-fused optimization completed successfully");
 }
 
-void AddBTCConstraints(ceres::Problem &problem,
-                       std::vector<TimestampedPointCloud> &submaps,
-                       const proto::PgoConfig &config) {
+namespace {
+
+BTCConstraintStats AddBTCConstraintsInternal(
+    ceres::Problem &problem,
+    std::vector<TimestampedPointCloud> &submaps,
+    const proto::PgoConfig &config,
+    proto::PgoMetrics *metrics) {
+  BTCConstraintStats stats;
   if (submaps.size() < 2) {
     spdlog::warn("Not enough submaps for BTC constraint detection: {}", submaps.size());
-    return;
+    return stats;
   }
 
   spdlog::info("Starting BTC-based loop closure detection on {} submaps", submaps.size());
@@ -800,7 +939,6 @@ void AddBTCConstraints(ceres::Problem &problem,
 
   STDescManager desc_manager(btc_cfg);
   const auto btc_sqrt_information = MakeBTCSqrtInformation(config);
-  BTCConstraintStats stats;
 
   for (int i = 0; i < static_cast<int>(submaps.size()); ++i) {
     if (!submaps[i].cloud || submaps[i].cloud->empty()) {
@@ -828,7 +966,8 @@ void AddBTCConstraints(ceres::Problem &problem,
                                 btc_cfg,
                                 config,
                                 btc_sqrt_information,
-                                stats);
+                                stats,
+                                metrics);
 
     desc_manager.AddSTDescs(stds);
   }
@@ -839,4 +978,13 @@ void AddBTCConstraints(ceres::Problem &problem,
       stats.frames_without_candidate, stats.matches_rejected_by_time,
       stats.matches_rejected_by_gicp,
       stats.accepted_outside_radius);
+  return stats;
+}
+
+}  // namespace
+
+void AddBTCConstraints(ceres::Problem &problem,
+                       std::vector<TimestampedPointCloud> &submaps,
+                       const proto::PgoConfig &config) {
+  AddBTCConstraintsInternal(problem, submaps, config, nullptr);
 }

@@ -30,6 +30,9 @@ bool WriteGnssFile(const std::string &filename, const proto::GpsMsgList &gnss);
 bool ReadPoseFile(const std::string &filename, proto::PoseMsgList &pose);
 bool WritePoseFile(const std::string &filename, const proto::PoseMsgList &pose);
 
+bool ReadPgoMetricsFile(const std::string &filename, proto::PgoMetrics &metrics);
+bool WritePgoMetricsFile(const std::string &filename, const proto::PgoMetrics &metrics);
+
 bool ReadPgoConfigFile(const std::string &filename, proto::PgoConfig &config);
 
 bool ReadSensorCalibFile(const std::string &filename, proto::SensorCalib &calib);

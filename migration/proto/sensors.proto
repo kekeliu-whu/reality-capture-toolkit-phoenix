@@ -109,3 +109,47 @@ message PgoConfig {
   int32 outer_iteration_num = 12;             // PGO outer iteration times
   int32 inner_iteration_num = 13;             // PGO inner iteration times
 }
+
+message PgoLoopConstraintMetric {
+  int32 from_submap_index = 1;
+  int32 to_submap_index = 2;
+  double score = 3;
+  double time_diff_secs = 4;
+  double prior_distance_m = 5;
+  double translation_error_m = 6;
+  double rotation_error_deg = 7;
+  double gicp_fitness_score = 8;
+}
+
+message PgoMetrics {
+  string schema_version = 1;
+  int32 pose_count = 2;
+  int32 submap_count = 3;
+  double trajectory_start_timestamp = 4;
+  double trajectory_end_timestamp = 5;
+  double trajectory_duration_secs = 6;
+  double path_length_3d_m = 7;
+  double path_length_2d_m = 8;
+  double start_end_distance_3d_m = 9;
+  double start_end_distance_2d_m = 10;
+
+  bool use_rtk = 20;
+  int32 gnss_measurement_count = 21;
+  int32 adjacent_constraint_count = 22;
+  int32 gravity_constraint_count = 23;
+  int32 gnss_constraint_count = 24;
+  int32 loop_constraint_count = 25;
+  int32 btc_frames_without_descriptors = 26;
+  int32 btc_frames_without_candidate = 27;
+  int32 btc_matches_rejected_by_time = 28;
+  int32 btc_matches_rejected_by_gicp = 29;
+  int32 btc_accepted_outside_radius = 30;
+
+  double initial_cost = 40;
+  double final_cost = 41;
+  int32 solver_iterations = 42;
+  string solver_summary = 43;
+  string solver_brief_report = 44;
+
+  repeated PgoLoopConstraintMetric loop_constraints = 50;
+}

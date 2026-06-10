@@ -20,13 +20,15 @@ void Optimize(std::vector<TimestampedPose> &timestamped_scan_poses,
  * @param config PGO configuration
  * @param use_rtk Whether to enable RTK constraints
  * @param proj4_string Output reference to receive PROJ4 coordinate system string
+ * @param metrics Optional output metrics proto for debugging and inspection
  */
 void OptimizeWithGnss(std::vector<TimestampedPose> &timestamped_scan_poses,
                       std::vector<TimestampedPointCloud> &submaps,
                       const std::vector<GpsData> &gnss_data,
                       const proto::PgoConfig &config,
                       bool use_rtk,
-                      std::string &proj4_string);
+                      std::string &proj4_string,
+                      proto::PgoMetrics *metrics = nullptr);
 
 /**
  * @brief Add BTC (Binary Triangle Cluster) based loop closure constraints
