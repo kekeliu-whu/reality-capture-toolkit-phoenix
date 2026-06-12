@@ -218,19 +218,123 @@ $env:HTTPS_PROXY="http://127.0.0.1:7890"
 
 ---
 
-### Phoenix 特征提取 + 匹配
+### Phoenix automatic_reconstructor — qizhan 全量重建
 
-用于直接运行 `phoenix feature_extractor` 和 `phoenix feature_matcher`，
-自动补齐常用运行时 PATH，并串起两步处理。
+用于直接用 `phoenix.exe` 处理
+`D:\Users\rick\Desktop\tmp\qizhan` 这类左右相机数据，并从目标目录内的
+`info\calibration.json` 读取相机内参写入 COLMAP database。
+
+> 2026-06-11 实测使用的是 `archive\sfm-phoenix` 新编译产物，
+> 不依赖现有 `sfm.exe` / `sfm-phoenix.exe`。
+
+#### 编译 archive/sfm-phoenix
 
 ```powershell
-.\scripts.ps1 `
-  -ImageDir "D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\ground_undistort\fisheye_x5_VID_20251017_113930_00_052_cam0" `
-  -OutputDir "D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\ground_undistort\fisheye_x5_VID_20251017_113930_00_052_cam0\phoenix_output" `
-  -DatabasePath "D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\ground_undistort\fisheye_x5_VID_20251017_113930_00_052_cam0\phoenix_output\database.db" `
-  -MaxEdge 1024 `
-  -TopK 5000 `
-  -MaxMatches 4000
+& 'D:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe' `
+  -S 'D:\ProjectX\project-3d\reality-capture-toolkit\archive\sfm-phoenix' `
+  -B 'D:\ProjectX\project-3d\reality-capture-toolkit\archive\sfm-phoenix\build-codex' `
+  -G 'Visual Studio 17 2022' `
+  -DCMAKE_TOOLCHAIN_FILE='F:\Library\vcpkg\scripts\buildsystems\vcpkg.cmake' `
+  -DVCPKG_TARGET_TRIPLET=x64-windows `
+  -DTensorRT_ROOT='C:\Program Files\TensorRT-10.16.1.11'
+
+& 'D:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe' `
+  --build 'D:\ProjectX\project-3d\reality-capture-toolkit\archive\sfm-phoenix\build-codex' `
+  --config RelWithDebInfo `
+  --target phoenix `
+  --parallel
+```
+
+#### 运行提取 + 检索 + 匹配
+
+```powershell
+$env:PATH = "C:\Program Files\TensorRT-10.16.1.11\bin;F:\Library\vcpkg\installed\x64-windows\bin;" + $env:PATH
+
+& D:\ProjectX\project-3d\reality-capture-toolkit\archive\sfm-phoenix\build-codex\RelWithDebInfo\phoenix.exe automatic_reconstructor `
+  --database_path D:\Users\rick\Desktop\tmp\qizhan\xsfm_output\phoenix_full\database.db `
+  --image_path D:\Users\rick\Desktop\tmp\qizhan\camera `
+  --output_path D:\Users\rick\Desktop\tmp\qizhan\xsfm_output\phoenix_full\sparse `
+  --Phoenix.calibration_json D:\Users\rick\Desktop\tmp\qizhan\info\calibration.json `
+  --Phoenix.aliked_model_path D:\ProjectX\project-3d\reality-capture-toolkit\archive\sfm-phoenix\build-codex\RelWithDebInfo\aliked.onnx `
+  --Phoenix.max_edge 1024 `
+  --Phoenix.top_k 5000 `
+  --Phoenix.max_matches 4000 `
+  --Phoenix.retrieval_batch_size 1 `
+  --SequentialMatching.loop_detection_period 8 `
+  --SequentialMatching.loop_detection_num_images 70 `
+  --Phoenix.linear_overlap_num 20 `
+  --Phoenix.quadratic_overlap_num 0 `
+  --Phoenix.single_camera_per_folder 1 `
+  --Mapper.multiple_models 0 `
+  --Mapper.max_num_models 1 `
+  --Mapper.ba_use_gpu 1
+```
+
+#### 大数据 mapper 补跑命令
+
+`automatic_reconstructor` 完成提取和匹配后，如果 mapper 参数需要调整，
+不要重跑提取/匹配，直接复用 database 补跑 `reconstruction`：
+
+```powershell
+$env:PATH = "C:\Program Files\TensorRT-10.16.1.11\bin;F:\Library\vcpkg\installed\x64-windows\bin;" + $env:PATH
+
+& D:\ProjectX\project-3d\reality-capture-toolkit\archive\sfm-phoenix\build-codex\RelWithDebInfo\phoenix.exe reconstruction `
+  --database_path D:\Users\rick\Desktop\tmp\qizhan\xsfm_output\phoenix_full\database.db `
+  --image_path D:\Users\rick\Desktop\tmp\qizhan\camera `
+  --output_path D:\Users\rick\Desktop\tmp\qizhan\xsfm_output\phoenix_full\sparse `
+  --Mapper.multiple_models 0 `
+  --Mapper.max_num_models 1 `
+  --Mapper.ba_use_gpu 1 `
+  --Mapper.ba_global_frames_ratio 100.0 `
+  --Mapper.ba_global_points_ratio 100.0 `
+  --Mapper.ba_global_frames_freq 100000 `
+  --Mapper.ba_global_points_freq 100000000 `
+  --Mapper.ba_global_max_refinements 1 `
+  --Mapper.ba_global_max_num_iterations 5 `
+  --Mapper.ba_local_max_num_iterations 10 `
+  --Mapper.ba_local_max_refinements 1 `
+  --Mapper.tri_complete_max_transitivity 1
+```
+
+#### 日志和注意事项
+
+- 推荐用 `Start-Process -RedirectStandardOutput ... -RedirectStandardError ...`
+  将日志写入 `xsfm_output\phoenix_full\*.log`
+- 不要把 `--log_path` / `--log_target` 传给 `automatic_reconstructor`；
+  这些参数会被转发给 COLMAP mapper，COLMAP 会报
+  `unrecognised option '--log_path'`
+- `Phoenix.calibration_json` 会按 `left` / `right` 子目录写入两个
+  `OPENCV_FISHEYE` 相机
+- 2026-06-11 qizhan 实测：
+  - 图像：`camera\left` 4294 张，`camera\right` 4293 张，共 8587 张
+  - 提取：日志显示 `Using fixed detect_batch_size=1`
+  - 匹配：日志显示 `engine_max_batch=1 fixed_batch_size=1`
+  - 匹配完成：`scheduled_pairs=220479 matched_pairs=220479`
+  - DB：`images/keypoints/descriptors=8587`，`matches/two_view_geometries=220465`
+  - 重建：`sparse\0` 中注册 `8587 / 8587`，点数 `1,461,682`，
+    mean reprojection error `1.443066px`
+
+#### 核验命令
+
+```powershell
+& D:\ProjectX\project-3d\reality-capture-toolkit\archive\sfm-phoenix\build-codex\RelWithDebInfo\colmap.exe model_analyzer `
+  --path D:\Users\rick\Desktop\tmp\qizhan\xsfm_output\phoenix_full\sparse\0
+
+@'
+import sqlite3, struct
+db = r"D:\Users\rick\Desktop\tmp\qizhan\xsfm_output\phoenix_full\database.db"
+con = sqlite3.connect(db)
+cur = con.cursor()
+print("cameras", cur.execute("select count(*) from cameras").fetchone()[0])
+for camera_id, model, width, height, blob, prior in cur.execute(
+    "select camera_id, model, width, height, params, prior_focal_length from cameras order by camera_id"
+):
+    params = struct.unpack("<" + "d" * (len(blob) // 8), blob)
+    print(camera_id, model, width, height, prior, params)
+for table in ["images", "keypoints", "descriptors", "matches", "two_view_geometries"]:
+    print(table, cur.execute(f"select count(*) from {table}").fetchone()[0])
+con.close()
+'@ | .\.venv\Scripts\python.exe -
 ```
 
 ---
@@ -266,14 +370,3 @@ $env:PYTHONPATH = "D:\ProjectX\project-3d\reality-capture-toolkit"
 - ONNX 输入名：`pixel_values`，shape `[-1, 3, 224, 224]`
 - ONNX 输出名：`embeddings`，shape `[-1, 768]`
 - 当前导出脚本默认走 FP16（输入/输出与权重均为 FLOAT16）
-
-#### automatic_reconstructor 验证命令（已通过）
-
-```powershell
-$env:PATH = "C:\Program Files\TensorRT-10.16.1.11\bin;F:\Library\vcpkg\installed\x64-windows\bin;" + $env:PATH
-& D:\ProjectX\project-3d\reality-capture-toolkit\build\RelWithDebInfo\phoenix.exe automatic_reconstructor `
-  --database_path D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\tmp\1.db `
-  --image_path D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\tmp\camera\fisheye_x5_VID_20251017_113930_00_052_cam0\ `
-  --output_path D:\ProjectX\project-3d\data\sfm\external-cameras\hkustgz\xsfm_output\tmp\xsfm\ `
-  --ImageReader.camera_model OPENCV_FISHEYE
-```

@@ -227,7 +227,7 @@ Write-Host "`n=== Step 6: Computing panorama poses ===" -ForegroundColor Cyan
 
 if (Test-Path $insta_pano_poses_exe) {
     $img_pose_file = Join-Path $camera_dir "ImgPose.txt"
-    $pano_pose_output = Join-Path $outputdir "xsfm" "sparse" "pano-poses.txt"
+    $pano_pose_output = [IO.Path]::Combine($outputdir, "xsfm", "sparse", "pano-poses.txt")
 
     if (Test-Path $img_pose_file) {
         Write-Host "Using image poses: $img_pose_file" -ForegroundColor Gray

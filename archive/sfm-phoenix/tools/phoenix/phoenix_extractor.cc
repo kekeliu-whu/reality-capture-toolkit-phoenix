@@ -7,6 +7,7 @@
 #include <colmap/controllers/option_manager.h>
 #include <colmap/sensor/rig.h>
 
+#include <nlohmann/json.hpp>
 #include <oneapi/tbb/parallel_pipeline.h>
 #include <opencv2/imgcodecs.hpp>
 #include <spdlog/spdlog.h>
@@ -15,6 +16,8 @@
 
 #include <chrono>
 #include <fstream>
+#include <optional>
+#include <sstream>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -56,6 +59,17 @@ struct ImportedCameraEntry {
   size_t height = 0;
 };
 
+struct CalibrationCameraEntry {
+  std::string name;
+  std::string camera_model;
+  std::string camera_params;
+  size_t width = 0;
+  size_t height = 0;
+};
+
+using CalibrationCameraMap =
+    std::unordered_map<std::string, CalibrationCameraEntry>;
+
 struct DecodedImageTask {
   std::string image_name;
   std::filesystem::path image_path;
@@ -78,6 +92,7 @@ struct ExtractorExecutionContext {
   FeatureExtractionMetrics* metrics = nullptr;
   std::unordered_map<std::string, ImportedCameraEntry>* camera_cache =
       nullptr;
+  const CalibrationCameraMap* calibration_cameras = nullptr;
 };
 
 enum class FeatureAvailability {
@@ -118,6 +133,8 @@ void AddFeatureExtractorOptions(colmap::OptionManager* options,
   options->AddDefaultOption("camera_mode", &cli_options->camera_mode);
   options->AddFeatureExtractionOptions();
   options->AddDefaultOption("image_list_path", &cli_options->image_list_path);
+  options->AddDefaultOption("Phoenix.calibration_json",
+                            &cli_options->calibration_json_path);
   options->AddDefaultOption("Phoenix.aliked_model_path",
                             &cli_options->aliked_model_path);
   options->AddDefaultOption("Phoenix.max_edge", &cli_options->max_edge);
@@ -197,6 +214,83 @@ colmap::ImageReaderOptions BuildReaderOptions(
   }
 
   return reader_options;
+}
+
+std::string JoinCameraParams(const nlohmann::json& camera_json) {
+  const auto& intrinsic = camera_json.at("intrinsic");
+  const auto& distortion = camera_json.at("distortion").at("params");
+  std::ostringstream stream;
+  stream.precision(17);
+  stream << intrinsic.at("fl_x").get<double>() << ","
+         << intrinsic.at("fl_y").get<double>() << ","
+         << intrinsic.at("cx").get<double>() << ","
+         << intrinsic.at("cy").get<double>() << ","
+         << distortion.at("k1").get<double>() << ","
+         << distortion.at("k2").get<double>() << ","
+         << distortion.at("k3").get<double>() << ","
+         << distortion.at("k4").get<double>();
+  return stream.str();
+}
+
+CalibrationCameraMap LoadCalibrationCameras(
+    const std::string& calibration_json_path) {
+  CalibrationCameraMap cameras;
+  if (calibration_json_path.empty()) {
+    return cameras;
+  }
+
+  std::ifstream stream(calibration_json_path);
+  if (!stream.is_open()) {
+    throw std::runtime_error("Cannot open Phoenix.calibration_json: " +
+                             calibration_json_path);
+  }
+
+  nlohmann::json root;
+  stream >> root;
+  for (const auto& camera_json : root.at("cameras")) {
+    CalibrationCameraEntry entry;
+    entry.name = camera_json.at("name").get<std::string>();
+    entry.width = camera_json.at("width").get<size_t>();
+    entry.height = camera_json.at("height").get<size_t>();
+    entry.camera_model =
+        camera_json.at("distortion").at("camera_model").get<std::string>();
+    entry.camera_params = JoinCameraParams(camera_json);
+    cameras.emplace(entry.name, entry);
+    spdlog::info("Loaded calibration camera '{}' model={} size={}x{} params={}",
+                 entry.name,
+                 entry.camera_model,
+                 entry.width,
+                 entry.height,
+                 entry.camera_params);
+  }
+
+  if (cameras.empty()) {
+    throw std::runtime_error("Phoenix.calibration_json contains no cameras: " +
+                             calibration_json_path);
+  }
+  return cameras;
+}
+
+const CalibrationCameraEntry* FindCalibrationForImage(
+    const CalibrationCameraMap* calibration_cameras,
+    const std::string& image_name) {
+  if (calibration_cameras == nullptr || calibration_cameras->empty()) {
+    return nullptr;
+  }
+  const std::string folder =
+      std::filesystem::path(image_name).parent_path().generic_string();
+  if (!folder.empty()) {
+    const auto it = calibration_cameras->find(folder);
+    if (it != calibration_cameras->end()) {
+      return &it->second;
+    }
+  }
+  const auto stem_it = calibration_cameras->find(
+      std::filesystem::path(image_name).stem().generic_string());
+  if (stem_it != calibration_cameras->end()) {
+    return &stem_it->second;
+  }
+  return nullptr;
 }
 
 void SelectImagesForExtraction(
@@ -361,7 +455,8 @@ ImportedCameraEntry ResolveCameraForImage(
     const size_t height,
     const bool default_share_camera_per_folder,
     colmap::Database* database,
-    std::unordered_map<std::string, ImportedCameraEntry>* camera_cache) {
+    std::unordered_map<std::string, ImportedCameraEntry>* camera_cache,
+    const CalibrationCameraMap* calibration_cameras) {
   const std::string cache_key = CameraGroupKey(
       reader_options, image_name, default_share_camera_per_folder);
   const auto cached = camera_cache->find(cache_key);
@@ -381,17 +476,30 @@ ImportedCameraEntry ResolveCameraForImage(
                                image_name);
     }
   } else {
+    const CalibrationCameraEntry* calibration =
+        FindCalibrationForImage(calibration_cameras, image_name);
+    const std::string camera_model =
+        calibration != nullptr ? calibration->camera_model
+                               : reader_options.camera_model;
+    const std::string camera_params =
+        calibration != nullptr ? calibration->camera_params
+                               : reader_options.camera_params;
+    if (calibration != nullptr &&
+        (calibration->width != width || calibration->height != height)) {
+      throw std::runtime_error("Calibration dimensions mismatch for image: " +
+                               image_name);
+    }
     const double focal_length =
         reader_options.default_focal_length_factor *
         static_cast<double>(std::max(width, height));
     camera = colmap::Camera::CreateFromModelName(
         colmap::kInvalidCameraId,
-        reader_options.camera_model,
+        camera_model,
         focal_length,
         width,
         height);
-    if (!reader_options.camera_params.empty()) {
-      if (!camera.SetParamsFromString(reader_options.camera_params)) {
+    if (!camera_params.empty()) {
+      if (!camera.SetParamsFromString(camera_params)) {
         throw std::runtime_error("Invalid camera_params for image: " +
                                  image_name);
       }
@@ -402,6 +510,12 @@ ImportedCameraEntry ResolveCameraForImage(
                                image_name);
     }
     camera.camera_id = database->WriteCamera(camera);
+    if (calibration != nullptr) {
+      spdlog::info("Wrote calibrated camera '{}' id={} for folder '{}'",
+                   calibration->name,
+                   camera.camera_id,
+                   cache_key);
+    }
   }
 
   const colmap::Rig rig = EnsureRigForCamera(database, camera);
@@ -560,7 +674,8 @@ void ProcessNewImages(
           static_cast<size_t>(task.image_bgr.rows),
           context->default_share_camera_per_folder,
           context->database,
-          context->camera_cache);
+          context->camera_cache,
+          context->calibration_cameras);
       context->metrics->import_images_ms.AddSample(
           std::chrono::duration<double, std::milli>(Clock::now() - import_start)
               .count());
@@ -852,6 +967,8 @@ int DoExtraction(const std::string& database_path,
   auto database = colmap::Database::Open(database_path);
   const bool default_share_camera_per_folder =
       DefaultShareCameraPerFolder(cli_options, reader_options);
+  const CalibrationCameraMap calibration_cameras =
+      LoadCalibrationCameras(cli_options.calibration_json_path);
 
   const int detect_batch_size = kPhoenixFixedBatchSize;
 
@@ -873,6 +990,7 @@ int DoExtraction(const std::string& database_path,
       &detector,
       &metrics,
       &camera_cache,
+      &calibration_cameras,
   };
 
   ProcessNewImages(reader_options.image_names,

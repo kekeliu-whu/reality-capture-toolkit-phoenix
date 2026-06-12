@@ -11,6 +11,7 @@ $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PROJECT_ROOT = Split-Path -Parent $SCRIPT_DIR
 $BUILD_PACK = Join-Path $PROJECT_ROOT "build-pack"
 $NATIVE_TOOLS = Join-Path $PROJECT_ROOT "native-tools"
+$COLMAP_EXE = Join-Path $PROJECT_ROOT "resources\xsfm2\colmap.exe"
 
 Write-Host "Build pack dir: $BUILD_PACK" -ForegroundColor Gray
 
@@ -72,6 +73,36 @@ $xsfm_pre_exe = Join-Path $BUILD_PACK "xsfm_pre.exe"
 
 if ($LASTEXITCODE -ne 0) {
   Write-Host "Error in Step 2" -ForegroundColor Red
+  exit 1
+}
+
+# Step 2.5: Configure rig in COLMAP database
+Write-Host "Step 2.5: Configuring rig..." -ForegroundColor Green
+$dbFile = "$dataDir\xsfm\xsfm.db"
+$rigFile = "$dataDir\images\rig.json"
+
+if (-not (Test-Path $COLMAP_EXE)) {
+  Write-Host "ERROR: COLMAP executable not found at: $COLMAP_EXE" -ForegroundColor Red
+  exit 1
+}
+
+if (-not (Test-Path $dbFile)) {
+  Write-Host "ERROR: Database file not found at: $dbFile" -ForegroundColor Red
+  exit 1
+}
+
+if (-not (Test-Path $rigFile)) {
+  Write-Host "ERROR: Rig file not found at: $rigFile" -ForegroundColor Red
+  Write-Host "Please provide rig.json under images directory." -ForegroundColor Yellow
+  exit 1
+}
+
+& $COLMAP_EXE rig_configurator `
+  --database_path "$dbFile" `
+  --rig_config_path "$rigFile"
+
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "Error in Step 2.5 (rig configurator)" -ForegroundColor Red
   exit 1
 }
 

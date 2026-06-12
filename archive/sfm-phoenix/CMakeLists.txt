@@ -75,6 +75,7 @@ find_package(OpenCV CONFIG REQUIRED)
 find_package(Eigen3 3.4 REQUIRED)
 find_package(COLMAP CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(TBB CONFIG REQUIRED)
 
@@ -199,6 +200,7 @@ add_executable(phoenix
     tools/phoenix/phoenix_matcher.cc
     tools/phoenix/phoenix_automatic.cc)
 target_link_libraries(phoenix PRIVATE sfm_phoenix phoenix_logging TBB::tbb)
+target_link_libraries(phoenix PRIVATE nlohmann_json::nlohmann_json)
 
 set(PHOENIX_RUNTIME_OUTPUT_DIR "${CMAKE_BINARY_DIR}/$<CONFIG>")
 

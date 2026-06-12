@@ -34,7 +34,7 @@ namespace phoenix_tool {
 
 namespace {
 
-constexpr int kPhoenixFixedBatchSize = 4;
+constexpr int kPhoenixFixedBatchSize = 1;
 constexpr int kPhoenixMaxBatchSize = 8;
 constexpr int kPhoenixMaxKeypoints = 5000;
 

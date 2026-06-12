@@ -105,6 +105,7 @@ struct FeatureExtractionOptions {
   int camera_mode = -1;
   std::string camera_model;  // e.g. "OPENCV_FISHEYE"; empty = COLMAP default
   std::string camera_params;
+  std::string calibration_json_path;
   std::string image_list_path;
   std::string aliked_model_path =
       R"(D:\Users\rick\Downloads\aliked.onnx)";
