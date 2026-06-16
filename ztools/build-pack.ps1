@@ -91,7 +91,14 @@ function Test-PrerequisitesAndBuild {
 
     # Verify Python Tools
     Write-Status "Checking Python Tools executables..."
-    $pythonExes = @("insta_compute_pano_poses.exe", "insta_compute_poses.exe", "insta_data_extraction_ar.exe", "insta_data_extraction.exe")
+    $pythonExes = @(
+        "insta_compute_pano_poses.exe",
+        "insta_compute_poses.exe",
+        "insta_data_extraction_ar.exe",
+        "insta_data_extraction.exe",
+        "xsfm_fix_rig_database.exe",
+        "xsfm_inject_subview_priors.exe"
+    )
     $pythonExeCount = 0
     foreach ($exe in $pythonExes) {
         if (Test-Path (Join-Path $PYTHON_TOOLS_DIR $exe)) {
@@ -193,7 +200,9 @@ function Copy-ExecutableFiles {
         "insta_compute_pano_poses.exe",
         "insta_compute_poses.exe",
         "insta_data_extraction_ar.exe",
-        "insta_data_extraction.exe"
+        "insta_data_extraction.exe",
+        "xsfm_fix_rig_database.exe",
+        "xsfm_inject_subview_priors.exe"
     )
 
     Write-Status "Copying documented executable files..."
@@ -404,7 +413,14 @@ function Show-PackSummary {
     if ($hasPythonBundle) {
         Write-Host ""
         Write-Host "  Python EXEs (shared bundle):" -ForegroundColor Yellow
-        $pythonExeNames = @("insta_compute_pano_poses.exe", "insta_compute_poses.exe", "insta_data_extraction_ar.exe", "insta_data_extraction.exe")
+        $pythonExeNames = @(
+            "insta_compute_pano_poses.exe",
+            "insta_compute_poses.exe",
+            "insta_data_extraction_ar.exe",
+            "insta_data_extraction.exe",
+            "xsfm_fix_rig_database.exe",
+            "xsfm_inject_subview_priors.exe"
+        )
         foreach ($name in $pythonExeNames) {
             $path = Join-Path $PACK_DIR $name
             if (Test-Path $path) {

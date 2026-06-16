@@ -13,9 +13,27 @@ $BUILD_PACK = Join-Path $PROJECT_ROOT "build-pack"
 $NATIVE_TOOLS = Join-Path $PROJECT_ROOT "native-tools"
 $xsfm_pre_exe = Join-Path $BUILD_PACK "xsfm_pre_new.exe"
 $xsfm_post_exe = Join-Path $BUILD_PACK "xsfm_post.exe"
-$PYTHON_TOOLS = Join-Path $PROJECT_ROOT "build-all\build-python-tools"
-$fix_rig_exe = Join-Path $PYTHON_TOOLS "xsfm_fix_rig_database.exe"
-$inject_priors_exe = Join-Path $PYTHON_TOOLS "xsfm_inject_subview_priors.exe"
+$PYTHON_TOOLS_DEV = Join-Path $PROJECT_ROOT "build-all\build-python-tools"
+$TOOL_SEARCH_DIRS = @($BUILD_PACK, $PYTHON_TOOLS_DEV)
+
+function Find-ToolExecutable {
+  param(
+    [Parameter(Mandatory=$true)]
+    [string]$Name
+  )
+
+  foreach ($dir in $TOOL_SEARCH_DIRS) {
+    $candidate = Join-Path $dir $Name
+    if (Test-Path $candidate) {
+      return $candidate
+    }
+  }
+
+  return $null
+}
+
+$fix_rig_exe = Find-ToolExecutable "xsfm_fix_rig_database.exe"
+$inject_priors_exe = Find-ToolExecutable "xsfm_inject_subview_priors.exe"
 
 Write-Host "Build pack dir: $BUILD_PACK" -ForegroundColor Gray
 
@@ -96,8 +114,9 @@ if (-not (Test-Path $rigFile)) {
   exit 1
 }
 
-if (-not (Test-Path $fix_rig_exe)) {
-  Write-Host "ERROR: Rig database fix executable not found at: $fix_rig_exe" -ForegroundColor Red
+if ([string]::IsNullOrEmpty($fix_rig_exe) -or -not (Test-Path $fix_rig_exe)) {
+  Write-Host "ERROR: Rig database fix executable not found." -ForegroundColor Red
+  Write-Host "Searched in: $($TOOL_SEARCH_DIRS -join ', ')" -ForegroundColor Yellow
   exit 1
 }
 
@@ -117,8 +136,9 @@ if ($LASTEXITCODE -ne 0) {
 
 # Step 2.6: Inject initial pose priors into COLMAP database
 Write-Host "Step 2.6: Injecting initial pose priors..." -ForegroundColor Green
-if (-not (Test-Path $inject_priors_exe)) {
-  Write-Host "ERROR: Pose prior injection executable not found at: $inject_priors_exe" -ForegroundColor Red
+if ([string]::IsNullOrEmpty($inject_priors_exe) -or -not (Test-Path $inject_priors_exe)) {
+  Write-Host "ERROR: Pose prior injection executable not found." -ForegroundColor Red
+  Write-Host "Searched in: $($TOOL_SEARCH_DIRS -join ', ')" -ForegroundColor Yellow
   exit 1
 }
 
