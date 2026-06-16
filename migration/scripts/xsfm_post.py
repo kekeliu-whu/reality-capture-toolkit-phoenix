@@ -181,19 +181,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model-dir",
         type=Path,
-        default=R"Z:\raw_data\ZJGHDSDataForGSTest\XGRIDS-K2\mipmap\sparse",
+        default=R"Z:\rick\dataset\jiuzhou\zhujiangguihuadasha\output\xsfm\sparse\0",
         help="Input COLMAP model directory.",
     )
     parser.add_argument(
         "--image-dir",
         type=Path,
-        default=R"Z:\raw_data\ZJGHDSDataForGSTest\XGRIDS-K2\GZPI_2026-05-22-105830\images",
+        default=R"Z:\rick\dataset\jiuzhou\zhujiangguihuadasha\output\images",
         help="Source image directory.",
     )
     parser.add_argument(
         "--mask-dir",
         type=Path,
-        default=R"Z:\raw_data\ZJGHDSDataForGSTest\XGRIDS-K2\GZPI_2026-05-22-105830\masks",
+        default=None,
         help="Optional source mask directory. Masks are matched by image-relative path.",
     )
     parser.add_argument(
@@ -206,13 +206,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=R"Z:\raw_data\ZJGHDSDataForGSTest\XGRIDS-K2\mipmap\cubemap_colmap",
+        default=R"Z:\rick\dataset\jiuzhou\zhujiangguihuadasha\output\cubemap_colmap",
         help="Output directory.",
     )
     parser.add_argument(
         "--point-cloud-path",
         type=Path,
-        default=R"Z:\raw_data\ZJGHDSDataForGSTest\XGRIDS-K2\GZPI_2026-05-22-105830\GZPI_2026-05-22-105830.las",
+        default=R"Z:\rick\dataset\jiuzhou\zhujiangguihuadasha\output\small_plane_refined.las",
         help="Point cloud used for depth rendering.",
     )
     parser.add_argument(

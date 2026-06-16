@@ -140,7 +140,7 @@ add_library(sfm_phoenix STATIC ${FE_SOURCES} ${FE_CUDA_SOURCES})
 
 target_include_directories(sfm_phoenix PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../migration/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../migration/include
     ${TRT_INCLUDE_DIR}
     ${CUDA_INCLUDE_DIRS}
     ${COLMAP_INCLUDE_DIRS}
@@ -174,9 +174,9 @@ endif()
 # --------------------------------------------------------------------------
 # Demo executable
 # --------------------------------------------------------------------------
-add_library(phoenix_logging STATIC ../migration/src/logging.cc)
+add_library(phoenix_logging STATIC ../../migration/src/logging.cc)
 target_include_directories(phoenix_logging PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/../migration/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../migration/include
 )
 target_compile_definitions(phoenix_logging PRIVATE
     $<$<CONFIG:RelWithDebInfo>:MIGRATION_PLAINTEXT_LOGGING=1>

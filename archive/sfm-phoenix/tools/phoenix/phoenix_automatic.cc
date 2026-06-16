@@ -35,6 +35,7 @@ namespace phoenix_tool
         "--ImageReader.camera_model",
       "--ImageReader.camera_params",
         "--Phoenix.calibration_json",
+        "--Phoenix.aliked_model_path",
         "--Phoenix.max_edge",
         "--Phoenix.top_k",
         "--Phoenix.max_matches",
@@ -103,6 +104,10 @@ namespace phoenix_tool
       else if (arg == "--Phoenix.calibration_json" && has_value)
       {
         options.extraction.calibration_json_path = expanded_args[++index];
+      }
+      else if (arg == "--Phoenix.aliked_model_path" && has_value)
+      {
+        options.extraction.aliked_model_path = expanded_args[++index];
       }
       else if (arg == "--Phoenix.max_edge" && has_value)
       {
@@ -241,6 +246,7 @@ namespace phoenix_tool
     spdlog::info("  calibration_json           = {}",
                  ext.calibration_json_path.empty() ? "(none)"
                                                    : ext.calibration_json_path);
+    spdlog::info("  aliked_model_path          = {}", ext.aliked_model_path);
     spdlog::info("  max_edge                   = {}", ext.max_edge);
     spdlog::info("  top_k                      = {}", ext.top_k);
     spdlog::info("  max_matches                = {}", mat.max_matches);

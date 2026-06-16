@@ -7,3 +7,4 @@ Voxel-SLAM-main
 *.pyc
 .worktrees/
 src/lightglue/
+archive/

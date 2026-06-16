@@ -11,7 +11,11 @@ $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PROJECT_ROOT = Split-Path -Parent $SCRIPT_DIR
 $BUILD_PACK = Join-Path $PROJECT_ROOT "build-pack"
 $NATIVE_TOOLS = Join-Path $PROJECT_ROOT "native-tools"
-$COLMAP_EXE = Join-Path $PROJECT_ROOT "resources\xsfm2\colmap.exe"
+$xsfm_pre_exe = Join-Path $BUILD_PACK "xsfm_pre_new.exe"
+$xsfm_post_exe = Join-Path $BUILD_PACK "xsfm_post.exe"
+$PYTHON_TOOLS = Join-Path $PROJECT_ROOT "build-all\build-python-tools"
+$fix_rig_exe = Join-Path $PYTHON_TOOLS "xsfm_fix_rig_database.exe"
+$inject_priors_exe = Join-Path $PYTHON_TOOLS "xsfm_inject_subview_priors.exe"
 
 Write-Host "Build pack dir: $BUILD_PACK" -ForegroundColor Gray
 
@@ -53,16 +57,16 @@ $xsfm_pc_exe = Join-Path $BUILD_PACK "xsfm_process_point_cloud.exe"
   --las_filename "$dataDir\map_opt.las" `
   --initial_pose_filename "$dataDir\images\ImgPose.txt" `
   --output_dir "$dataDir\xsfm" `
-  --nooutput_full
+  --nooutput_full `
+  --output_normals_pcd
 
 if ($LASTEXITCODE -ne 0) {
   Write-Host "Error in Step 1" -ForegroundColor Red
   exit 1
 }
 
-# Step 2: Extract features with xsfm_pre.exe
+# Step 2: Extract features with xsfm_pre_new.exe
 Write-Host "Step 2: Extracting features..." -ForegroundColor Green
-$xsfm_pre_exe = Join-Path $BUILD_PACK "xsfm_pre.exe"
 & $xsfm_pre_exe feature_extractor `
   --image_path "$dataDir\images" `
   --database_path "$dataDir\xsfm\xsfm.db" `
@@ -76,15 +80,10 @@ if ($LASTEXITCODE -ne 0) {
   exit 1
 }
 
-# Step 2.5: Configure rig in COLMAP database
-Write-Host "Step 2.5: Configuring rig..." -ForegroundColor Green
+# Step 2.5: Fix rig structure in COLMAP database
+Write-Host "Step 2.5: Fixing rig database..." -ForegroundColor Green
 $dbFile = "$dataDir\xsfm\xsfm.db"
 $rigFile = "$dataDir\images\rig.json"
-
-if (-not (Test-Path $COLMAP_EXE)) {
-  Write-Host "ERROR: COLMAP executable not found at: $COLMAP_EXE" -ForegroundColor Red
-  exit 1
-}
 
 if (-not (Test-Path $dbFile)) {
   Write-Host "ERROR: Database file not found at: $dbFile" -ForegroundColor Red
@@ -97,12 +96,43 @@ if (-not (Test-Path $rigFile)) {
   exit 1
 }
 
-& $COLMAP_EXE rig_configurator `
+if (-not (Test-Path $fix_rig_exe)) {
+  Write-Host "ERROR: Rig database fix executable not found at: $fix_rig_exe" -ForegroundColor Red
+  exit 1
+}
+
+# & $xsfm_pre_exe rig_configurator `
+#   --database_path "$dbFile" `
+#   --rig_config_path "$rigFile"
+
+& $fix_rig_exe `
   --database_path "$dbFile" `
-  --rig_config_path "$rigFile"
+  --rig_config "$rigFile" `
+  --backup
 
 if ($LASTEXITCODE -ne 0) {
-  Write-Host "Error in Step 2.5 (rig configurator)" -ForegroundColor Red
+  Write-Host "Error in Step 2.5 (fix rig database)" -ForegroundColor Red
+  exit 1
+}
+
+# Step 2.6: Inject initial pose priors into COLMAP database
+Write-Host "Step 2.6: Injecting initial pose priors..." -ForegroundColor Green
+if (-not (Test-Path $inject_priors_exe)) {
+  Write-Host "ERROR: Pose prior injection executable not found at: $inject_priors_exe" -ForegroundColor Red
+  exit 1
+}
+
+& $inject_priors_exe `
+  --database_path "$dbFile" `
+  --trajectory_path "$poseFile" `
+  --num_cameras 2 `
+  --camera_prefix cam `
+  --stddev 0.05 `
+  --coordinate_system 1 `
+  --ref_camera_only
+
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "Error in Step 2.6 (inject pose priors)" -ForegroundColor Red
   exit 1
 }
 
@@ -124,8 +154,6 @@ if ($LASTEXITCODE -ne 0) {
   --SequentialMatching.vocab_tree_path "$BUILD_PACK\vocab_tree_faiss_flickr100K_words32K.bin" `
   --SequentialMatching.loop_detection 1 `
   --SequentialMatching.loop_detection_period 8 `
-  --SequentialMatching.loop_detection_num_nearest_neighbors 4 `
-  --SequentialMatching.loop_detection_num_images 70 `
   --TwoViewGeometry.filter_stationary_matches 1
 
 if ($LASTEXITCODE -ne 0) {
@@ -133,20 +161,70 @@ if ($LASTEXITCODE -ne 0) {
   exit 1
 }
 
-# Step 4: Run xsfm main pipeline
-Write-Host "Step 4: Running main xsfm pipeline..." -ForegroundColor Green
-$xsfm_exe = Join-Path $BUILD_PACK "xsfm.exe"
-& $xsfm_exe `
-  -point_cloud_filename "$dataDir\xsfm\localenu.pcd" `
-  -point_cloud_offset_filename "$dataDir\xsfm\localenu.json" `
-  -database_filename "$dataDir\xsfm\xsfm.db" `
-  -initial_pose_filename "$dataDir\xsfm\localenu_pose.txt" `
-  -images_path "$dataDir\images" `
-  -output_path "$dataDir\xsfm\sparse" `
-  --use_point_cloud
+# Step 4: Run MGSfM global mapper
+Write-Host "Step 4: Running MGSfM global mapper..." -ForegroundColor Green
+$sfmOutputDir = "$dataDir\xsfm\sparse"
+New-Item $sfmOutputDir -Type Directory -Force | Out-Null
+
+$resolvedDataDir = (Resolve-Path $dataDir).Path
+$resolvedSfmOutputDir = (Resolve-Path $sfmOutputDir).Path
+if (-not $resolvedSfmOutputDir.StartsWith($resolvedDataDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+  Write-Host "ERROR: Refusing to clear output outside data directory: $sfmOutputDir" -ForegroundColor Red
+  exit 1
+}
+
+Get-ChildItem -LiteralPath $sfmOutputDir -Force | Remove-Item -Recurse -Force
+
+& $xsfm_pre_exe global_mapper `
+  --database_path "$dataDir\xsfm\xsfm.db" `
+  --image_path "$dataDir\images" `
+  --output_path "$sfmOutputDir" `
+  --GlobalMapper.use_multi_camera_pipeline 1 `
+  --GlobalMapper.ba_refine_focal_length 0 `
+  --GlobalMapper.ba_refine_principal_point 0 `
+  --GlobalMapper.ba_refine_extra_params 0 `
+  --GlobalMapper.use_prior_position 1 `
+  --GlobalMapper.gp_prior_position_weight 1.0 `
+  --GlobalMapper.pcd_path "$dataDir\xsfm\localenu_normal.pcd" `
+  --GlobalMapper.pcd_max_camera_distance 20 `
+  --GlobalMapper.pcd_max_distance 1.0 `
+  --GlobalMapper.pcd_proj_weight 0.1 `
+  --GlobalMapper.pcd_icp_weight 2 `
+  --GlobalMapper.pcd_icp_ground_weight 2 `
+  --GlobalMapper.pcd_huber_threshold 0.1 `
+  --GlobalMapper.pcd_rematch_iterations 2 `
+  --GlobalMapper.pcd_filter_los 1
 
 if ($LASTEXITCODE -ne 0) {
   Write-Host "Error in Step 4" -ForegroundColor Red
+  exit 1
+}
+
+# Step 4.5: Convert fisheye SfM result to cubemap model and depth maps
+Write-Host "Step 4.5: Running xsfm post..." -ForegroundColor Green
+$xsfmPostOutputDir = "$dataDir\xsfm\cubemap_colmap"
+$xsfmPostImagesPath = "$xsfmPostOutputDir\images"
+$xsfmPostSfmPath = "$xsfmPostOutputDir\sparse"
+
+if (-not (Test-Path $xsfm_post_exe)) {
+  Write-Host "ERROR: xsfm_post executable not found at: $xsfm_post_exe" -ForegroundColor Red
+  exit 1
+}
+
+if (-not (Test-Path "$sfmOutputDir\0")) {
+  Write-Host "ERROR: SfM model not found at: $sfmOutputDir\0" -ForegroundColor Red
+  exit 1
+}
+
+& $xsfm_post_exe `
+  --model-dir "$sfmOutputDir\0" `
+  --image-dir "$dataDir\images" `
+  --output-dir "$xsfmPostOutputDir" `
+  --point-cloud-path "$dataDir\xsfm\localenu_normal.pcd" `
+  --overwrite
+
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "Error in Step 4.5 (xsfm post)" -ForegroundColor Red
   exit 1
 }
 
@@ -157,7 +235,7 @@ $xcolor_main_exe = Join-Path $BUILD_PACK "xcolor.exe"
 # Determine the correct camera path (try multiple possible locations)
 $images_path = $null
 $possible_paths = @(
-  "$dataDir\images"
+  "$xsfmPostImagesPath"
 )
 
 foreach ($path in $possible_paths) {
@@ -175,7 +253,7 @@ if (-not $images_path) {
 
 & $xcolor_main_exe `
   --images_path "$images_path" `
-  --sfm_result_path "$dataDir\xsfm\sparse\0" `
+  --sfm_result_path "$xsfmPostSfmPath" `
   --point_cloud_filename "$dataDir\map_opt.las" `
   --output_path "$dataDir"
 
