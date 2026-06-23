@@ -25,7 +25,7 @@ LOGGER = init_spdlog_like_logger()
 # ============================================================================
 
 # ========== 显示设置 ==========
-SHOW_PLOTS = False  # 是否弹出显示图形（False=仅保存，True=显示）
+SHOW_PLOTS = True  # 是否弹出显示图形（False=仅保存，True=显示）
 SAVE_PLOTS = False  # 是否保存图形到文件（coarse_alignment_correlation.png, fine_alignment_gyro_comparison.png）
 
 # ========== B-spline 插值参数 ==========
@@ -34,6 +34,7 @@ SPLINE_SMOOTHING = 0  # 平滑因子 (0=精确插值，>0=平滑)
 
 # ========== 时间对齐优化参数 ==========
 OPTIMIZATION_SEARCH_RANGE = 1.0  # 精细对齐的搜索范围 (±秒)
+CORRELATION_MIN_SAMPLE_INTERVAL = 0.005  # 粗相关重采样间隔下限，避免长日志使用过密采样
 
 # ========== 数据清理参数 ==========
 TIME_TOLERANCE = 1e-9  # 时间戳最小差异阈值，用于移除重复点
@@ -47,13 +48,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--device",
         type=str,
-        default=R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only-test\output\imu.dat",
+        default=R"D:\Users\rick\Desktop\tmp\licheng\20260616\xsfm3\imu.dat",
         help="Path to the Device IMU data file.",
     )
     parser.add_argument(
         "--insta",
         type=str,
-        default=R"Z:\rick\dataset\q9000\MT20260430-112900-collect-by-app-only-test\output\images\insv.dat",
+        default=R"D:\Users\rick\Desktop\tmp\licheng\20260616\xsfm3\images\insv.dat",
         help="Path to the Insta IMU data file.",
     )
     return parser.parse_args()
@@ -259,6 +260,14 @@ def create_bspline_models(
             raise
 
 
+def standardize_signal(signal_values: np.ndarray) -> np.ndarray:
+    """Return a zero-mean, unit-variance signal, guarding against flat input."""
+    std = np.std(signal_values)
+    if std <= 1e-12:
+        return signal_values - np.mean(signal_values)
+    return (signal_values - np.mean(signal_values)) / std
+
+
 def compute_cross_correlation(
     t1: np.ndarray,
     t2: np.ndarray,
@@ -281,31 +290,28 @@ def compute_cross_correlation(
     Returns:
         (time_delays, cross_corr, optimal_delay, max_correlation): 时间延迟、相关系数、最优延迟、最大值
     """
-    # 标准化信号
-    gyro1_norm = (gyro1 - np.mean(gyro1)) / np.std(gyro1)
-    gyro2_norm = (gyro2 - np.mean(gyro2)) / np.std(gyro2)
+    # 标准化信号，并保留两个传感器各自完整的时间范围。
+    # 不能先裁剪到当前重叠区间，否则后续分段视频的真实正延迟会被排除。
+    gyro1_norm = standardize_signal(gyro1)
+    gyro2_norm = standardize_signal(gyro2)
 
-    # 创建公共时间轴（使用较密集的采样率以保留细节）
-    t_min = max(t1[0], t2[0])
-    t_max = min(t1[-1], t2[-1])
-    dt = min(np.mean(np.diff(t1)), np.mean(np.diff(t2)))
-    t_common = np.arange(t_min, t_max, dt)
+    dt = max(
+        np.mean(np.diff(t1)),
+        np.mean(np.diff(t2)),
+        CORRELATION_MIN_SAMPLE_INTERVAL,
+    )
+    t1_uniform = np.arange(t1[0], t1[-1] + dt * 0.5, dt)
+    t2_uniform = np.arange(t2[0], t2[-1] + dt * 0.5, dt)
 
-    # 将两个信号插值到公共时间轴
-    # np.interp() 使用线性插值：
-    # - 第1参数 t_common: 目标时间点（新采样轴）
-    # - 第2参数 t1: 原始时间戳（已知数据的时间位置）
-    # - 第3参数 gyro1_norm: 原始陀螺仪值（已知数据的幅度）
-    # 返回值：在 t_common 每一时刻的插值结果
-    gyro1_interp = np.interp(t_common, t1, gyro1_norm)
-    gyro2_interp = np.interp(t_common, t2, gyro2_norm)
+    gyro1_interp = np.interp(t1_uniform, t1, gyro1_norm)
+    gyro2_interp = np.interp(t2_uniform, t2, gyro2_norm)
 
     # 计算互相关
-    correlation = signal.correlate(gyro1_interp, gyro2_interp, mode="full")
+    correlation = signal.correlate(gyro1_interp, gyro2_interp, mode="full", method="fft")
     lags = signal.correlation_lags(len(gyro1_interp), len(gyro2_interp), mode="full")
 
-    # 将lag转换为时间延迟（lag是样本索引差，乘以采样间隔得到时间差）
-    time_delays = lags * dt
+    # 将lag转换为 tau：t_insta + tau ~= t_device。
+    time_delays = (t1_uniform[0] - t2_uniform[0]) + lags * dt
 
     # 筛选在max_delay范围内的延迟
     valid_mask = np.abs(time_delays) <= max_delay
