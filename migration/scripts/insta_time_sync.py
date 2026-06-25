@@ -25,7 +25,7 @@ LOGGER = init_spdlog_like_logger()
 # ============================================================================
 
 # ========== 显示设置 ==========
-SHOW_PLOTS = True  # 是否弹出显示图形（False=仅保存，True=显示）
+SHOW_PLOTS = False  # 是否弹出显示图形（False=仅保存，True=显示）
 SAVE_PLOTS = False  # 是否保存图形到文件（coarse_alignment_correlation.png, fine_alignment_gyro_comparison.png）
 
 # ========== B-spline 插值参数 ==========
@@ -48,13 +48,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--device",
         type=str,
-        default=R"D:\Users\rick\Desktop\tmp\licheng\20260616\xsfm3\imu.dat",
+        default=R"D:\Users\rick\Desktop\tmp\licheng\20260616\xsfm1\imu.dat",
         help="Path to the Device IMU data file.",
     )
     parser.add_argument(
         "--insta",
         type=str,
-        default=R"D:\Users\rick\Desktop\tmp\licheng\20260616\xsfm3\images\insv.dat",
+        default=R"D:\Users\rick\Desktop\tmp\licheng\20260616\xsfm1\images\insv.dat",
         help="Path to the Insta IMU data file.",
     )
     return parser.parse_args()
