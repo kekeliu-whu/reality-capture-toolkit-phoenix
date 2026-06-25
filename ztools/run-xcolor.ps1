@@ -11,7 +11,7 @@ $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PROJECT_ROOT = Split-Path -Parent $SCRIPT_DIR
 $BUILD_PACK = Join-Path $PROJECT_ROOT "build-pack"
 $NATIVE_TOOLS = Join-Path $PROJECT_ROOT "native-tools"
-$xsfm_pre_exe = Join-Path $BUILD_PACK "xsfm_pre_new.exe"
+$xsfm_pre_exe = Join-Path $BUILD_PACK "xsfm_pre.exe"
 $xsfm_post_exe = Join-Path $BUILD_PACK "xsfm_post.exe"
 $PYTHON_TOOLS_DEV = Join-Path $PROJECT_ROOT "build-all\build-python-tools"
 $TOOL_SEARCH_DIRS = @($BUILD_PACK, $PYTHON_TOOLS_DEV)
@@ -83,7 +83,7 @@ if ($LASTEXITCODE -ne 0) {
   exit 1
 }
 
-# Step 2: Extract features with xsfm_pre_new.exe
+# Step 2: Extract features with xsfm_pre.exe
 Write-Host "Step 2: Extracting features..." -ForegroundColor Green
 & $xsfm_pre_exe feature_extractor `
   --image_path "$dataDir\images" `
@@ -91,7 +91,7 @@ Write-Host "Step 2: Extracting features..." -ForegroundColor Green
   --ImageReader.camera_model OPENCV_FISHEYE `
   --ImageReader.camera_params "1030.1467091090503,1028.8008312807606,1949.5400400646813,1914.7835423220931,0.042605851463874037,-0.007532224456171745,0.0070007420682475438,-0.0023540347797643482" `
   --ImageReader.single_camera_per_folder 1 `
-  --SiftExtraction.max_num_features 8000
+  --SiftExtraction.max_num_features 5000
 
 if ($LASTEXITCODE -ne 0) {
   Write-Host "Error in Step 2" -ForegroundColor Red
@@ -119,10 +119,6 @@ if ([string]::IsNullOrEmpty($fix_rig_exe) -or -not (Test-Path $fix_rig_exe)) {
   Write-Host "Searched in: $($TOOL_SEARCH_DIRS -join ', ')" -ForegroundColor Yellow
   exit 1
 }
-
-# & $xsfm_pre_exe rig_configurator `
-#   --database_path "$dbFile" `
-#   --rig_config_path "$rigFile"
 
 & $fix_rig_exe `
   --database_path "$dbFile" `
@@ -160,20 +156,8 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "Step 3: Sequential matching..." -ForegroundColor Green
 & $xsfm_pre_exe sequential_matcher `
   --database_path "$dataDir\xsfm\xsfm.db" `
-  --SequentialMatching.overlap 20 `
-  --SequentialMatching.quadratic_overlap 0 `
-  --SequentialMatching.loop_detection 0
-
-if ($LASTEXITCODE -ne 0) {
-  Write-Host "Error in Step 3 (overlap matcher)" -ForegroundColor Red
-  exit 1
-}
-
-& $xsfm_pre_exe sequential_matcher `
-  --database_path "$dataDir\xsfm\xsfm.db" `
   --SequentialMatching.vocab_tree_path "$BUILD_PACK\vocab_tree_faiss_flickr100K_words32K.bin" `
   --SequentialMatching.loop_detection 1 `
-  --SequentialMatching.loop_detection_period 8 `
   --TwoViewGeometry.filter_stationary_matches 1
 
 if ($LASTEXITCODE -ne 0) {
