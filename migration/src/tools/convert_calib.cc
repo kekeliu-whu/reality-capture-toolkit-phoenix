@@ -8,8 +8,8 @@
 #include "migration/proto_io.h"
 #include "proto/calib.pb.h"
 
-DEFINE_string(calib_filename, R"(D:\ProjectX\project-3d\data\manifold-tech-calib\ikalibr_param_s20.yaml)", "Calibration filename");
-DEFINE_string(output_dir, R"(D:\output-s20)", "Output dir to save converted calibration data");
+DEFINE_string(calib_filename, R"(D:\calibfile\ikalibr_param_22260500001.yaml)", "Calibration filename");
+DEFINE_string(output_dir, R"(D:\calibfile\output-jiuzhou2)", "Output dir to save converted calibration data");
 
 namespace {
 

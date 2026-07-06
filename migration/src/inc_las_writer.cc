@@ -29,9 +29,6 @@ void IncrementalLasWriter::initialize(const std::string& filename, pdal::PointTa
     options.add("scale_x", 1e-4);
     options.add("scale_y", 1e-4);
     options.add("scale_z", 1e-4);
-    options.add("offset_x", "auto");
-    options.add("offset_y", "auto");
-    options.add("offset_z", "auto");
 
     // Set options and prepare for writing
     m_writer->setOptions(options);
