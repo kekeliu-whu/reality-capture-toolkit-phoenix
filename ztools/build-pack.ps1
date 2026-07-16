@@ -17,17 +17,89 @@ $PACK_DIR = Join-Path $PROJECT_ROOT "build-pack"
 $BUILD_ALL_DIR = Join-Path $PROJECT_ROOT "build-all"
 
 # Build output paths
-$XCOLOR_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-xcolor\Release"
-$XCOLOR_MIGRATION_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-xcolor\migration_build\Release"
-$ODOMETRY_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-odometry\Release"
-$PGO_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-pgo\Release"
+$COLMAP_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-colmap"
+$COLMAP_EXE_SOURCE_DIR = Join-Path $COLMAP_BUILD_DIR "src\colmap\exe\Release"
+$ODOMETRY_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-odometry"
+$PGO_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-pgo"
 $PYTHON_TOOLS_DIR = Join-Path $BUILD_ALL_DIR "build-python-tools"
 
 # CUDA paths
 $CUDA_BIN_DIR = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\bin"
 
 # Data files
-$PROJ_DB_SOURCE = Join-Path $XCOLOR_BUILD_DIR "proj.db"
+$PROJ_DB_CANDIDATES = @(
+    (Join-Path $PROJECT_ROOT "build-all\build-pgo\Release\proj.db"),
+    (Join-Path $PROJECT_ROOT "build\Release\proj.db"),
+    (Join-Path $PROJECT_ROOT "build\RelWithDebInfo\proj.db"),
+    (Join-Path $PROJECT_ROOT "build\Debug\proj.db"),
+    (Join-Path $PROJECT_ROOT "build\proj.db"),
+    (Join-Path $PROJECT_ROOT "build-pack\proj.db")
+)
+
+# Build directory discovery
+$XCOLOR_BUILD_DIRS = @(
+    (Join-Path $PGO_BUILD_DIR "Release"),
+    (Join-Path $COLMAP_BUILD_DIR "src\colmap\exe\Release"),
+    (Join-Path $COLMAP_BUILD_DIR "Release")
+)
+$XCOLOR_MIGRATION_BUILD_DIRS = @(
+    (Join-Path $ODOMETRY_BUILD_DIR "migration_build\Release"),
+    (Join-Path $PGO_BUILD_DIR "migration_build\Release")
+)
+$ODOMETRY_BUILD_DIRS = @(
+    (Join-Path $ODOMETRY_BUILD_DIR "Release")
+)
+$PGO_BUILD_DIRS = @(
+    (Join-Path $PGO_BUILD_DIR "Release")
+)
+
+# Executable requirements (required first, then optional)
+$REQUIRED_EXECUTABLES = @(
+    "xcolor.exe",
+    "xsfm_process_point_cloud.exe",
+    "xsfm_pre.exe",
+    "slam.exe",
+    "slam_post.exe",
+    "insta_compute_pano_poses.exe",
+    "insta_compute_poses.exe",
+    "insta_data_extraction.exe",
+    "insta_time_sync.exe",
+    "xsfm_fix_rig_database.exe",
+    "xsfm_inject_subview_priors.exe",
+    "convert_manifold.exe",
+    "crashpad_handler.exe",
+    "xsfm_post.exe"
+)
+$OPTIONAL_EXECUTABLES = @()
+$EXECUTABLE_SOURCE_DIR_OVERRIDES = @{
+    "xsfm_post.exe" = $PGO_BUILD_DIRS
+}
+$PYTHON_TOOL_EXECUTABLES = @(
+    "insta_data_extraction.exe",
+    "insta_compute_pano_poses.exe",
+    "insta_compute_poses.exe",
+    "insta_time_sync.exe",
+    "xsfm_inject_subview_priors.exe",
+    "xsfm_fix_rig_database.exe"
+)
+$PYTHON_INTERNAL_REQUIRED_DIRS = @(
+    "contourpy",
+    "cryptography",
+    "cryptography-*.dist-info",
+    "dateutil",
+    "google",
+    "kiwisolver",
+    "matplotlib",
+    "numpy",
+    "numpy-*.dist-info",
+    "numpy.libs",
+    "PIL",
+    "scipy",
+    "scipy.libs",
+    "telemetry_parser"
+)
+$script:SELECTED_MIGRATION_BUILD_DIR = $null
+$script:SELECTED_PROJ_DB = $null
 
 # =====================================
 # Functions
@@ -56,6 +128,138 @@ function Fail {
     exit 1
 }
 
+function Get-ExistingPaths {
+    param([string[]]$CandidatePaths)
+    $paths = @()
+    foreach ($path in $CandidatePaths) {
+        if ($path -and (Test-Path $path)) {
+            $paths += (Resolve-Path $path).Path
+        }
+    }
+    return $paths
+}
+
+function Find-Artifact {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string[]]$SearchDirs
+    )
+    foreach ($dir in $SearchDirs) {
+        if (-not (Test-Path $dir)) {
+            continue
+        }
+        $candidate = Join-Path $dir $Name
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+    return $null
+}
+
+function Find-ExecutableArtifact {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string[]]$SearchDirs
+    )
+
+    if ($EXECUTABLE_SOURCE_DIR_OVERRIDES.ContainsKey($Name)) {
+        $overrideDirs = Get-ExistingPaths $EXECUTABLE_SOURCE_DIR_OVERRIDES[$Name]
+        return Find-Artifact -Name $Name -SearchDirs $overrideDirs
+    }
+
+    return Find-Artifact -Name $Name -SearchDirs $SearchDirs
+}
+
+function Resolve-CandidatePath {
+    param([string[]]$Candidates)
+    foreach ($path in $Candidates) {
+        if ($path -and (Test-Path $path)) {
+            return (Resolve-Path $path).Path
+        }
+    }
+    return $null
+}
+
+function Copy-DllSet {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$SearchDirs,
+        [Parameter(Mandatory = $true)][string]$Label,
+        [switch]$Required
+    )
+
+    $dllCount = 0
+    foreach ($dir in $SearchDirs) {
+        if (-not (Test-Path $dir)) {
+            continue
+        }
+        $dlls = Get-ChildItem $dir -Filter "*.dll" -ErrorAction SilentlyContinue
+        foreach ($dll in $dlls) {
+            try {
+                Copy-Item -LiteralPath $dll.FullName -Destination $PACK_DIR -Force -ErrorAction Stop
+                $dllCount++
+            } catch {
+                Fail "Failed to copy $($dll.Name): $($_.Exception.Message)"
+            }
+        }
+    }
+
+    if ($Required -and $dllCount -eq 0) {
+        Fail "No DLL files found in $Label"
+    }
+
+    Write-Host "    Copied $dllCount files"
+    return $dllCount
+}
+
+function Copy-PythonInternalItem {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$InternalRoot,
+        [Parameter(Mandatory = $true)][string]$DestInternalRoot
+    )
+
+    $relativePath = [System.IO.Path]::GetRelativePath($InternalRoot, $Source)
+    $targetPath = Join-Path $DestInternalRoot $relativePath
+    $targetParent = Split-Path -Parent $targetPath
+    if ($targetParent -and -not (Test-Path $targetParent)) {
+        New-Item -ItemType Directory -Path $targetParent -Force | Out-Null
+    }
+    Copy-Item -LiteralPath $Source -Destination $targetPath -Recurse -Force -ErrorAction Stop
+}
+
+function Copy-PythonToolDependencies {
+    $pythonInternalDir = Join-Path $PYTHON_TOOLS_DIR "_internal"
+    if (-not (Test-Path $pythonInternalDir)) {
+        Write-Host "    WARNING: Python tools _internal folder not found at $pythonInternalDir" -ForegroundColor Yellow
+        return
+    }
+
+    Write-Status "Copying required Python tool dependencies..."
+    $destInternalDir = Join-Path $PACK_DIR "_internal"
+    if (Test-Path $destInternalDir) { Remove-Item $destInternalDir -Recurse -Force }
+    New-Item -ItemType Directory -Path $destInternalDir -Force | Out-Null
+
+    try {
+        foreach ($file in Get-ChildItem $pythonInternalDir -File -ErrorAction SilentlyContinue) {
+            Copy-PythonInternalItem -Source $file.FullName -InternalRoot $pythonInternalDir -DestInternalRoot $destInternalDir
+        }
+
+        foreach ($pattern in $PYTHON_INTERNAL_REQUIRED_DIRS) {
+            $items = Get-ChildItem $pythonInternalDir -Directory -Filter $pattern -ErrorAction SilentlyContinue
+            foreach ($item in $items) {
+                Copy-PythonInternalItem -Source $item.FullName -InternalRoot $pythonInternalDir -DestInternalRoot $destInternalDir
+            }
+        }
+
+        $internalFileCount = @(Get-ChildItem $destInternalDir -Recurse -File -ErrorAction SilentlyContinue).Count
+        $internalSize = (Get-ChildItem $destInternalDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+        $internalSizeMB = if ($internalSize) { [Math]::Round($internalSize / 1MB, 2) } else { 0 }
+        Write-Host "    Copied required _internal dependencies ($internalFileCount files, $internalSizeMB MB)"
+    } catch {
+        Fail "Failed to copy Python tool dependencies: $($_.Exception.Message)"
+    }
+}
+
 function Test-PrerequisitesAndBuild {
     Write-Section "Checking prerequisites and build artifacts"
 
@@ -66,76 +270,101 @@ function Test-PrerequisitesAndBuild {
         $missing += "build-all directory not found (run build-all.ps1 first)"
     }
 
-    # Verify specific executable files from XColor
-    Write-Status "Checking XColor executables..."
-    $xcolorExes = @("xcolor.exe", "xsfm.exe", "xsfm_pre.exe", "xsfm_process_point_cloud.exe")
-    $xcolorExeCount = 0
-    foreach ($exe in $xcolorExes) {
-        if (Test-Path (Join-Path $XCOLOR_BUILD_DIR $exe)) {
-            $xcolorExeCount++
-        }
+    $xcolorDirs = Get-ExistingPaths $XCOLOR_BUILD_DIRS
+    $odometryDirs = Get-ExistingPaths $ODOMETRY_BUILD_DIRS
+    $pgoDirs = Get-ExistingPaths $PGO_BUILD_DIRS
+    $allExeDirs = $xcolorDirs + $odometryDirs + $pgoDirs
+    if (Test-Path $PYTHON_TOOLS_DIR) {
+        $allExeDirs += (Resolve-Path $PYTHON_TOOLS_DIR).Path
     }
-    if ($xcolorExeCount -eq 0) {
-        $missing += "No XColor executables found"
+    $migrationDirs = Get-ExistingPaths $XCOLOR_MIGRATION_BUILD_DIRS
+    $convertManifold = Find-Artifact -Name "convert_manifold.exe" -SearchDirs $migrationDirs
+    if ($convertManifold) {
+        $script:SELECTED_MIGRATION_BUILD_DIR = Split-Path -Path $convertManifold -Parent
+        $allExeDirs += $script:SELECTED_MIGRATION_BUILD_DIR
+        Write-Status "convert_manifold.exe found: $($script:SELECTED_MIGRATION_BUILD_DIR)"
     } else {
-        Write-Status "XColor executables found: $xcolorExeCount"
+        Write-Host "    [WARN] convert_manifold.exe not found in migration_build directories" -ForegroundColor Yellow
     }
 
-    Write-Status "Checking native xsfm_post executable..."
-    if (-not (Test-Path (Join-Path $PGO_BUILD_DIR "xsfm_post.exe"))) {
-        $missing += "xsfm_post.exe not found in PGO build"
-    } else {
-        Write-Status "xsfm_post.exe found"
-    }
-
-    # Verify specific executable from Odometry
-    Write-Status "Checking Odometry executables..."
-    if (-not (Test-Path (Join-Path $ODOMETRY_BUILD_DIR "slam.exe"))) {
-        $missing += "slam.exe not found"
-    } else {
-        Write-Status "slam.exe found"
-    }
-
-    # Verify Python Tools
-    Write-Status "Checking Python Tools executables..."
-    $pythonExes = @(
-        "insta_compute_pano_poses.exe",
-        "insta_compute_poses.exe",
-        "insta_data_extraction_ar.exe",
-        "insta_data_extraction.exe",
-        "xsfm_fix_rig_database.exe",
-        "xsfm_inject_subview_priors.exe"
+    Write-Status "Checking Colmap runtime resource files..."
+    $colmapRuntimeItems = @(
+        (Join-Path $COLMAP_EXE_SOURCE_DIR "colmap.exe"),
+        (Join-Path $COLMAP_EXE_SOURCE_DIR "qt.conf"),
+        (Join-Path $COLMAP_EXE_SOURCE_DIR "plugins")
     )
-    $pythonExeCount = 0
-    foreach ($exe in $pythonExes) {
-        if (Test-Path (Join-Path $PYTHON_TOOLS_DIR $exe)) {
-            $pythonExeCount++
+    $missingColmapRuntimeItems = @()
+    foreach ($path in $colmapRuntimeItems) {
+        if (-not (Test-Path $path)) {
+            $missingColmapRuntimeItems += $path
         }
     }
-    if ($pythonExeCount -eq 0) {
-        $missing += "No Python Tools executables found"
+    if ($missingColmapRuntimeItems.Count -gt 0) {
+        $missing += "Missing required Colmap runtime resource files: $($missingColmapRuntimeItems -join ', ')"
     } else {
-        Write-Status "Python Tools executables found: $pythonExeCount"
+        Write-Status "Colmap runtime resources found at: $COLMAP_EXE_SOURCE_DIR"
     }
 
-    # Verify convert_manifold.exe from migration_build
-    Write-Status "Checking XColor migration_build executables..."
-    if (-not (Test-Path (Join-Path $XCOLOR_MIGRATION_BUILD_DIR "convert_manifold.exe"))) {
-        $missing += "convert_manifold.exe not found in migration_build"
+    Write-Status "Checking required core executables..."
+    $missingRequired = @()
+    foreach ($exe in $REQUIRED_EXECUTABLES) {
+        $foundExe = Find-ExecutableArtifact -Name $exe -SearchDirs $allExeDirs
+        if (-not $foundExe) {
+            if ($exe -eq "xsfm_pre.exe" -and (Test-Path (Join-Path $COLMAP_EXE_SOURCE_DIR "colmap.exe"))) {
+                continue
+            }
+            $missingRequired += $exe
+        }
+    }
+    if ($missingRequired.Count -gt 0) {
+        $missing += "Required executables not found: $($missingRequired -join ', ')"
     } else {
-        Write-Status "convert_manifold.exe found"
+        Write-Status "Required executables found: $($REQUIRED_EXECUTABLES.Count)"
+    }
+
+    Write-Status "Checking optional executables..."
+    $missingOptional = @()
+    $optionalSearchDirs = $allExeDirs
+    if ($script:SELECTED_MIGRATION_BUILD_DIR) {
+        $optionalSearchDirs += $script:SELECTED_MIGRATION_BUILD_DIR
+    }
+    foreach ($exe in $OPTIONAL_EXECUTABLES) {
+        if (-not (Find-ExecutableArtifact -Name $exe -SearchDirs $optionalSearchDirs)) {
+            $missingOptional += $exe
+        }
+    }
+    if ($missingOptional.Count -gt 0) {
+        Write-Host "    [WARN] Optional executables not found: $($missingOptional -join ', ')" -ForegroundColor Yellow
     }
 
     # Check build-all Release directories for DLL dependencies
-    $xcolorDllCount = @(Get-ChildItem $XCOLOR_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue).Count
-    $xcolorMigrationDllCount = @(Get-ChildItem $XCOLOR_MIGRATION_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue).Count
-    $odometryDllCount = @(Get-ChildItem $ODOMETRY_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue).Count
-    $totalDllCount = $xcolorDllCount + $xcolorMigrationDllCount + $odometryDllCount
-    
+    Write-Status "Checking DLL dependencies..."
+    $xcolorDllCount = 0
+    foreach ($dir in $xcolorDirs) {
+        $xcolorDllCount += @(Get-ChildItem $dir -Filter "*.dll" -ErrorAction SilentlyContinue).Count
+    }
+    $odometryDllCount = 0
+    foreach ($dir in $odometryDirs) {
+        $odometryDllCount += @(Get-ChildItem $dir -Filter "*.dll" -ErrorAction SilentlyContinue).Count
+    }
+    $pgoDllCount = 0
+    foreach ($dir in $pgoDirs) {
+        $pgoDllCount += @(Get-ChildItem $dir -Filter "*.dll" -ErrorAction SilentlyContinue).Count
+    }
+    $migrationDllCount = 0
+    if ($script:SELECTED_MIGRATION_BUILD_DIR -and (Test-Path $script:SELECTED_MIGRATION_BUILD_DIR)) {
+        $migrationDllCount = @(Get-ChildItem $script:SELECTED_MIGRATION_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue).Count
+    }
+    $totalDllCount = $xcolorDllCount + $odometryDllCount + $pgoDllCount
     if ($totalDllCount -eq 0) {
-        $missing += "No DLL files found in Release directories"
+        $missing += "No DLL files found in XColor/Odometry/PGO Release directories"
     } else {
-        Write-Status "Dependency DLL files: $totalDllCount (XColor: $xcolorDllCount, XColor Migration: $xcolorMigrationDllCount, Odometry: $odometryDllCount)"
+        Write-Status "Dependency DLL files: $totalDllCount (XColor: $xcolorDllCount, Odometry: $odometryDllCount, PGO: $pgoDllCount)"
+    }
+    if ($migrationDllCount -gt 0) {
+        Write-Status "Migration DLL files found: $migrationDllCount"
+    } else {
+        Write-Host "    [WARN] No migration DLL files found" -ForegroundColor Yellow
     }
 
     # Check CUDA DLL files
@@ -153,22 +382,23 @@ function Test-PrerequisitesAndBuild {
 
     # Check proj.db file
     Write-Status "Checking proj.db file..."
-    if (-not (Test-Path $PROJ_DB_SOURCE)) {
-        Write-Host "    WARNING: proj.db not found at $PROJ_DB_SOURCE" -ForegroundColor Yellow
+    $script:SELECTED_PROJ_DB = Resolve-CandidatePath -Candidates $PROJ_DB_CANDIDATES
+    if (-not $script:SELECTED_PROJ_DB) {
+        Write-Host "    [WARN] proj.db not found in expected paths" -ForegroundColor Yellow
     } else {
-        Write-Status "proj.db file found"
+        Write-Status "proj.db file found: $script:SELECTED_PROJ_DB"
     }
 
     if ($missing.Count -gt 0) {
         Write-Host ""
-        Write-ErrorMsg "Missing components:"
+        Write-ErrorMsg "Missing mandatory components:"
         foreach ($item in $missing) {
             Write-Host "    - $item" -ForegroundColor Red
         }
         return $false
     }
 
-    Write-Status "All prerequisites check passed"
+    Write-Status "All mandatory prerequisites check passed"
     return $true
 }
 
@@ -187,48 +417,57 @@ function Create-PackDirectory {
 function Copy-ExecutableFiles {
     Write-Section "Copying executable files"
 
-    # List of executable files to copy (as documented in README)
-    $exeFiles = @(
-        # XColor Component
-        "xcolor.exe",
-        "xsfm.exe",
-        "xsfm_image_sampler.exe",
-        "xsfm_pre.exe",
-        "xsfm_process_point_cloud.exe",
-        "xsfm_reset_cameras.exe",
-        "crashpad_handler.exe",
-        # XColor Migration Build
-        "convert_manifold.exe",
-        # Odometry Component
-        "slam.exe",
-        # PGO Component
-        "slam_post.exe",
-        "xsfm_post.exe",
-        # Python Tools
-        "insta_compute_pano_poses.exe",
-        "insta_compute_poses.exe",
-        "insta_data_extraction_ar.exe",
-        "insta_data_extraction.exe",
-        "xsfm_fix_rig_database.exe",
-        "xsfm_inject_subview_priors.exe"
-    )
+    Write-Status "Copying executable files..."
 
-    Write-Status "Copying documented executable files..."
+    $xcolorDirs = Get-ExistingPaths $XCOLOR_BUILD_DIRS
+    $odometryDirs = Get-ExistingPaths $ODOMETRY_BUILD_DIRS
+    $pgoDirs = Get-ExistingPaths $PGO_BUILD_DIRS
+    $allExeSearchDirs = $xcolorDirs + $odometryDirs + $pgoDirs
+    if (Test-Path $PYTHON_TOOLS_DIR) {
+        $allExeSearchDirs += (Resolve-Path $PYTHON_TOOLS_DIR).Path
+    }
+    if ($script:SELECTED_MIGRATION_BUILD_DIR) {
+        $allExeSearchDirs += $script:SELECTED_MIGRATION_BUILD_DIR
+    }
+
     $copiedCount = 0
-    $missing = @()
+    $missingRequired = @()
+    $missingOptional = @()
 
-    # Search for each executable in all build directories
-    $allExeFiles = Get-ChildItem $XCOLOR_BUILD_DIR -Filter "*.exe" -ErrorAction SilentlyContinue
-    $allExeFiles += Get-ChildItem $XCOLOR_MIGRATION_BUILD_DIR -Filter "*.exe" -ErrorAction SilentlyContinue
-    $allExeFiles += Get-ChildItem $ODOMETRY_BUILD_DIR -Filter "*.exe" -ErrorAction SilentlyContinue
-    $allExeFiles += Get-ChildItem $PGO_BUILD_DIR -Filter "*.exe" -ErrorAction SilentlyContinue
-    $allExeFiles += Get-ChildItem $PYTHON_TOOLS_DIR -Filter "*.exe" -ErrorAction SilentlyContinue
-
-    foreach ($exeName in $exeFiles) {
-        $foundFile = $allExeFiles | Where-Object { $_.Name -eq $exeName }
+    foreach ($exeName in $REQUIRED_EXECUTABLES) {
+        $foundFile = Find-ExecutableArtifact -Name $exeName -SearchDirs $allExeSearchDirs
+        $usesColmapFallback = $false
+        if (-not $foundFile -and $exeName -eq "xsfm_pre.exe") {
+            $foundFile = Join-Path $COLMAP_EXE_SOURCE_DIR "colmap.exe"
+            $usesColmapFallback = $true
+        }
         if ($foundFile) {
             try {
-                Copy-Item -LiteralPath $foundFile.FullName -Destination $PACK_DIR -Force -ErrorAction Stop
+                if ($usesColmapFallback) {
+                    $colmapTempTarget = Join-Path $PACK_DIR "colmap.exe"
+                    $xsfmPreTarget = Join-Path $PACK_DIR "xsfm_pre.exe"
+                    Copy-Item -LiteralPath $foundFile -Destination $colmapTempTarget -Force -ErrorAction Stop
+                    Rename-Item -LiteralPath $colmapTempTarget -NewName "xsfm_pre.exe" -Force -ErrorAction Stop
+                    Write-Host "    Renamed: colmap.exe -> xsfm_pre.exe"
+                } else {
+                    Copy-Item -LiteralPath $foundFile -Destination $PACK_DIR -Force -ErrorAction Stop
+                    Write-Host "    Copied: $exeName"
+                }
+                $copiedCount++
+            } catch {
+                $errMsg = $_.Exception.Message
+                Fail "Failed to copy executable ${exeName}: ${errMsg}"
+            }
+        } else {
+            $missingRequired += $exeName
+        }
+    }
+
+    foreach ($exeName in $OPTIONAL_EXECUTABLES) {
+        $foundFile = Find-ExecutableArtifact -Name $exeName -SearchDirs $allExeSearchDirs
+        if ($foundFile) {
+            try {
+                Copy-Item -LiteralPath $foundFile -Destination $PACK_DIR -Force -ErrorAction Stop
                 Write-Host "    Copied: $exeName"
                 $copiedCount++
             } catch {
@@ -236,15 +475,55 @@ function Copy-ExecutableFiles {
                 Fail "Failed to copy executable ${exeName}: ${errMsg}"
             }
         } else {
-            $missing += $exeName
+            $missingOptional += $exeName
         }
     }
 
-    if ($missing.Count -gt 0) {
-        Fail "Missing executable files: $($missing -join ', ')"
+    if ($missingRequired.Count -gt 0) {
+        Fail "Missing required executable files: $($missingRequired -join ', ')"
+    }
+    if ($missingOptional.Count -gt 0) {
+        Write-Host "    [WARN] Optional executable files not found: $($missingOptional -join ', ')" -ForegroundColor Yellow
     }
 
     Write-Host "    Total copied: $copiedCount files"
+
+    Write-Status "Copying Colmap runtime resources from $COLMAP_EXE_SOURCE_DIR ..."
+    $colmapQtConfSource = Join-Path $COLMAP_EXE_SOURCE_DIR "qt.conf"
+    $colmapQtConfTarget = Join-Path $PACK_DIR "qt.conf"
+    $colmapPluginsSource = Join-Path $COLMAP_EXE_SOURCE_DIR "plugins"
+    $colmapPluginsTarget = Join-Path $PACK_DIR "plugins"
+    $colmapExeSource = Join-Path $COLMAP_EXE_SOURCE_DIR "colmap.exe"
+    $colmapTempTarget = Join-Path $PACK_DIR "colmap.exe"
+    $xsfmPreTarget = Join-Path $PACK_DIR "xsfm_pre.exe"
+
+    try {
+        Copy-Item -LiteralPath $colmapQtConfSource -Destination $colmapQtConfTarget -Force -ErrorAction Stop
+        Write-Host "    Copied: qt.conf"
+    } catch {
+        Fail "Failed to copy qt.conf: $($_.Exception.Message)"
+    }
+
+    if (Test-Path $colmapPluginsTarget) {
+        Remove-Item -Recurse -Force $colmapPluginsTarget
+    }
+    try {
+        Copy-Item -LiteralPath $colmapPluginsSource -Destination $colmapPluginsTarget -Recurse -Force -ErrorAction Stop
+        Write-Host "    Copied: plugins/"
+    } catch {
+        Fail "Failed to copy plugins directory: $($_.Exception.Message)"
+    }
+
+    try {
+        Copy-Item -LiteralPath $colmapExeSource -Destination $colmapTempTarget -Force -ErrorAction Stop
+        if (Test-Path $xsfmPreTarget) {
+            Remove-Item -LiteralPath $xsfmPreTarget -Force -ErrorAction Stop
+        }
+        Rename-Item -LiteralPath $colmapTempTarget -NewName "xsfm_pre.exe" -Force -ErrorAction Stop
+        Write-Host "    Renamed: colmap.exe -> xsfm_pre.exe"
+    } catch {
+        Fail "Failed to rename colmap.exe as xsfm_pre.exe: $($_.Exception.Message)"
+    }
 
     # Copy ffmpeg.exe alongside the Python tools (used by insta_data_extraction)
     Write-Status "Copying ffmpeg.exe..."
@@ -268,64 +547,43 @@ function Copy-ExecutableFiles {
 function Copy-Dependencies {
     Write-Section "Copying dependencies from Release directories"
 
-    Write-Status "Copying XColor Release DLL files..."
-    $xcolorDlls = Get-ChildItem $XCOLOR_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue
-    if ($xcolorDlls.Count -eq 0) { Fail "No DLL files found in $XCOLOR_BUILD_DIR" }
-    foreach ($dll in $xcolorDlls) {
-        try { Copy-Item -LiteralPath $dll.FullName -Destination $PACK_DIR -Force -ErrorAction Stop } catch { Fail "Failed to copy $($dll.Name): $($_.Exception.Message)" }
-    }
-    Write-Host "    Copied $($xcolorDlls.Count) files"
+    $xcolorDirs = Get-ExistingPaths $XCOLOR_BUILD_DIRS
+    $odometryDirs = Get-ExistingPaths $ODOMETRY_BUILD_DIRS
+    $pgoDirs = Get-ExistingPaths $PGO_BUILD_DIRS
 
-    Write-Status "Copying XColor migration_build Release DLL files..."
-    $migrationDlls = Get-ChildItem $XCOLOR_MIGRATION_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue
-    if ($migrationDlls.Count -eq 0) { Fail "No DLL files found in $XCOLOR_MIGRATION_BUILD_DIR" }
-    foreach ($dll in $migrationDlls) {
-        try { Copy-Item -LiteralPath $dll.FullName -Destination $PACK_DIR -Force -ErrorAction Stop } catch { Fail "Failed to copy $($dll.Name): $($_.Exception.Message)" }
+    Write-Status "Copying XColor Release DLL files..."
+    $xcolorDllCount = Copy-DllSet -SearchDirs $xcolorDirs -Label "XColor Release" -Required
+
+    if ($script:SELECTED_MIGRATION_BUILD_DIR) {
+        Write-Status "Copying XColor migration_build Release DLL files..."
+        $migrationDllCount = Copy-DllSet -SearchDirs @($script:SELECTED_MIGRATION_BUILD_DIR) -Label "XColor migration_build" -Required:$false
+        if ($migrationDllCount -eq 0) {
+            Write-Host "    [WARN] No DLLs found in migration_build release directory" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "    [WARN] Migration build directory not selected, skipping migration DLL copy" -ForegroundColor Yellow
     }
-    Write-Host "    Copied $($migrationDlls.Count) files"
 
     Write-Status "Copying Odometry Release DLL files..."
-    $odometryDlls = Get-ChildItem $ODOMETRY_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue
-    if ($odometryDlls.Count -eq 0) { Fail "No DLL files found in $ODOMETRY_BUILD_DIR" }
-    foreach ($dll in $odometryDlls) {
-        try { Copy-Item -LiteralPath $dll.FullName -Destination $PACK_DIR -Force -ErrorAction Stop } catch { Fail "Failed to copy $($dll.Name): $($_.Exception.Message)" }
-    }
-    Write-Host "    Copied $($odometryDlls.Count) files"
+    $odometryDllCount = Copy-DllSet -SearchDirs $odometryDirs -Label "Odometry Release" -Required
 
     Write-Status "Copying PGO Release DLL files..."
-    if (-not (Test-Path $PGO_BUILD_DIR)) { Fail "PGO build directory not found: $PGO_BUILD_DIR" }
-    $pgoDlls = Get-ChildItem $PGO_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue
-    if ($pgoDlls.Count -eq 0) { Fail "No DLL files found in $PGO_BUILD_DIR" }
-    foreach ($dll in $pgoDlls) {
-        try { Copy-Item -LiteralPath $dll.FullName -Destination $PACK_DIR -Force -ErrorAction Stop } catch { Fail "Failed to copy $($dll.Name): $($_.Exception.Message)" }
-    }
-    Write-Host "    Copied $($pgoDlls.Count) files"
+    $pgoDllCount = Copy-DllSet -SearchDirs $pgoDirs -Label "PGO Release" -Required
 
     Write-Status "Copying CUDA DLL files..."
     if (-not (Test-Path $CUDA_BIN_DIR)) { Fail "CUDA directory not found: $CUDA_BIN_DIR" }
     $cudaDlls = Get-ChildItem $CUDA_BIN_DIR -Filter "*.dll" -ErrorAction SilentlyContinue
-    if ($cudaDlls.Count -eq 0) { Fail "No CUDA DLL files found in $CUDA_BIN_DIR" }
+    if ($cudaDlls.Count -eq 0) { Fail "No DLL files found in $CUDA_BIN_DIR" }
     foreach ($dll in $cudaDlls) {
         try { Copy-Item -LiteralPath $dll.FullName -Destination $PACK_DIR -Force -ErrorAction Stop } catch { Fail "Failed to copy $($dll.Name): $($_.Exception.Message)" }
     }
     Write-Host "    Copied $($cudaDlls.Count) files"
 
-    # Copy Python tools shared _internal folder (shared bundle from PyInstaller COLLECT)
-    $pythonInternalDir = Join-Path $PYTHON_TOOLS_DIR "_internal"
-    if (Test-Path $pythonInternalDir) {
-        Write-Status "Copying Python tools shared _internal folder..."
-        $destInternalDir = Join-Path $PACK_DIR "_internal"
-        if (Test-Path $destInternalDir) { Remove-Item $destInternalDir -Recurse -Force }
-        try {
-            Copy-Item -LiteralPath $pythonInternalDir -Destination $destInternalDir -Recurse -Force -ErrorAction Stop
-            $internalFileCount = @(Get-ChildItem $destInternalDir -Recurse -File -ErrorAction SilentlyContinue).Count
-            Write-Host "    Copied _internal folder ($internalFileCount files)"
-        } catch {
-            Fail "Failed to copy Python _internal folder: $($_.Exception.Message)"
-        }
-    } else {
-        Write-Host "    WARNING: Python tools _internal folder not found at $pythonInternalDir" -ForegroundColor Yellow
+    if ($xcolorDllCount -eq 0 -or $odometryDllCount -eq 0 -or $pgoDllCount -eq 0) {
+        Fail "Required DLL copy failed for one or more build components"
     }
+
+    Copy-PythonToolDependencies
 }
 
 function Download-VocabTree {
@@ -365,12 +623,19 @@ function Copy-DataFiles {
     Write-Section "Copying data files"
 
     Write-Status "Copying proj.db..."
-    if (-not (Test-Path $PROJ_DB_SOURCE)) { Fail "proj.db not found at $PROJ_DB_SOURCE" }
-    try {
-        Copy-Item -LiteralPath $PROJ_DB_SOURCE -Destination $PACK_DIR -Force -ErrorAction Stop
-        Write-Host "    Copied proj.db"
-    } catch {
-        Fail "Failed to copy proj.db: $($_.Exception.Message)"
+    if (-not $script:SELECTED_PROJ_DB) {
+        $script:SELECTED_PROJ_DB = Resolve-CandidatePath -Candidates $PROJ_DB_CANDIDATES
+    }
+
+    if (-not $script:SELECTED_PROJ_DB) {
+        Write-Host "    [WARN] proj.db not found, continuing without it" -ForegroundColor Yellow
+    } else {
+        try {
+            Copy-Item -LiteralPath $script:SELECTED_PROJ_DB -Destination $PACK_DIR -Force -ErrorAction Stop
+            Write-Host "    Copied proj.db"
+        } catch {
+            Fail "Failed to copy proj.db: $($_.Exception.Message)"
+        }
     }
 
     $pgoJsonSource = Join-Path $PROJECT_ROOT "migration\config\pgo\pgo.json"
@@ -421,15 +686,7 @@ function Show-PackSummary {
     if ($hasPythonBundle) {
         Write-Host ""
         Write-Host "  Python EXEs (shared bundle):" -ForegroundColor Yellow
-        $pythonExeNames = @(
-            "insta_compute_pano_poses.exe",
-            "insta_compute_poses.exe",
-            "insta_data_extraction_ar.exe",
-            "insta_data_extraction.exe",
-            "xsfm_fix_rig_database.exe",
-            "xsfm_inject_subview_priors.exe"
-        )
-        foreach ($name in $pythonExeNames) {
+        foreach ($name in $PYTHON_TOOL_EXECUTABLES) {
             $path = Join-Path $PACK_DIR $name
             if (Test-Path $path) {
                 Write-Host "    - $name" -ForegroundColor Gray

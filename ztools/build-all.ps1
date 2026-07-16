@@ -1,5 +1,5 @@
 #!/usr/bin/env pwsh
-# Comprehensive build script for XColor, Odometry, and Python Tools
+# Comprehensive build script for Colmap, Odometry, and Python Tools
 # Builds C++ projects and compiles Python tools to EXE
 # Usage: .\build-all.ps1 [-TestOnly]
 
@@ -36,8 +36,8 @@ $CMAKE_EXE = "D:\Program Files\Microsoft Visual Studio\2022\Professional\Common7
 $VCPKG_TOOLCHAIN_FILE = "F:/Library/vcpkg/scripts/buildsystems/vcpkg.cmake"
 
 $BUILD_ALL_DIR = Join-Path $PROJECT_ROOT "build-all"
-$XCOLOR_SOURCE_DIR = Join-Path $PROJECT_ROOT "xcolor"
-$XCOLOR_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-xcolor"
+$COLMAP_SOURCE_DIR = Join-Path $PROJECT_ROOT "colmap"
+$COLMAP_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-colmap"
 $ODOMETRY_SOURCE_DIR = Join-Path $PROJECT_ROOT "odometry"
 $ODOMETRY_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-odometry"
 $PGO_SOURCE_DIR = Join-Path $PROJECT_ROOT "pgo"
@@ -50,7 +50,7 @@ $PYTHON_TOOLS_DIR = Join-Path $BUILD_ALL_DIR "build-python-tools"
 # ============================================================
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Complete Build System" -ForegroundColor Cyan
-Write-Host "  * XColor" -ForegroundColor Cyan
+Write-Host "  * Colmap" -ForegroundColor Cyan
 Write-Host "  * Odometry" -ForegroundColor Cyan
 Write-Host "  * Python Tools" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
@@ -66,8 +66,8 @@ if (!(Test-Path $CMAKE_EXE)) {
 }
 
 # Check source directories
-if (!(Test-Path $XCOLOR_SOURCE_DIR)) {
-    Write-Host "ERROR: XColor source not found at $XCOLOR_SOURCE_DIR" -ForegroundColor Red
+if (!(Test-Path $COLMAP_SOURCE_DIR)) {
+    Write-Host "ERROR: Colmap source not found at $COLMAP_SOURCE_DIR" -ForegroundColor Red
     exit 1
 }
 
@@ -91,7 +91,6 @@ $PYTHON_FILES = @(
     "insta_data_extraction.py",
     "insta_compute_pano_poses.py",
     "insta_compute_poses.py",
-    "insta_data_extraction_ar.py",
     "insta_time_sync.py",
     'xsfm_inject_subview_priors.py',
     'xsfm_fix_rig_database.py'
@@ -124,7 +123,7 @@ New-Item -ItemType Directory -Path $BUILD_ALL_DIR -Force | Out-Null
 
 Write-Host ""
 Write-Host "Project Root: $PROJECT_ROOT" -ForegroundColor Gray
-Write-Host "XColor Build: $XCOLOR_BUILD_DIR" -ForegroundColor Gray
+Write-Host "Colmap Build: $COLMAP_BUILD_DIR" -ForegroundColor Gray
 Write-Host "Odometry Build: $ODOMETRY_BUILD_DIR" -ForegroundColor Gray
 Write-Host "PGO Build: $PGO_BUILD_DIR" -ForegroundColor Gray
 Write-Host "Python Tools: $PYTHON_TOOLS_DIR" -ForegroundColor Gray
@@ -142,52 +141,59 @@ if ($TestOnly) {
 }
 
 # ============================================================
-# Stage 1: Build XColor
+# Stage 1: Build Colmap
 # ============================================================
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "Stage 1/3: Building XColor" -ForegroundColor Cyan
+Write-Host "Stage 1/3: Building Colmap" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-if (Test-Path $XCOLOR_BUILD_DIR) {
+if (Test-Path $COLMAP_BUILD_DIR) {
     Write-Host "Removing existing build directory..." -ForegroundColor Gray
-    Remove-Item -Recurse -Force $XCOLOR_BUILD_DIR
+    Remove-Item -Recurse -Force $COLMAP_BUILD_DIR
 }
 
 Write-Host "Creating build directory..." -ForegroundColor Gray
-New-Item -ItemType Directory -Path $XCOLOR_BUILD_DIR -Force | Out-Null
+New-Item -ItemType Directory -Path $COLMAP_BUILD_DIR -Force | Out-Null
 
 Write-Host "Configuring with CMake..." -ForegroundColor Yellow
 
 & $CMAKE_EXE `
     -DCMAKE_EXPORT_COMPILE_COMMANDS:BOOL=TRUE `
     "-DCMAKE_TOOLCHAIN_FILE=$VCPKG_TOOLCHAIN_FILE" `
+    "-DVCPKG_MANIFEST_MODE=OFF" `
+    "-DFETCH_FAISS=OFF" `
+    "-DFETCH_ONNX=OFF" `
+    "-DONNX_ENABLED=OFF" `
+    "-DFETCH_POSELIB=OFF" `
+    "-DCUDA_ENABLED=ON" `
+    "-DCMAKE_CUDA_ARCHITECTURES=75;86;89;90" `
     --no-warn-unused-cli `
-    -S $XCOLOR_SOURCE_DIR `
-    -B $XCOLOR_BUILD_DIR `
+    -S $COLMAP_SOURCE_DIR `
+    -B $COLMAP_BUILD_DIR `
     -G "Visual Studio 17 2022" `
     -T "host=x64" `
     -A "x64"
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: XColor CMake configuration failed" -ForegroundColor Red
+    Write-Host "ERROR: Colmap CMake configuration failed" -ForegroundColor Red
     exit 1
 }
 
 Write-Host "Building..." -ForegroundColor Yellow
 
 & $CMAKE_EXE `
-    --build $XCOLOR_BUILD_DIR `
+    --build $COLMAP_BUILD_DIR `
     --config "Release" `
     --target "ALL_BUILD" `
     -j 24
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: XColor build failed" -ForegroundColor Red
+    Write-Host "ERROR: Colmap build failed" -ForegroundColor Red
     exit 1
 }
 
-Write-Host "[OK] XColor build completed" -ForegroundColor Green
+Write-Host "[OK] Colmap build completed" -ForegroundColor Green
 Write-Host ""
 
 # ============================================================
@@ -309,7 +315,6 @@ _scripts = [
     'insta_data_extraction',
     'insta_compute_pano_poses',
     'insta_compute_poses',
-    'insta_data_extraction_ar',
     'insta_time_sync',
     'xsfm_inject_subview_priors',
     'xsfm_fix_rig_database'
@@ -397,8 +402,8 @@ Write-Host "BUILD SUMMARY" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-Write-Host "[OK] XColor" -ForegroundColor Green
-Write-Host "  Location: $XCOLOR_BUILD_DIR" -ForegroundColor Gray
+Write-Host "[OK] Colmap" -ForegroundColor Green
+Write-Host "  Location: $COLMAP_BUILD_DIR" -ForegroundColor Gray
 Write-Host ""
 
 Write-Host "[OK] Odometry" -ForegroundColor Green

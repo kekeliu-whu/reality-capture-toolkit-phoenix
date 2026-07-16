@@ -1,3 +1,4 @@
-[submodule "xcolor"]
-	path = xcolor
-	url = https://github.com/kekeliu-whu/glomap
+[submodule "colmap"]
+	path = colmap
+	url = https://github.com/kekeliu-whu/colmap.git
+	branch = develop
