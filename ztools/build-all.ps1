@@ -92,7 +92,6 @@ $PYTHON_FILES = @(
     "insta_compute_pano_poses.py",
     "insta_compute_poses.py",
     "insta_data_extraction_ar.py",
-    "xsfm_post.py",
     "insta_time_sync.py",
     'xsfm_inject_subview_priors.py',
     'xsfm_fix_rig_database.py'
@@ -311,7 +310,6 @@ _scripts = [
     'insta_compute_pano_poses',
     'insta_compute_poses',
     'insta_data_extraction_ar',
-    'xsfm_post',
     'insta_time_sync',
     'xsfm_inject_subview_priors',
     'xsfm_fix_rig_database'

@@ -12,6 +12,7 @@
 
 #include "map/utils.h"
 #include "migration/proto_io.h"
+#include "migration/string.h"
 #include "read_write.h"
 
 namespace {
@@ -206,7 +207,7 @@ void SaveLasFile(const std::vector<TimestampedPointCloud> &submaps,
   reader.addView(view);
 
   pdal::Options options;
-  options.add("filename", output_filename);
+  options.add("filename", PlatformToUTF8(output_filename));
   options.add("scale_x", 1e-4);
   options.add("scale_y", 1e-4);
   options.add("scale_z", 1e-4);

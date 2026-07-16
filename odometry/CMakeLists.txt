@@ -20,7 +20,8 @@ endif()
 
 add_definitions(-D_USE_MATH_DEFINES)
 add_definitions(-DGLOG_USE_GLOG_EXPORT)
-add_definitions(-DROOT_DIR="D:/ProjectX/project-3d/reality-capture-toolkit/odometry/")
+set(ROOT_DIR "${CMAKE_CURRENT_LIST_DIR}/")
+add_definitions(-DROOT_DIR="${ROOT_DIR}")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

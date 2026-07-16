@@ -256,7 +256,14 @@ def extract_frames_from_video(
             ]
 
             print("  Extracting raw frames...")
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            result = subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
 
             # 获取所有临时帧文件
             temp_frames = sorted(

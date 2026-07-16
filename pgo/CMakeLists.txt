@@ -8,9 +8,9 @@ endif(CMAKE_TOOLCHAIN_FILE)
 add_definitions(-D_USE_MATH_DEFINES -DPROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
 if(MSVC)
-  add_compile_options(/MP)
+  add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/MP>)
   set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/O2 /Ob3 /MD /Zi")
-  add_compile_options($<$<CONFIG:Release>:/Zi>)
+  add_compile_options($<$<AND:$<CONFIG:Release>,$<COMPILE_LANGUAGE:C,CXX>>:/Zi>)
   add_link_options($<$<CONFIG:Release>:/DEBUG>)
 endif()
 
@@ -21,6 +21,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Eigen3 REQUIRED)
 find_package(Ceres REQUIRED)
 find_package(gflags REQUIRED)
+find_package(OpenCV QUIET)
 find_package(VTK CONFIG QUIET)
 find_package(PCL REQUIRED COMPONENTS common io filters registration visualization)
 find_package(Boost CONFIG COMPONENTS program_options)
@@ -29,6 +30,7 @@ find_package(spdlog REQUIRED)
 find_package(PDAL CONFIG REQUIRED)
 find_package(Glog REQUIRED)
 find_package(PROJ CONFIG REQUIRED)
+find_package(CUDAToolkit QUIET)
 
 include_directories(
   src
@@ -36,9 +38,24 @@ include_directories(
   ${EIGEN3_INCLUDE_DIRS}
   ${CERES_INCLUDE_DIRS}
   ${PCL_INCLUDE_DIRS}
+  ${OpenCV_INCLUDE_DIRS}
 )
 
 add_subdirectory(../migration migration_build)
+
+set(PGO_COLMAP_TARGET "")
+if(TARGET colmap::colmap)
+  set(PGO_COLMAP_TARGET colmap::colmap)
+elseif(TARGET colmap)
+  set(PGO_COLMAP_TARGET colmap)
+else()
+  find_package(colmap CONFIG QUIET)
+  if(TARGET colmap::colmap)
+    set(PGO_COLMAP_TARGET colmap::colmap)
+  elseif(TARGET colmap)
+    set(PGO_COLMAP_TARGET colmap)
+  endif()
+endif()
 
 
 set(
@@ -78,6 +95,58 @@ set(PGO_PRIVATE_LIBS
 )
 if(VTK_FOUND)
   list(APPEND PGO_PRIVATE_LIBS ${VTK_LIBRARIES})
+endif()
+
+if(PGO_COLMAP_TARGET AND OpenCV_FOUND AND CUDAToolkit_FOUND)
+  set(PGO_XSFM_TOOL_LIBS
+    ${PCL_LIBRARIES}
+    $<TARGET_NAME:pdalcpp>
+    spdlog::spdlog_header_only
+    OpenMP::OpenMP_CXX
+    ${PGO_COLMAP_TARGET}
+  )
+
+  set(XSFM_POST_DEPTH_OBJ "${CMAKE_CURRENT_BINARY_DIR}/xsfm_post_depth_$<CONFIG>.obj")
+  add_custom_command(
+    OUTPUT "${XSFM_POST_DEPTH_OBJ}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}"
+    COMMAND "${CUDAToolkit_NVCC_EXECUTABLE}"
+      -std=c++17
+      -gencode=arch=compute_75,code=compute_75
+      -c "${CMAKE_CURRENT_SOURCE_DIR}/tools/xsfm_post_depth.cu"
+      -I "${CMAKE_CURRENT_SOURCE_DIR}/tools"
+      -I "${CUDAToolkit_INCLUDE_DIRS}"
+      -Xcompiler=/EHsc
+      -Xcompiler=/MD
+      -o "${XSFM_POST_DEPTH_OBJ}"
+    DEPENDS
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/xsfm_post_depth.cu"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/xsfm_post_depth.h"
+    VERBATIM
+  )
+  set_source_files_properties(
+    "${XSFM_POST_DEPTH_OBJ}"
+    PROPERTIES
+      GENERATED TRUE
+      EXTERNAL_OBJECT TRUE
+  )
+  add_executable(
+    xsfm_post
+    tools/xsfm_post.cc
+    tools/xsfm_post_depth.h
+    "${XSFM_POST_DEPTH_OBJ}"
+  )
+  target_link_libraries(
+    xsfm_post
+    ${PGO_XSFM_TOOL_LIBS}
+    ${OpenCV_LIBS}
+    CUDA::cudart
+  )
+else()
+  message(
+    WARNING
+    "Skipping xsfm_post build in pgo: COLMAP, OpenCV, or CUDA Toolkit was not found."
+  )
 endif()
 
 add_library(

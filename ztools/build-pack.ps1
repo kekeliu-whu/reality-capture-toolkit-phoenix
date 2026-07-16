@@ -81,6 +81,13 @@ function Test-PrerequisitesAndBuild {
         Write-Status "XColor executables found: $xcolorExeCount"
     }
 
+    Write-Status "Checking native xsfm_post executable..."
+    if (-not (Test-Path (Join-Path $PGO_BUILD_DIR "xsfm_post.exe"))) {
+        $missing += "xsfm_post.exe not found in PGO build"
+    } else {
+        Write-Status "xsfm_post.exe found"
+    }
+
     # Verify specific executable from Odometry
     Write-Status "Checking Odometry executables..."
     if (-not (Test-Path (Join-Path $ODOMETRY_BUILD_DIR "slam.exe"))) {
@@ -196,6 +203,7 @@ function Copy-ExecutableFiles {
         "slam.exe",
         # PGO Component
         "slam_post.exe",
+        "xsfm_post.exe",
         # Python Tools
         "insta_compute_pano_poses.exe",
         "insta_compute_poses.exe",
