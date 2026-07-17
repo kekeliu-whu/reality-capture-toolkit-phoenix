@@ -167,9 +167,14 @@ bool ReadPgoMetricsFile(const std::string &filename, proto::PgoMetrics &metrics)
 
 bool WritePgoMetricsFile(const std::string &filename, const proto::PgoMetrics &metrics) { return WriteSingleMsgFile(filename, metrics); }
 
-bool ReadSensorCalibFile(const std::string &filename, proto::SensorCalib &calib) { return ReadSingleMsgFile(filename, calib); }
+bool ReadSensorCalibrationFile(const std::string &filename, reality_capture::calibration::SensorCalibration &calibration) {
+  return ReadSingleMsgFile(filename, calibration);
+}
 
-bool WriteSensorCalibFile(const std::string &filename, const proto::SensorCalib &calib) { return WriteSingleMsgFile(filename, calib); }
+bool WriteSensorCalibrationFile(const std::string &filename,
+                                const reality_capture::calibration::SensorCalibration &calibration) {
+  return WriteSingleMsgFile(filename, calibration);
+}
 
 bool ReadPgoConfigFile(const std::string &filename, proto::PgoConfig &config) {
   // Find the file extension

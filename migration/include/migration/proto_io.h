@@ -35,8 +35,9 @@ bool WritePgoMetricsFile(const std::string &filename, const proto::PgoMetrics &m
 
 bool ReadPgoConfigFile(const std::string &filename, proto::PgoConfig &config);
 
-bool ReadSensorCalibFile(const std::string &filename, proto::SensorCalib &calib);
-bool WriteSensorCalibFile(const std::string &filename, const proto::SensorCalib &calib);
+bool ReadSensorCalibrationFile(const std::string &filename, reality_capture::calibration::SensorCalibration &calibration);
+bool WriteSensorCalibrationFile(const std::string &filename,
+                                const reality_capture::calibration::SensorCalibration &calibration);
 
 bool WriteDelimitedTo(const google::protobuf::MessageLite &message, std::ofstream &rawOutput);
 bool ReadDelimitedFrom(std::ifstream &rawInput, google::protobuf::MessageLite *message);

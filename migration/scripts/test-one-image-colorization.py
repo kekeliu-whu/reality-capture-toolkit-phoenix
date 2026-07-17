@@ -109,7 +109,7 @@ def load_img_poses(filepath: str) -> list[dict]:
 def load_calibration(filepath: str) -> dict:
     """
     从 calibration.json 或 calibration.dat 读取相机内参和畸变参数。
-    返回 {相机名称: {fx, fy, cx, cy, k1, k2, k3, k4}} 字典。
+    返回按相机名称索引的模型和参数。
     """
     ext = os.path.splitext(filepath)[1].lower()
 
@@ -123,6 +123,7 @@ def load_calibration(filepath: str) -> dict:
             distortion = cam_param.get("distortion", {}).get("params", {})
             name = cam_param.get("name", "default")
             cameras[name] = {
+                "model": "opencv_fisheye",
                 "fx": float(intrinsic["fl_x"]),
                 "fy": float(intrinsic["fl_y"]),
                 "cx": float(intrinsic["cx"]),
@@ -142,22 +143,41 @@ def load_calibration(filepath: str) -> dict:
     with open(filepath, "rb") as f:
         calib_data = f.read()
 
-    sensor_calib = calib_pb2.SensorCalib()
+    sensor_calib = calib_pb2.SensorCalibration()
     sensor_calib.ParseFromString(calib_data)
 
     cameras = {}
-    for cam_param in sensor_calib.camera_param:
-        name = cam_param.name if cam_param.name else "default"
-        cameras[name] = {
-            "fx": cam_param.fx,
-            "fy": cam_param.fy,
-            "cx": cam_param.cx,
-            "cy": cam_param.cy,
-            "k1": cam_param.k1,
-            "k2": cam_param.k2,
-            "k3": cam_param.k3,
-            "k4": cam_param.k4,
-        }
+    for camera in sensor_calib.cameras:
+        name = camera.name if camera.name else "default"
+        model_name = camera.WhichOneof("camera_model")
+        if model_name == "opencv":
+            model = camera.opencv
+            cameras[name] = {
+                "model": model_name,
+                "fx": model.focal_length_x,
+                "fy": model.focal_length_y,
+                "cx": model.principal_point_x,
+                "cy": model.principal_point_y,
+                "k1": model.k1,
+                "k2": model.k2,
+                "p1": model.p1,
+                "p2": model.p2,
+            }
+        elif model_name == "opencv_fisheye":
+            model = camera.opencv_fisheye
+            cameras[name] = {
+                "model": model_name,
+                "fx": model.focal_length_x,
+                "fy": model.focal_length_y,
+                "cx": model.principal_point_x,
+                "cy": model.principal_point_y,
+                "k1": model.k1,
+                "k2": model.k2,
+                "k3": model.k3,
+                "k4": model.k4,
+            }
+        else:
+            raise ValueError(f"相机 '{name}' 未配置相机模型")
     return cameras
 
 
@@ -225,8 +245,32 @@ DATA ascii
 
 
 # ──────────────────────────────────────────────
-# 4. OpenCV 鱼眼投影
+# 4. OpenCV 投影
 # ──────────────────────────────────────────────
+def project_opencv(
+    pts_cam: np.ndarray,
+    fl_x: float,
+    fl_y: float,
+    cx: float,
+    cy: float,
+    k1: float,
+    k2: float,
+    p1: float,
+    p2: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """OpenCV radial-tangential projection."""
+    X, Y, Z = pts_cam[:, 0], pts_cam[:, 1], pts_cam[:, 2]
+    valid = Z > 0.01
+    safe_z = np.where(valid, Z, 1.0)
+    x = X / safe_z
+    y = Y / safe_z
+    r2 = x * x + y * y
+    radial = 1.0 + k1 * r2 + k2 * r2 * r2
+    x_distorted = x * radial + 2.0 * p1 * x * y + p2 * (r2 + 2.0 * x * x)
+    y_distorted = y * radial + p1 * (r2 + 2.0 * y * y) + 2.0 * p2 * x * y
+    return fl_x * x_distorted + cx, fl_y * y_distorted + cy, valid
+
+
 def project_fisheye(
     pts_cam: np.ndarray,
     fl_x: float,
@@ -353,18 +397,33 @@ def colorize_pointcloud(
 
     print(f"\n相机坐标系 Z 范围：[{pts_cam[:,2].min():.4f}, {pts_cam[:,2].max():.4f}]")
 
-    # ── 鱼眼投影 ──
-    u, v, valid_front = project_fisheye(
-        pts_cam,
-        calib["fx"],
-        calib["fy"],
-        calib["cx"],
-        calib["cy"],
-        calib["k1"],
-        calib["k2"],
-        calib["k3"],
-        calib["k4"],
-    )
+    # ── 相机模型投影 ──
+    if calib["model"] == "opencv":
+        u, v, valid_front = project_opencv(
+            pts_cam,
+            calib["fx"],
+            calib["fy"],
+            calib["cx"],
+            calib["cy"],
+            calib["k1"],
+            calib["k2"],
+            calib["p1"],
+            calib["p2"],
+        )
+    elif calib["model"] == "opencv_fisheye":
+        u, v, valid_front = project_fisheye(
+            pts_cam,
+            calib["fx"],
+            calib["fy"],
+            calib["cx"],
+            calib["cy"],
+            calib["k1"],
+            calib["k2"],
+            calib["k3"],
+            calib["k4"],
+        )
+    else:
+        raise ValueError(f"不支持的相机模型: {calib['model']}")
 
     # 像素边界检查
     ui = np.round(u).astype(np.int32)

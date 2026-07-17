@@ -15,6 +15,8 @@
 DEFINE_string(hbc_filename, "/root/2025-05-14-183253.hbc", "Point cloud filename");
 DEFINE_string(output_dir, "/root/output_dir", "Output dir to save converted data");
 
+namespace calibration = reality_capture::calibration;
+
 template <int Rows, int Cols>
 Eigen::Matrix<double, Rows, Cols> ReadMatrix(const std::vector<double>& mat) {
   CHECK_EQ(Rows * Cols, mat.size());
@@ -28,6 +30,29 @@ void ReadMatrixToProto(const YAML::Node& node, google::protobuf::RepeatedField<d
   for (auto& e : mat_vec) {
     mat_proto->Add(e);
   }
+}
+
+void SetVector3FromYaml(const YAML::Node& node, calibration::Vector3* vector) {
+  const auto values = node.as<std::vector<double>>();
+  CHECK_EQ(3, values.size());
+  vector->set_x(values[0]);
+  vector->set_y(values[1]);
+  vector->set_z(values[2]);
+}
+
+void SetTransformFromMatrix(const Eigen::Matrix4d& transform, calibration::SpatiotemporalTransform* output) {
+  Eigen::Quaterniond rotation(transform.block<3, 3>(0, 0));
+  rotation.normalize();
+  auto* quaternion = output->mutable_rotation();
+  quaternion->set_x(rotation.x());
+  quaternion->set_y(rotation.y());
+  quaternion->set_z(rotation.z());
+  quaternion->set_w(rotation.w());
+
+  auto* translation = output->mutable_translation();
+  translation->set_x(transform(0, 3));
+  translation->set_y(transform(1, 3));
+  translation->set_z(transform(2, 3));
 }
 
 int GetFieldOffset(const sensor_msgs::PointCloud2ConstPtr& msg, const std::string& field_name) {
@@ -79,13 +104,11 @@ int main(int argc, char** argv) {
   rosbag::Bag bag;
   bag.open(FLAGS_hbc_filename, rosbag::bagmode::Read);
 
-  proto::SensorCalib sc;
+  calibration::SensorCalibration sc;
   proto::ImuMsgList imu_msg_list;
   proto::EncoderMsgList encoder_msg_list;
   SequentialLidarFileWriter<proto::LidarMsg> lidar_writer;
   lidar_writer.Open(FLAGS_output_dir + "/lidar.dat");
-
-  sc.set_has_encoder(true);
 
   for (const auto& m : rosbag::View(bag)) {
     if (m.getTopic().find("_yaml") != std::string::npos) {
@@ -99,42 +122,25 @@ int main(int argc, char** argv) {
         YAML::Node config = YAML::Load(msg->data);
 
         Eigen::Matrix<double, 4, 4> transform = ReadMatrix<4, 4>(config["transform"].as<std::vector<double>>());
-        Eigen::Quaterniond rot(transform.block<3, 3>(0, 0));
-        Eigen::Vector3d pos(transform.block<3, 1>(0, 3));
-        sc.mutable_encoder_to_imu()->set_rw(rot.w());
-        sc.mutable_encoder_to_imu()->set_rx(rot.x());
-        sc.mutable_encoder_to_imu()->set_ry(rot.y());
-        sc.mutable_encoder_to_imu()->set_rz(rot.z());
-        sc.mutable_encoder_to_imu()->set_tx(pos.x());
-        sc.mutable_encoder_to_imu()->set_ty(pos.y());
-        sc.mutable_encoder_to_imu()->set_tz(pos.z());
+        SetTransformFromMatrix(transform, sc.mutable_via_encoder()->mutable_imu_from_encoder());
       } else if (m.getTopic() == "/config/extrinsic_motor_lidar_yaml") {
         YAML::Node config = YAML::Load(msg->data);
 
         Eigen::Matrix<double, 4, 4> transform = ReadMatrix<4, 4>(config["transform"].as<std::vector<double>>());
-        Eigen::Quaterniond rot(transform.block<3, 3>(0, 0));
-        Eigen::Vector3d pos(transform.block<3, 1>(0, 3));
-        sc.mutable_lidar_to_encoder()->set_rw(rot.w());
-        sc.mutable_lidar_to_encoder()->set_rx(rot.x());
-        sc.mutable_lidar_to_encoder()->set_ry(rot.y());
-        sc.mutable_lidar_to_encoder()->set_rz(rot.z());
-        sc.mutable_lidar_to_encoder()->set_tx(pos.x());
-        sc.mutable_lidar_to_encoder()->set_ty(pos.y());
-        sc.mutable_lidar_to_encoder()->set_tz(pos.z());
+        SetTransformFromMatrix(transform, sc.mutable_via_encoder()->mutable_encoder_from_lidar());
       } else if (m.getTopic() == "/config/imu_yaml") {
-        YAML::Node config  = YAML::Load(msg->data);
-        auto imu_intrinsic = new proto::ImuIntrinsicTpmIcra2014;
-        ReadMatrixToProto<3, 3>(config["Ta"], sc.mutable_imu_intrinsic()->mutable_tpm()->mutable_ta()->mutable_data());
-        ReadMatrixToProto<3, 3>(config["Ka"], sc.mutable_imu_intrinsic()->mutable_tpm()->mutable_ka()->mutable_data());
-        ReadMatrixToProto<3, 1>(config["Ba"], sc.mutable_imu_intrinsic()->mutable_tpm()->mutable_ba()->mutable_data());
-        ReadMatrixToProto<3, 3>(config["Tg"], sc.mutable_imu_intrinsic()->mutable_tpm()->mutable_tg()->mutable_data());
-        ReadMatrixToProto<3, 3>(config["Kg"], sc.mutable_imu_intrinsic()->mutable_tpm()->mutable_kg()->mutable_data());
-        ReadMatrixToProto<3, 1>(config["Bg"], sc.mutable_imu_intrinsic()->mutable_tpm()->mutable_bg()->mutable_data());
+        YAML::Node config = YAML::Load(msg->data);
+        auto* model = sc.mutable_imu_intrinsics()->mutable_tpm_icra_2014();
+        ReadMatrixToProto<3, 3>(config["Ta"], model->mutable_accelerometer_ta()->mutable_row_major_values());
+        ReadMatrixToProto<3, 3>(config["Ka"], model->mutable_accelerometer_ka()->mutable_row_major_values());
+        SetVector3FromYaml(config["Ba"], model->mutable_accelerometer_bias());
+        ReadMatrixToProto<3, 3>(config["Tg"], model->mutable_gyroscope_tg()->mutable_row_major_values());
+        ReadMatrixToProto<3, 3>(config["Kg"], model->mutable_gyroscope_kg()->mutable_row_major_values());
+        SetVector3FromYaml(config["Bg"], model->mutable_gyroscope_bias());
       } else if (m.getTopic() == "/config/lidar_yaml") {
-        YAML::Node config    = YAML::Load(msg->data);
-        auto lidar_intrinsic = new proto::LidarIntrinsicSimple;
-        sc.mutable_lidar_intrinsic()->mutable_simple()->set_e(config["e"].as<double>());
-        ReadMatrixToProto<2, 1>(config["s"], sc.mutable_lidar_intrinsic()->mutable_simple()->mutable_s());
+        YAML::Node config = YAML::Load(msg->data);
+        sc.mutable_lidar_intrinsics()->mutable_simple()->set_e(config["e"].as<double>());
+        ReadMatrixToProto<2, 1>(config["s"], sc.mutable_lidar_intrinsics()->mutable_simple()->mutable_s());
       }
 
       // DLOG(INFO) << m.getTopic();
@@ -167,7 +173,7 @@ int main(int argc, char** argv) {
       new_msg->set_rz(msg->pose.pose.orientation.z);
     }
   }
-  WriteSensorCalibFile(FLAGS_output_dir + "/calibration.dat", sc);
+  WriteSensorCalibrationFile(FLAGS_output_dir + "/calibration.dat", sc);
   WriteImuFile(FLAGS_output_dir + "/imu.dat", imu_msg_list);
   WriteEncoderFile(FLAGS_output_dir + "/encoder.dat", encoder_msg_list);
 

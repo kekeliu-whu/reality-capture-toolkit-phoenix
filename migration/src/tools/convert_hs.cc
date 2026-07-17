@@ -26,8 +26,11 @@ DEFINE_string(output_dir, R"(D:\output-hs)", "Output dir to save converted data"
 DEFINE_bool(skip_calibration, false, "Skip calib_info.yaml conversion");
 DEFINE_bool(skip_imu, false, "Skip ext_imu_*.mcap conversion");
 DEFINE_bool(skip_lidar, false, "Skip lidar_imu_*.mcap conversion");
+DEFINE_string(camera_model, "OPENCV_FISHEYE", "Calibration camera model: OPENCV or OPENCV_FISHEYE");
 
 namespace {
+
+namespace calibration = reality_capture::calibration;
 
 constexpr uint8_t kMcapOpHeader  = 0x01;
 constexpr uint8_t kMcapOpChannel = 0x04;
@@ -510,16 +513,47 @@ Eigen::Matrix4d ReadExtrinsicTransform(const YAML::Node& extrinsic, const std::s
   return ReadMatrix4(RequireNode(RequireNode(extrinsic, name), "T"));
 }
 
-void SetExtrinsicFromMatrix(const Eigen::Matrix4d& transform, proto::SensorExtrinsic* extrinsic) {
+void SetTransformFromMatrix(const Eigen::Matrix4d& transform, calibration::SpatiotemporalTransform* output) {
   Eigen::Quaterniond q(transform.block<3, 3>(0, 0));
   q.normalize();
-  extrinsic->set_rw(q.w());
-  extrinsic->set_rx(q.x());
-  extrinsic->set_ry(q.y());
-  extrinsic->set_rz(q.z());
-  extrinsic->set_tx(transform(0, 3));
-  extrinsic->set_ty(transform(1, 3));
-  extrinsic->set_tz(transform(2, 3));
+  auto* rotation = output->mutable_rotation();
+  rotation->set_x(q.x());
+  rotation->set_y(q.y());
+  rotation->set_z(q.z());
+  rotation->set_w(q.w());
+
+  auto* translation = output->mutable_translation();
+  translation->set_x(transform(0, 3));
+  translation->set_y(transform(1, 3));
+  translation->set_z(transform(2, 3));
+}
+
+void SetCameraModel(const YAML::Node& intrinsic, const YAML::Node& distortion, calibration::CameraCalibration* camera) {
+  if (FLAGS_camera_model == "OPENCV") {
+    auto* model = camera->mutable_opencv();
+    model->set_focal_length_x(intrinsic[0][0].as<double>());
+    model->set_focal_length_y(intrinsic[1][1].as<double>());
+    model->set_principal_point_x(intrinsic[0][2].as<double>());
+    model->set_principal_point_y(intrinsic[1][2].as<double>());
+    model->set_k1(distortion[0].as<double>());
+    model->set_k2(distortion[1].as<double>());
+    model->set_p1(distortion[2].as<double>());
+    model->set_p2(distortion[3].as<double>());
+    return;
+  }
+  if (FLAGS_camera_model == "OPENCV_FISHEYE") {
+    auto* model = camera->mutable_opencv_fisheye();
+    model->set_focal_length_x(intrinsic[0][0].as<double>());
+    model->set_focal_length_y(intrinsic[1][1].as<double>());
+    model->set_principal_point_x(intrinsic[0][2].as<double>());
+    model->set_principal_point_y(intrinsic[1][2].as<double>());
+    model->set_k1(distortion[0].as<double>());
+    model->set_k2(distortion[1].as<double>());
+    model->set_k3(distortion[2].as<double>());
+    model->set_k4(distortion[3].as<double>());
+    return;
+  }
+  throw std::runtime_error("Unsupported camera model: " + FLAGS_camera_model);
 }
 
 bool ConvertCalibration(const std::filesystem::path& input_dir, const std::filesystem::path& output_dir) {
@@ -531,8 +565,7 @@ bool ConvertCalibration(const std::filesystem::path& input_dir, const std::files
 
   try {
     YAML::Node root = YAML::LoadFile(calib_path.string());
-    proto::SensorCalib calib;
-    calib.set_has_encoder(false);
+    calibration::SensorCalibration calib;
 
     const YAML::Node intrinsic = RequireNode(root, "intrinsic");
     const YAML::Node extrinsic = RequireNode(root, "extrinsic");
@@ -540,10 +573,10 @@ bool ConvertCalibration(const std::filesystem::path& input_dir, const std::files
     // YAML convention:
     //   p_imu    = T_lidar_2_imu    * p_lidar
     //   p_camera = T_lidar_2_camera * p_lidar
-    // SensorCalib convention:
-    //   p_imu = CameraParam.extrinsic * p_camera
+    // SensorCalibration convention:
+    //   p_imu = imu_from_camera * p_camera
     const Eigen::Matrix4d T_lidar_2_imu = ReadExtrinsicTransform(extrinsic, "T_lidar_2_imu");
-    SetExtrinsicFromMatrix(T_lidar_2_imu, calib.mutable_lidar_to_encoder());
+    SetTransformFromMatrix(T_lidar_2_imu, calib.mutable_direct()->mutable_imu_from_lidar());
 
     for (const std::string cam_name : {"cam0", "cam1", "cam2"}) {
       const YAML::Node k_node = intrinsic[cam_name];
@@ -556,24 +589,17 @@ bool ConvertCalibration(const std::filesystem::path& input_dir, const std::files
       const Eigen::Matrix4d T_lidar_2_camera = ReadExtrinsicTransform(extrinsic, lidar_to_camera_name);
       const Eigen::Matrix4d T_imu_camera = T_lidar_2_imu * T_lidar_2_camera.inverse();
 
-      auto cam = calib.add_camera_param();
+      auto* cam = calib.add_cameras();
       cam->set_name(cam_name);
-      cam->set_fx(k_node[0][0].as<double>());
-      cam->set_fy(k_node[1][1].as<double>());
-      cam->set_cx(k_node[0][2].as<double>());
-      cam->set_cy(k_node[1][2].as<double>());
-      cam->set_k1(d_node[0].as<double>());
-      cam->set_k2(d_node[1].as<double>());
-      cam->set_k3(d_node[2].as<double>());
-      cam->set_k4(d_node[3].as<double>());
-      SetExtrinsicFromMatrix(T_imu_camera, cam->mutable_extrinsic());
+      SetCameraModel(k_node, d_node, cam);
+      SetTransformFromMatrix(T_imu_camera, cam->mutable_imu_from_camera());
     }
 
-    if (!WriteSensorCalibFile((output_dir / "calibration.dat").string(), calib)) {
+    if (!WriteSensorCalibrationFile((output_dir / "calibration.dat").string(), calib)) {
       spdlog::error("Failed to write calibration.dat");
       return false;
     }
-    spdlog::info("Wrote calibration.dat with {} camera params", calib.camera_param_size());
+    spdlog::info("Wrote calibration.dat with {} cameras using {}", calib.cameras_size(), FLAGS_camera_model);
     return true;
   } catch (const std::exception& e) {
     spdlog::error("Failed to convert calibration: {}", e.what());

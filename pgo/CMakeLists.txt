@@ -32,7 +32,30 @@ find_package(Glog REQUIRED)
 find_package(PROJ CONFIG REQUIRED)
 find_package(CUDAToolkit REQUIRED)
 find_package(colmap CONFIG REQUIRED)
-set(CMAKE_CUDA_ARCHITECTURES "75-virtual" CACHE STRING "CUDA architectures for pgo CUDA tools" FORCE)
+
+if(NOT CMAKE_CUDA_ARCHITECTURES)
+  message(FATAL_ERROR "CMAKE_CUDA_ARCHITECTURES must be provided by the build script")
+endif()
+
+# xsfm_post_depth.cu is compiled by a custom NVCC command, so translate the
+# standard CMake architecture list into matching NVCC -gencode arguments.
+set(PGO_CUDA_GENCODE_FLAGS)
+foreach(CUDA_ARCH IN LISTS CMAKE_CUDA_ARCHITECTURES)
+  if(CUDA_ARCH MATCHES "^([0-9]+)-virtual$")
+    list(APPEND PGO_CUDA_GENCODE_FLAGS
+      "-gencode=arch=compute_${CMAKE_MATCH_1},code=compute_${CMAKE_MATCH_1}")
+  elseif(CUDA_ARCH MATCHES "^([0-9]+)-real$")
+    list(APPEND PGO_CUDA_GENCODE_FLAGS
+      "-gencode=arch=compute_${CMAKE_MATCH_1},code=sm_${CMAKE_MATCH_1}")
+  elseif(CUDA_ARCH MATCHES "^[0-9]+$")
+    list(APPEND PGO_CUDA_GENCODE_FLAGS
+      "-gencode=arch=compute_${CUDA_ARCH},code=sm_${CUDA_ARCH}"
+      "-gencode=arch=compute_${CUDA_ARCH},code=compute_${CUDA_ARCH}")
+  else()
+    message(FATAL_ERROR "Unsupported CUDA architecture: ${CUDA_ARCH}")
+  endif()
+endforeach()
+message(STATUS "PGO CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 
 include_directories(
   src
@@ -152,7 +175,7 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}"
   COMMAND "${CUDAToolkit_NVCC_EXECUTABLE}"
     -std=c++17
-    -gencode=arch=compute_75,code=compute_75
+    ${PGO_CUDA_GENCODE_FLAGS}
     -c "${CMAKE_CURRENT_SOURCE_DIR}/tools/xsfm_post_depth.cu"
     -I "${CMAKE_CURRENT_SOURCE_DIR}/tools"
     -I "${CUDAToolkit_INCLUDE_DIRS}"

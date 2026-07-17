@@ -13,6 +13,7 @@ $PROJECT_ROOT = Split-Path -Parent $SCRIPT_DIR
 $VENV_SCRIPTS_DIR = Join-Path $PROJECT_ROOT ".venv\Scripts"
 $PYTHON_EXE = Join-Path $VENV_SCRIPTS_DIR "python.exe"
 $PYINSTALLER_EXE = Join-Path $VENV_SCRIPTS_DIR "pyinstaller.exe"
+$CUDA_ARCHITECTURES = "75-virtual;90-virtual"
 
 # Use project-local Python tools directly instead of relying on shell activation.
 Write-Host "Checking Python virtual environment..." -ForegroundColor Yellow
@@ -29,6 +30,7 @@ if (!(Test-Path $PYINSTALLER_EXE)) {
 Write-Host "Python environment ready" -ForegroundColor Green
 Write-Host "  Python: $PYTHON_EXE" -ForegroundColor Gray
 Write-Host "  PyInstaller: $PYINSTALLER_EXE" -ForegroundColor Gray
+Write-Host "  CUDA architectures: $CUDA_ARCHITECTURES" -ForegroundColor Gray
 Write-Host ""
 
 # CMake executable path
@@ -169,7 +171,7 @@ Write-Host "Configuring with CMake..." -ForegroundColor Yellow
     "-DONNX_ENABLED=OFF" `
     "-DFETCH_POSELIB=OFF" `
     "-DCUDA_ENABLED=ON" `
-    "-DCMAKE_CUDA_ARCHITECTURES=75;86;89;90" `
+    "-DCMAKE_CUDA_ARCHITECTURES=$CUDA_ARCHITECTURES" `
     --no-warn-unused-cli `
     -S $COLMAP_SOURCE_DIR `
     -B $COLMAP_BUILD_DIR `
@@ -291,6 +293,7 @@ Write-Host "Configuring with CMake..." -ForegroundColor Yellow
     -DCMAKE_EXPORT_COMPILE_COMMANDS:BOOL=TRUE `
     "-DCMAKE_TOOLCHAIN_FILE=$VCPKG_TOOLCHAIN_FILE" `
     "-Dcolmap_DIR=$COLMAP_CMAKE_DIR" `
+    "-DCMAKE_CUDA_ARCHITECTURES=$CUDA_ARCHITECTURES" `
     --no-warn-unused-cli `
     -S $PGO_SOURCE_DIR `
     -B $PGO_BUILD_DIR `

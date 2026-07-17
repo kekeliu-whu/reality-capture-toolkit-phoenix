@@ -282,20 +282,46 @@ void load_calibration_from_file(const std::string &filename, Eigen::Matrix3d &Li
     exit(1);
   }
 
-  proto::SensorCalib calib;
-  ReadSensorCalibFile(filename, calib);
+  reality_capture::calibration::SensorCalibration calibration;
+  ReadSensorCalibrationFile(filename, calibration);
 
-  // Lidar to IMU
-  Lidar_R_wrt_IMU = Eigen::Quaterniond(calib.lidar_to_encoder().rw(), calib.lidar_to_encoder().rx(),
-                                       calib.lidar_to_encoder().ry(), calib.lidar_to_encoder().rz())
-                        .toRotationMatrix();
-  Lidar_T_wrt_IMU << calib.lidar_to_encoder().tx(), calib.lidar_to_encoder().ty(), calib.lidar_to_encoder().tz();
-  lidar_to_imu_offset = calib.lidar_to_encoder().time_offset();
+  const auto rotation_from = [](const reality_capture::calibration::SpatiotemporalTransform &transform) {
+    const auto &q = transform.rotation();
+    return Eigen::Quaterniond(q.w(), q.x(), q.y(), q.z()).normalized().toRotationMatrix();
+  };
+  const auto translation_from = [](const reality_capture::calibration::SpatiotemporalTransform &transform) {
+    const auto &t = transform.translation();
+    return Eigen::Vector3d(t.x(), t.y(), t.z());
+  };
+
+  switch (calibration.lidar_extrinsics_case()) {
+    case reality_capture::calibration::SensorCalibration::kDirect: {
+      const auto &imu_from_lidar = calibration.direct().imu_from_lidar();
+      Lidar_R_wrt_IMU = rotation_from(imu_from_lidar);
+      Lidar_T_wrt_IMU = translation_from(imu_from_lidar);
+      lidar_to_imu_offset = imu_from_lidar.time_offset_seconds();
+      break;
+    }
+    case reality_capture::calibration::SensorCalibration::kViaEncoder: {
+      const auto &chain = calibration.via_encoder();
+      const Eigen::Matrix3d imu_R_encoder = rotation_from(chain.imu_from_encoder());
+      Lidar_R_wrt_IMU = imu_R_encoder * rotation_from(chain.encoder_from_lidar());
+      Lidar_T_wrt_IMU = imu_R_encoder * translation_from(chain.encoder_from_lidar()) +
+                        translation_from(chain.imu_from_encoder());
+      lidar_to_imu_offset = chain.encoder_from_lidar().time_offset_seconds() +
+                            chain.imu_from_encoder().time_offset_seconds();
+      break;
+    }
+    case reality_capture::calibration::SensorCalibration::LIDAR_EXTRINSICS_NOT_SET:
+      spdlog::error("LiDAR extrinsics are not configured in: {}", filename);
+      exit(1);
+  }
 
   spdlog::info("Loaded calibration from: {}", filename);
   spdlog::info("Lidar_T_wrt_IMU: {:.6f} {:.6f} {:.6f}", Lidar_T_wrt_IMU[0], Lidar_T_wrt_IMU[1], Lidar_T_wrt_IMU[2]);
-  spdlog::info("Lidar_R_wrt_IMU: {:.6f} {:.6f} {:.6f} {:.6f}", calib.lidar_to_encoder().rx(),
-               calib.lidar_to_encoder().ry(), calib.lidar_to_encoder().rz(), calib.lidar_to_encoder().rw());
+  const Eigen::Quaterniond lidar_q_wrt_imu(Lidar_R_wrt_IMU);
+  spdlog::info("Lidar_R_wrt_IMU: {:.6f} {:.6f} {:.6f} {:.6f}", lidar_q_wrt_imu.x(), lidar_q_wrt_imu.y(),
+               lidar_q_wrt_imu.z(), lidar_q_wrt_imu.w());
   spdlog::info("Lidar to IMU time offset: {:.6f}", lidar_to_imu_offset);
 }
 

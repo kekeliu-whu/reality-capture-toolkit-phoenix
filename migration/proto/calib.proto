@@ -1,68 +1,120 @@
 syntax = "proto3";
 
-package proto;
+package reality_capture.calibration;
 
-message SensorExtrinsic {
-  double time_offset = 1;
-  double tx = 2;
-  double ty = 3;
-  double tz = 4;
-  double rx = 5;
-  double ry = 6;
-  double rz = 7;
-  double rw = 8;
+message Vector3 {
+  double x = 1;
+  double y = 2;
+  double z = 3;
 }
 
-message CameraParam {
-  // Camera-to-IMU/body transform: p_imu = extrinsic * p_camera.
-  SensorExtrinsic extrinsic = 1;
-  double fx = 2;
-  double fy = 3;
-  double cx = 4;
-  double cy = 5;
-  double k1 = 6;
-  double k2 = 7;
-  double k3 = 8;
-  double k4 = 9;
-  string name = 11;
+message Quaternion {
+  // Unit quaternion in xyzw order.
+  double x = 1;
+  double y = 2;
+  double z = 3;
+  double w = 4;
+}
+
+// A spatial transform and clock offset from a source sensor to a target sensor.
+// Spatial transforms follow target_from_source naming:
+//   p_target = target_from_source * p_source
+// Time offsets follow:
+//   t_target = t_source + time_offset_seconds
+message SpatiotemporalTransform {
+  double time_offset_seconds = 1;
+  // Translation in meters, expressed in the target frame.
+  Vector3 translation = 2;
+  Quaternion rotation = 3;
+}
+
+message OpenCvCameraModel {
+  // Focal lengths and principal point coordinates, in pixels.
+  double focal_length_x = 1;
+  double focal_length_y = 2;
+  double principal_point_x = 3;
+  double principal_point_y = 4;
+  double k1 = 5;
+  double k2 = 6;
+  double p1 = 7;
+  double p2 = 8;
+}
+
+message OpenCvFisheyeCameraModel {
+  // Focal lengths and principal point coordinates, in pixels.
+  double focal_length_x = 1;
+  double focal_length_y = 2;
+  double principal_point_x = 3;
+  double principal_point_y = 4;
+  double k1 = 5;
+  double k2 = 6;
+  double k3 = 7;
+  double k4 = 8;
+}
+
+message CameraCalibration {
+  string name = 1;
+
+  // Camera-to-IMU transform: p_imu = imu_from_camera * p_camera.
+  SpatiotemporalTransform imu_from_camera = 2;
+
+  oneof camera_model {
+    OpenCvCameraModel opencv = 3;
+    OpenCvFisheyeCameraModel opencv_fisheye = 4;
+  }
 }
 
 message Matrix3 {
-  repeated double data = 1; // 存储3x3矩阵的9个元素
+  // Exactly 9 elements in row-major order.
+  repeated double row_major_values = 1;
 }
 
-message Vector3 {
-  repeated double data = 1; // 存储3个元素的向量
+message ImuTpmIcra2014Intrinsics {
+  Matrix3 accelerometer_ta = 1;
+  Matrix3 accelerometer_ka = 2;
+  Vector3 accelerometer_bias = 3;
+
+  Matrix3 gyroscope_tg = 4;
+  Matrix3 gyroscope_kg = 5;
+  Vector3 gyroscope_bias = 6;
 }
 
-message ImuIntrinsicTpmIcra2014 {
-  Matrix3 Ta = 1;
-  Matrix3 Ka = 2;
-  Vector3 Ba = 3;
-
-  Matrix3 Tg = 4;
-  Matrix3 Kg = 5;
-  Vector3 Bg = 6;
+message ImuIntrinsics {
+  oneof model {
+    ImuTpmIcra2014Intrinsics tpm_icra_2014 = 1;
+  }
 }
 
-message ImuIntrinsic {
-  oneof imu_model { ImuIntrinsicTpmIcra2014 tpm = 1; }
-}
-
-message LidarIntrinsicSimple {
+message SimpleLidarIntrinsics {
   double e = 1;
   repeated double s = 2;
 }
 
-message LidarIntrinsic {
-  oneof lidar_model { LidarIntrinsicSimple simple = 1; }
+message LidarIntrinsics {
+  oneof model {
+    SimpleLidarIntrinsics simple = 1;
+  }
 }
 
-message SensorCalib {
-  bool has_encoder = 1;
-  SensorExtrinsic lidar_to_encoder = 2;
-  SensorExtrinsic encoder_to_imu = 3;
-  LidarIntrinsic lidar_intrinsic = 4;
-  ImuIntrinsic imu_intrinsic = 5;
-  repeated CameraParam camera_param = 6;
+// Default configuration without an encoder.
+message DirectLidarImuExtrinsics {
+  SpatiotemporalTransform imu_from_lidar = 1;
+}
+
+// Motorized configuration whose LiDAR-to-IMU transform passes through the
+// encoder frame.
+message LidarEncoderImuExtrinsics {
+  SpatiotemporalTransform encoder_from_lidar = 1;
+  SpatiotemporalTransform imu_from_encoder = 2;
+}
+
+message SensorCalibration {
+  oneof lidar_extrinsics {
+    DirectLidarImuExtrinsics direct = 1;
+    LidarEncoderImuExtrinsics via_encoder = 2;
+  }
+
+  LidarIntrinsics lidar_intrinsics = 3;
+  ImuIntrinsics imu_intrinsics = 4;
+  repeated CameraCalibration cameras = 5;
 }

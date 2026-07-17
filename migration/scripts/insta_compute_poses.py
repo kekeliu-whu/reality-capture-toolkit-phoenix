@@ -22,7 +22,7 @@ import numpy as np
 import csv
 import json
 from pathlib import Path
-from proto.calib_pb2 import SensorCalib
+from proto.calib_pb2 import SensorCalibration
 import re
 from scipy.spatial.transform import Rotation, Slerp
 
@@ -92,35 +92,54 @@ def rotation_to_wxyz(rotation):
     return [float(qw), float(qx), float(qy), float(qz)]
 
 
+def camera_model_and_params(camera):
+    model_name = camera.WhichOneof("camera_model")
+    if model_name == "opencv":
+        model = camera.opencv
+        return "OPENCV", [
+            model.focal_length_x,
+            model.focal_length_y,
+            model.principal_point_x,
+            model.principal_point_y,
+            model.k1,
+            model.k2,
+            model.p1,
+            model.p2,
+        ]
+    if model_name == "opencv_fisheye":
+        model = camera.opencv_fisheye
+        return "OPENCV_FISHEYE", [
+            model.focal_length_x,
+            model.focal_length_y,
+            model.principal_point_x,
+            model.principal_point_y,
+            model.k1,
+            model.k2,
+            model.k3,
+            model.k4,
+        ]
+    raise ValueError(f"Camera '{camera.name}' does not define a camera model")
+
+
 def build_rig_camera_entry(cam_idx, cam_param, ref_rotation, ref_translation):
+    camera_model_name, camera_params = camera_model_and_params(cam_param)
     entry = {
         "image_prefix": f"cam{cam_idx}/",
-        "camera_model_name": "OPENCV_FISHEYE",
-        "camera_params": [
-            float(cam_param.fx),
-            float(cam_param.fy),
-            float(cam_param.cx),
-            float(cam_param.cy),
-            float(cam_param.k1),
-            float(cam_param.k2),
-            float(cam_param.k3),
-            float(cam_param.k4),
-        ],
+        "camera_model_name": camera_model_name,
+        "camera_params": [float(value) for value in camera_params],
     }
 
     if cam_idx == 0:
         entry["ref_sensor"] = True
     else:
+        transform = cam_param.imu_from_camera
+        rotation = transform.rotation
+        translation = transform.translation
         cam_rotation = Rotation.from_quat(
-            [
-                cam_param.extrinsic.rx,
-                cam_param.extrinsic.ry,
-                cam_param.extrinsic.rz,
-                cam_param.extrinsic.rw,
-            ]
+            [rotation.x, rotation.y, rotation.z, rotation.w]
         )
         cam_translation = np.array(
-            [cam_param.extrinsic.tx, cam_param.extrinsic.ty, cam_param.extrinsic.tz]
+            [translation.x, translation.y, translation.z]
         )
         rel_rotation = cam_rotation.inv() * ref_rotation
         rel_translation = cam_rotation.inv().apply(ref_translation - cam_translation)
@@ -135,21 +154,20 @@ def build_rig_camera_entry(cam_idx, cam_param, ref_rotation, ref_translation):
 def write_rig_json(image_folder, calib, camera_folders):
     """Write rig.json under the images folder from calibration.dat camera params."""
     rig_path = Path(image_folder) / "rig.json"
-    ref_cam_param = calib.camera_param[0]
+    ref_cam_param = calib.cameras[0]
+    ref_transform = ref_cam_param.imu_from_camera
+    ref_quaternion = ref_transform.rotation
+    ref_position = ref_transform.translation
     ref_rotation = Rotation.from_quat(
         [
-            ref_cam_param.extrinsic.rx,
-            ref_cam_param.extrinsic.ry,
-            ref_cam_param.extrinsic.rz,
-            ref_cam_param.extrinsic.rw,
+            ref_quaternion.x,
+            ref_quaternion.y,
+            ref_quaternion.z,
+            ref_quaternion.w,
         ]
     )
     ref_translation = np.array(
-        [
-            ref_cam_param.extrinsic.tx,
-            ref_cam_param.extrinsic.ty,
-            ref_cam_param.extrinsic.tz,
-        ]
+        [ref_position.x, ref_position.y, ref_position.z]
     )
 
     rig_config = [{"cameras": []}]
@@ -157,7 +175,7 @@ def write_rig_json(image_folder, calib, camera_folders):
         rig_config[0]["cameras"].append(
             build_rig_camera_entry(
                 cam_idx,
-                calib.camera_param[cam_idx],
+                calib.cameras[cam_idx],
                 ref_rotation,
                 ref_translation,
             )
@@ -285,7 +303,7 @@ def apply_extrinsic_transform(pose, extrinsic):
 
 def load_calibration_from_pb(calib_file):
     """Load camera calibration from protobuf file."""
-    calib = SensorCalib()
+    calib = SensorCalibration()
     with open(calib_file, "rb") as f:
         calib.ParseFromString(f.read())
     return calib
@@ -361,11 +379,11 @@ def process_poses(poses_file, calib_file, image_folder, output_file, image_list=
     print(f"[OK] Loaded calibration from {calib_file}")
 
     # Get camera-IMU extrinsic parameters
-    if not hasattr(calib, "camera_param") or len(calib.camera_param) == 0:
-        print("[ERROR] No camera_param extrinsic found in calibration file")
+    if len(calib.cameras) == 0:
+        print("[ERROR] No camera calibration found in calibration file")
         return False
 
-    num_cameras = len(calib.camera_param)
+    num_cameras = len(calib.cameras)
     print(f"[OK] Found {num_cameras} camera(s) in calibration")
 
     # Find all camera folders (cam0, cam1, ...)
@@ -420,12 +438,18 @@ def process_poses(poses_file, calib_file, image_folder, output_file, image_list=
             cam_folder = camera_folders[cam_idx]
 
             # Get camera extrinsic for this camera
-            cam_imu_ext = calib.camera_param[cam_idx]
-            ext = cam_imu_ext.extrinsic
+            camera = calib.cameras[cam_idx]
+            transform = camera.imu_from_camera
+            rotation = transform.rotation
+            translation = transform.translation
             extrinsic = {
-                "position": np.array([ext.tx, ext.ty, ext.tz]),
-                "quaternion": np.array([ext.rx, ext.ry, ext.rz, ext.rw]),
-                "time_offset": cam_imu_ext.extrinsic.time_offset,
+                "position": np.array(
+                    [translation.x, translation.y, translation.z]
+                ),
+                "quaternion": np.array(
+                    [rotation.x, rotation.y, rotation.z, rotation.w]
+                ),
+                "time_offset": transform.time_offset_seconds,
             }
 
             print(f"\n  Processing cam{cam_idx}... (time_offset={extrinsic['time_offset']:.6f}s)")

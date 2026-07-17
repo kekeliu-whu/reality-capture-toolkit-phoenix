@@ -10,8 +10,11 @@
 
 DEFINE_string(calib_filename, R"(D:\calibfile\ikalibr_param_22260500001.yaml)", "Calibration filename");
 DEFINE_string(output_dir, R"(D:\calibfile\output-jiuzhou2)", "Output dir to save converted calibration data");
+DEFINE_string(camera_model, "OPENCV_FISHEYE", "Camera model: OPENCV or OPENCV_FISHEYE");
 
 namespace {
+
+namespace calibration = reality_capture::calibration;
 
 YAML::Node RequireNode(const YAML::Node& parent, const char* key) {
   const YAML::Node node = parent[key];
@@ -35,27 +38,65 @@ const YAML::Node FindItemByKey(const YAML::Node& sequence, const std::string& ke
   throw std::runtime_error(std::string("Missing required entry '") + key + "' in " + sequence_name);
 }
 
-void LoadLidarCalibration(const YAML::Node& extri, const YAML::Node& temporal, proto::SensorCalib* calib) {
+void SetTransform(const YAML::Node& quat, const YAML::Node& pos, double time_offset_seconds,
+                  calibration::SpatiotemporalTransform* transform) {
+  auto* rotation = transform->mutable_rotation();
+  rotation->set_x(RequireNode(quat, "qx").as<double>());
+  rotation->set_y(RequireNode(quat, "qy").as<double>());
+  rotation->set_z(RequireNode(quat, "qz").as<double>());
+  rotation->set_w(RequireNode(quat, "qw").as<double>());
+
+  auto* translation = transform->mutable_translation();
+  translation->set_x(RequireNode(pos, "r0c0").as<double>());
+  translation->set_y(RequireNode(pos, "r1c0").as<double>());
+  translation->set_z(RequireNode(pos, "r2c0").as<double>());
+  transform->set_time_offset_seconds(time_offset_seconds);
+}
+
+void SetCameraModel(const YAML::Node& focal, const YAML::Node& principal, const YAML::Node& distortion,
+                    calibration::CameraCalibration* camera) {
+  if (FLAGS_camera_model == "OPENCV") {
+    auto* model = camera->mutable_opencv();
+    model->set_focal_length_x(focal[0].as<double>());
+    model->set_focal_length_y(focal[1].as<double>());
+    model->set_principal_point_x(principal[0].as<double>());
+    model->set_principal_point_y(principal[1].as<double>());
+    model->set_k1(distortion[0].as<double>());
+    model->set_k2(distortion[1].as<double>());
+    model->set_p1(distortion[2].as<double>());
+    model->set_p2(distortion[3].as<double>());
+    return;
+  }
+  if (FLAGS_camera_model == "OPENCV_FISHEYE") {
+    auto* model = camera->mutable_opencv_fisheye();
+    model->set_focal_length_x(focal[0].as<double>());
+    model->set_focal_length_y(focal[1].as<double>());
+    model->set_principal_point_x(principal[0].as<double>());
+    model->set_principal_point_y(principal[1].as<double>());
+    model->set_k1(distortion[0].as<double>());
+    model->set_k2(distortion[1].as<double>());
+    model->set_k3(distortion[2].as<double>());
+    model->set_k4(distortion[3].as<double>());
+    return;
+  }
+  throw std::runtime_error("Unsupported camera model: " + FLAGS_camera_model);
+}
+
+void LoadLidarCalibration(const YAML::Node& extri, const YAML::Node& temporal, calibration::SensorCalibration* calib) {
   const auto quat          = FindItemByKey(RequireNode(extri, "SO3_LkToBr"), "/livox/lidar", "EXTRI.SO3_LkToBr");
   const auto pos           = FindItemByKey(RequireNode(extri, "POS_LkInBr"), "/livox/lidar", "EXTRI.POS_LkInBr");
   const auto time_offset   = FindItemByKey(RequireNode(temporal, "TO_LkToBr"), "/livox/lidar", "TEMPORAL.TO_LkToBr");
-  auto lidar_to_body       = calib->mutable_lidar_to_encoder();
-  lidar_to_body->set_rx(RequireNode(quat, "qx").as<double>());
-  lidar_to_body->set_ry(RequireNode(quat, "qy").as<double>());
-  lidar_to_body->set_rz(RequireNode(quat, "qz").as<double>());
-  lidar_to_body->set_rw(RequireNode(quat, "qw").as<double>());
-  lidar_to_body->set_tx(RequireNode(pos, "r0c0").as<double>());
-  lidar_to_body->set_ty(RequireNode(pos, "r1c0").as<double>());
-  lidar_to_body->set_tz(RequireNode(pos, "r2c0").as<double>());
-  lidar_to_body->set_time_offset(time_offset.as<double>());
+  auto* imu_from_lidar = calib->mutable_direct()->mutable_imu_from_lidar();
+  SetTransform(quat, pos, time_offset.as<double>(), imu_from_lidar);
 
-  spdlog::info("Loaded Lidar rotation: qx={}, qy={}, qz={}, qw={}", lidar_to_body->rx(), lidar_to_body->ry(), lidar_to_body->rz(),
-               lidar_to_body->rw());
-  spdlog::info("Loaded Lidar position: tx={}, ty={}, tz={}", lidar_to_body->tx(), lidar_to_body->ty(), lidar_to_body->tz());
-  spdlog::info("Loaded Lidar time offset: {}", lidar_to_body->time_offset());
+  const auto& rotation = imu_from_lidar->rotation();
+  const auto& translation = imu_from_lidar->translation();
+  spdlog::info("Loaded Lidar rotation: qx={}, qy={}, qz={}, qw={}", rotation.x(), rotation.y(), rotation.z(), rotation.w());
+  spdlog::info("Loaded Lidar position: x={}, y={}, z={}", translation.x(), translation.y(), translation.z());
+  spdlog::info("Loaded Lidar time offset: {}", imu_from_lidar->time_offset_seconds());
 }
 
-void LoadCameraCalibration(const YAML::Node& calib_param, proto::SensorCalib* calib) {
+void LoadCameraCalibration(const YAML::Node& calib_param, calibration::SensorCalibration* calib) {
   const auto& extri       = RequireNode(calib_param, "EXTRI");
   const auto& temporal    = RequireNode(calib_param, "TEMPORAL");
   const auto& so3_list    = RequireNode(extri, "SO3_CmToBr");
@@ -77,18 +118,11 @@ void LoadCameraCalibration(const YAML::Node& calib_param, proto::SensorCalib* ca
 
     spdlog::info("Processing camera: {}", cam_key);
 
-    auto cam_param = calib->add_camera_param();
-    cam_param->set_name(cam_key);
+    auto* camera = calib->add_cameras();
+    camera->set_name(cam_key);
 
-    auto extrinsic = cam_param->mutable_extrinsic();
-    extrinsic->set_rx(RequireNode(quat, "qx").as<double>());
-    extrinsic->set_ry(RequireNode(quat, "qy").as<double>());
-    extrinsic->set_rz(RequireNode(quat, "qz").as<double>());
-    extrinsic->set_rw(RequireNode(quat, "qw").as<double>());
-    extrinsic->set_tx(RequireNode(pos, "r0c0").as<double>());
-    extrinsic->set_ty(RequireNode(pos, "r1c0").as<double>());
-    extrinsic->set_tz(RequireNode(pos, "r2c0").as<double>());
-    extrinsic->set_time_offset(time_offset.as<double>());
+    auto* imu_from_camera = camera->mutable_imu_from_camera();
+    SetTransform(quat, pos, time_offset.as<double>(), imu_from_camera);
 
     const auto focal     = RequireNode(cam_data, "focal_length");
     const auto principal = RequireNode(cam_data, "principal_point");
@@ -97,25 +131,19 @@ void LoadCameraCalibration(const YAML::Node& calib_param, proto::SensorCalib* ca
       throw std::runtime_error("Camera intrinsic array size is invalid for " + cam_key);
     }
 
-    cam_param->set_fx(focal[0].as<double>());
-    cam_param->set_fy(focal[1].as<double>());
-    cam_param->set_cx(principal[0].as<double>());
-    cam_param->set_cy(principal[1].as<double>());
-    cam_param->set_k1(disto[0].as<double>());
-    cam_param->set_k2(disto[1].as<double>());
-    cam_param->set_k3(disto[2].as<double>());
-    cam_param->set_k4(disto[3].as<double>());
+    SetCameraModel(focal, principal, disto, camera);
 
-    spdlog::info("{} extrinsic: rot({}, {}, {}, {}), trans({}, {}, {})", cam_key, extrinsic->rx(), extrinsic->ry(), extrinsic->rz(), extrinsic->rw(),
-                 extrinsic->tx(), extrinsic->ty(), extrinsic->tz());
-    spdlog::info("{} time offset: {}", cam_key, extrinsic->time_offset());
-    spdlog::info("{} intrinsic: fx={}, fy={}, cx={}, cy={}, k1={}, k2={}, k3={}, k4={}", cam_key, cam_param->fx(), cam_param->fy(), cam_param->cx(),
-                 cam_param->cy(), cam_param->k1(), cam_param->k2(), cam_param->k3(), cam_param->k4());
+    const auto& rotation = imu_from_camera->rotation();
+    const auto& translation = imu_from_camera->translation();
+    spdlog::info("{} extrinsic: rot({}, {}, {}, {}), trans({}, {}, {})", cam_key, rotation.x(), rotation.y(), rotation.z(), rotation.w(),
+                 translation.x(), translation.y(), translation.z());
+    spdlog::info("{} time offset: {}", cam_key, imu_from_camera->time_offset_seconds());
+    spdlog::info("{} camera model: {}", cam_key, FLAGS_camera_model);
   }
 }
 
 bool ConvertCalibrationFile(const std::string& calib_filename, const std::string& output_dir) {
-  proto::SensorCalib calib;
+  calibration::SensorCalibration calib;
 
   try {
     YAML::Node yaml_root    = YAML::LoadFile(calib_filename);
@@ -131,7 +159,7 @@ bool ConvertCalibrationFile(const std::string& calib_filename, const std::string
   }
 
   const std::string output_file = output_dir + "/calibration.dat";
-  if (!WriteSensorCalibFile(output_file, calib)) {
+  if (!WriteSensorCalibrationFile(output_file, calib)) {
     spdlog::error("Failed to save calibration file to {}", output_file);
     return false;
   }
