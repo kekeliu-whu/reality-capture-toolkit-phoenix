@@ -118,7 +118,7 @@ add_private_tool(convert_l2pro src/tools/convert_l2pro.cc)
 add_private_tool(convert_s20 src/tools/convert_s20.cc)
 add_private_tool(convert_manifold src/tools/convert_manifold.cc)
 add_private_tool(convert_calib src/tools/convert_calib.cc)
-add_private_tool(convert_hs src/tools/convert-hs.cc)
+add_private_tool(convert_hs src/tools/convert_hs.cc)
 
 target_include_directories(
     ${PROJECT_NAME}

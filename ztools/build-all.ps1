@@ -38,6 +38,8 @@ $VCPKG_TOOLCHAIN_FILE = "F:/Library/vcpkg/scripts/buildsystems/vcpkg.cmake"
 $BUILD_ALL_DIR = Join-Path $PROJECT_ROOT "build-all"
 $COLMAP_SOURCE_DIR = Join-Path $PROJECT_ROOT "colmap"
 $COLMAP_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-colmap"
+$COLMAP_INSTALL_DIR = Join-Path $BUILD_ALL_DIR "install-colmap"
+$COLMAP_CMAKE_DIR = Join-Path $COLMAP_INSTALL_DIR "share\colmap"
 $ODOMETRY_SOURCE_DIR = Join-Path $PROJECT_ROOT "odometry"
 $ODOMETRY_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-odometry"
 $PGO_SOURCE_DIR = Join-Path $PROJECT_ROOT "pgo"
@@ -196,6 +198,28 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "[OK] Colmap build completed" -ForegroundColor Green
 Write-Host ""
 
+Write-Host "Installing Colmap development package..." -ForegroundColor Yellow
+
+& $CMAKE_EXE `
+    --install $COLMAP_BUILD_DIR `
+    --config "Release" `
+    --prefix $COLMAP_INSTALL_DIR
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: Colmap install failed" -ForegroundColor Red
+    exit 1
+}
+
+$COLMAP_CONFIG_FILE = Join-Path $COLMAP_CMAKE_DIR "colmap-config.cmake"
+if (!(Test-Path $COLMAP_CONFIG_FILE)) {
+    Write-Host "ERROR: Colmap CMake package was not installed at $COLMAP_CONFIG_FILE" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "[OK] Colmap development package installed" -ForegroundColor Green
+Write-Host "  CMake package: $COLMAP_CMAKE_DIR" -ForegroundColor Gray
+Write-Host ""
+
 # ============================================================
 # Stage 2: Build Odometry
 # ============================================================
@@ -266,6 +290,7 @@ Write-Host "Configuring with CMake..." -ForegroundColor Yellow
 & $CMAKE_EXE `
     -DCMAKE_EXPORT_COMPILE_COMMANDS:BOOL=TRUE `
     "-DCMAKE_TOOLCHAIN_FILE=$VCPKG_TOOLCHAIN_FILE" `
+    "-Dcolmap_DIR=$COLMAP_CMAKE_DIR" `
     --no-warn-unused-cli `
     -S $PGO_SOURCE_DIR `
     -B $PGO_BUILD_DIR `

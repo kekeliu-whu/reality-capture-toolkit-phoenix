@@ -100,6 +100,7 @@ $PYTHON_INTERNAL_REQUIRED_DIRS = @(
 )
 $script:SELECTED_MIGRATION_BUILD_DIR = $null
 $script:SELECTED_PROJ_DB = $null
+$script:DUMPBIN_EXE = $null
 
 # =====================================
 # Functions
@@ -178,6 +179,126 @@ function Resolve-CandidatePath {
         }
     }
     return $null
+}
+
+function Resolve-Dumpbin {
+    $command = Get-Command "dumpbin.exe" -ErrorAction SilentlyContinue
+    if ($command) {
+        return $command.Source
+    }
+
+    $searchRoots = @()
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path $vswhere) {
+        $installPaths = @(
+            & $vswhere -latest -products * `
+                -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+                -property installationPath
+        )
+        foreach ($installPath in $installPaths) {
+            if ($installPath) {
+                $searchRoots += (Join-Path $installPath "VC\Tools\MSVC")
+            }
+        }
+    }
+    $searchRoots += "D:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC"
+
+    foreach ($root in $searchRoots | Select-Object -Unique) {
+        if (-not (Test-Path $root)) {
+            continue
+        }
+        $candidate = Get-ChildItem $root -Recurse -Filter "dumpbin.exe" -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -like "*\bin\Hostx64\x64\dumpbin.exe" } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+        if ($candidate) {
+            return $candidate.FullName
+        }
+    }
+    return $null
+}
+
+function Get-PeDllDependencies {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $output = @(& $script:DUMPBIN_EXE /nologo /dependents $Path 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        Fail "Failed to inspect PE dependencies for ${Path}: $($output -join ' ')"
+    }
+
+    return @(
+        $output | ForEach-Object {
+            if ($_ -match '^\s+([^\s]+\.dll)\s*$') {
+                $matches[1].ToLowerInvariant()
+            }
+        } | Sort-Object -Unique
+    )
+}
+
+function Remove-UnusedCudaDlls {
+    Write-Status "Detecting required CUDA DLL dependency closure..."
+
+    if (-not $script:DUMPBIN_EXE) {
+        Fail "dumpbin.exe was not found; refusing to prune CUDA DLLs without dependency analysis"
+    }
+
+    $cudaSourceDlls = @(Get-ChildItem $CUDA_BIN_DIR -Filter "*.dll" -File -ErrorAction Stop)
+    $cudaByName = @{}
+    foreach ($dll in $cudaSourceDlls) {
+        $cudaByName[$dll.Name.ToLowerInvariant()] = $dll.FullName
+    }
+
+    $peRoots = @(
+        Get-ChildItem $PACK_DIR -Recurse -File -ErrorAction Stop |
+            Where-Object {
+                $_.Extension.ToLowerInvariant() -in @(".exe", ".dll", ".pyd") -and
+                -not $cudaByName.ContainsKey($_.Name.ToLowerInvariant())
+            }
+    )
+    Write-Host "    Inspecting $($peRoots.Count) packaged PE files"
+
+    $requiredCuda = @{}
+    $queue = [System.Collections.Generic.Queue[string]]::new()
+    foreach ($root in $peRoots) {
+        foreach ($dependency in Get-PeDllDependencies -Path $root.FullName) {
+            if ($cudaByName.ContainsKey($dependency) -and -not $requiredCuda.ContainsKey($dependency)) {
+                $requiredCuda[$dependency] = $true
+                $queue.Enqueue($dependency)
+            }
+        }
+    }
+
+    while ($queue.Count -gt 0) {
+        $cudaName = $queue.Dequeue()
+        foreach ($dependency in Get-PeDllDependencies -Path $cudaByName[$cudaName]) {
+            if ($cudaByName.ContainsKey($dependency) -and -not $requiredCuda.ContainsKey($dependency)) {
+                $requiredCuda[$dependency] = $true
+                $queue.Enqueue($dependency)
+            }
+        }
+    }
+
+    $removedCount = 0
+    $removedBytes = 0
+    foreach ($dll in $cudaSourceDlls) {
+        $name = $dll.Name.ToLowerInvariant()
+        $packPath = Join-Path $PACK_DIR $dll.Name
+        if (-not $requiredCuda.ContainsKey($name) -and (Test-Path $packPath)) {
+            $removedBytes += (Get-Item $packPath).Length
+            Remove-Item -LiteralPath $packPath -Force -ErrorAction Stop
+            $removedCount++
+        }
+    }
+
+    $keptNames = @($requiredCuda.Keys | Sort-Object)
+    foreach ($name in $keptNames) {
+        if (-not (Test-Path (Join-Path $PACK_DIR $name))) {
+            Fail "Required CUDA DLL disappeared during pruning: $name"
+        }
+    }
+
+    Write-Host "    Kept $($keptNames.Count) CUDA DLLs: $($keptNames -join ', ')"
+    Write-Host "    Removed $removedCount unused CUDA DLLs ($([Math]::Round($removedBytes / 1MB, 2)) MB)"
 }
 
 function Copy-DllSet {
@@ -367,17 +488,25 @@ function Test-PrerequisitesAndBuild {
         Write-Host "    [WARN] No migration DLL files found" -ForegroundColor Yellow
     }
 
-    # Check CUDA DLL files
+    # CUDA DLLs are copied first, then pruned using the packaged PE dependency graph.
     Write-Status "Checking CUDA DLL files..."
     if (-not (Test-Path $CUDA_BIN_DIR)) {
-        Write-Host "    WARNING: CUDA bin directory not found at $CUDA_BIN_DIR" -ForegroundColor Yellow
+        $missing += "CUDA bin directory not found at $CUDA_BIN_DIR"
     } else {
-        $cudaDllCount = @(Get-ChildItem $CUDA_BIN_DIR -Filter "*.dll" -ErrorAction SilentlyContinue).Count
+        $cudaDllCount = @(Get-ChildItem $CUDA_BIN_DIR -Filter "*.dll" -File -ErrorAction SilentlyContinue).Count
         if ($cudaDllCount -eq 0) {
-            Write-Host "    WARNING: No DLL files found in CUDA bin directory" -ForegroundColor Yellow
+            $missing += "No CUDA DLL files found in $CUDA_BIN_DIR"
         } else {
             Write-Status "CUDA DLL files found: $cudaDllCount"
         }
+    }
+
+    Write-Status "Checking PE dependency analyzer..."
+    $script:DUMPBIN_EXE = Resolve-Dumpbin
+    if (-not $script:DUMPBIN_EXE) {
+        $missing += "dumpbin.exe not found; Visual Studio C++ tools are required for CUDA DLL pruning"
+    } else {
+        Write-Status "PE dependency analyzer found: $script:DUMPBIN_EXE"
     }
 
     # Check proj.db file
@@ -572,8 +701,8 @@ function Copy-Dependencies {
 
     Write-Status "Copying CUDA DLL files..."
     if (-not (Test-Path $CUDA_BIN_DIR)) { Fail "CUDA directory not found: $CUDA_BIN_DIR" }
-    $cudaDlls = Get-ChildItem $CUDA_BIN_DIR -Filter "*.dll" -ErrorAction SilentlyContinue
-    if ($cudaDlls.Count -eq 0) { Fail "No DLL files found in $CUDA_BIN_DIR" }
+    $cudaDlls = @(Get-ChildItem $CUDA_BIN_DIR -Filter "*.dll" -File -ErrorAction Stop)
+    if ($cudaDlls.Count -eq 0) { Fail "No CUDA DLL files found in $CUDA_BIN_DIR" }
     foreach ($dll in $cudaDlls) {
         try { Copy-Item -LiteralPath $dll.FullName -Destination $PACK_DIR -Force -ErrorAction Stop } catch { Fail "Failed to copy $($dll.Name): $($_.Exception.Message)" }
     }
@@ -584,6 +713,7 @@ function Copy-Dependencies {
     }
 
     Copy-PythonToolDependencies
+    Remove-UnusedCudaDlls
 }
 
 function Download-VocabTree {

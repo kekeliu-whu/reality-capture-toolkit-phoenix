@@ -798,8 +798,8 @@ ImageJob BuildImageJob(const colmap::Reconstruction& reconstruction,
   job.image_name = source_image.Name();
   job.source_camera_id = source_image.CameraId();
   job.split_source_camera = IsFisheyeCamera(source_camera);
-  job.source_rotation = pose.rotation.toRotationMatrix();
-  job.source_translation = pose.translation;
+  job.source_rotation = pose.rotation().toRotationMatrix();
+  job.source_translation = pose.translation();
   ValidateRotationMatrix("source image " + source_image.Name(), job.source_rotation);
   for (const auto& point2d : source_image.Points2D()) {
     if (point2d.HasPoint3D() && reconstruction.ExistsPoint3D(point2d.point3D_id)) {

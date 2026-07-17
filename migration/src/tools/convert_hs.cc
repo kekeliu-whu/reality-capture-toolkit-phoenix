@@ -1,6 +1,7 @@
 #include <gflags/gflags.h>
 #include <yaml-cpp/yaml.h>
 #include <Eigen/Eigen>
+#include <ulog_cpp/simple_writer.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -53,6 +54,22 @@ struct PcWindow {
   uint64_t begin_ns = 0;
   uint64_t end_ns = 0;
 };
+
+struct SensorIntervalSample {
+  uint64_t timestamp = 0;  // Current sensor timestamp in microseconds, used as the ULog time axis.
+  double interval_ms = 0;  // Interval from the previous sample in milliseconds.
+};
+
+std::vector<ulog_cpp::Field> SensorIntervalFields() {
+  return {{"uint64_t", "timestamp"}, {"double", "interval_ms"}};
+}
+
+double TimestampIntervalMs(uint64_t current_timestamp_ns, uint64_t previous_timestamp_ns) {
+  if (current_timestamp_ns >= previous_timestamp_ns) {
+    return static_cast<double>(current_timestamp_ns - previous_timestamp_ns) * 1e-6;
+  }
+  return -static_cast<double>(previous_timestamp_ns - current_timestamp_ns) * 1e-6;
+}
 
 template <typename T>
 T ReadLe(const uint8_t* data) {
@@ -264,16 +281,20 @@ bool IsValidPoint(float x, float y, float z, uint64_t timestamp_ns) {
 }
 
 void FlushLidarScan(const std::shared_ptr<proto::LidarMsg>& lidar_msg, SequentialLidarFileWriter<proto::LidarMsg>* writer, size_t* scan_count,
-                    size_t* point_count) {
+                    size_t* point_count, uint64_t scan_timestamp_ns, std::vector<uint64_t>* lidar_timestamps_ns) {
   if (lidar_msg->points_size() == 0) {
     return;
   }
+  if (scan_timestamp_ns == 0) {
+    throw std::runtime_error("Non-empty LiDAR scan has no timestamp");
+  }
   *point_count += static_cast<size_t>(lidar_msg->points_size());
   writer->Write(lidar_msg);
+  lidar_timestamps_ns->push_back(scan_timestamp_ns);
   ++(*scan_count);
 }
 
-bool ConvertLidar(const std::filesystem::path& input_dir, const std::filesystem::path& output_dir) {
+bool ConvertLidar(const std::filesystem::path& input_dir, const std::filesystem::path& output_dir, std::vector<uint64_t>* lidar_timestamps_ns) {
   const auto windows = ReadPcWindows(input_dir);
   if (windows.empty()) {
     spdlog::error("No pc_windows_*.mcap scan windows found in {}", input_dir.string());
@@ -297,12 +318,14 @@ bool ConvertLidar(const std::filesystem::path& input_dir, const std::filesystem:
   size_t point_count = 0;
   size_t packet_count = 0;
   size_t skipped_points = 0;
+  uint64_t current_scan_timestamp_ns = 0;
   auto current_scan = std::make_shared<proto::LidarMsg>();
 
   auto advance_to = [&](uint64_t point_time_ns) {
     while (window_index < windows.size() && point_time_ns >= windows[window_index].end_ns) {
-      FlushLidarScan(current_scan, &lidar_writer, &scan_count, &point_count);
+      FlushLidarScan(current_scan, &lidar_writer, &scan_count, &point_count, current_scan_timestamp_ns, lidar_timestamps_ns);
       current_scan = std::make_shared<proto::LidarMsg>();
+      current_scan_timestamp_ns = 0;
       ++window_index;
     }
   };
@@ -342,6 +365,9 @@ bool ConvertLidar(const std::filesystem::path& input_dir, const std::filesystem:
           continue;
         }
 
+        if (current_scan_timestamp_ns == 0) {
+          current_scan_timestamp_ns = timestamp_ns;
+        }
         auto point = current_scan->add_points();
         point->set_timestamp(static_cast<double>(timestamp_ns) * 1e-9);
         point->set_x(x);
@@ -352,12 +378,12 @@ bool ConvertLidar(const std::filesystem::path& input_dir, const std::filesystem:
     });
   }
 
-  FlushLidarScan(current_scan, &lidar_writer, &scan_count, &point_count);
+  FlushLidarScan(current_scan, &lidar_writer, &scan_count, &point_count, current_scan_timestamp_ns, lidar_timestamps_ns);
   spdlog::info("Wrote lidar.dat: {} scans, {} points, {} packets, {} skipped points", scan_count, point_count, packet_count, skipped_points);
   return scan_count > 0;
 }
 
-bool ConvertImu(const std::filesystem::path& input_dir, const std::filesystem::path& output_dir) {
+bool ConvertImu(const std::filesystem::path& input_dir, const std::filesystem::path& output_dir, std::vector<uint64_t>* imu_timestamps_ns) {
   const auto imu_files = GlobFiles(input_dir, "ext_imu_", ".mcap");
   if (imu_files.empty()) {
     spdlog::error("No ext_imu_*.mcap files found in {}", input_dir.string());
@@ -379,6 +405,7 @@ bool ConvertImu(const std::filesystem::path& input_dir, const std::filesystem::p
 
       const uint8_t* data = msg.data.data();
       const uint64_t timestamp_ns = ReadLe<uint64_t>(data);
+      imu_timestamps_ns->push_back(timestamp_ns);
       auto imu_msg = imu_msg_list.add_imu_msgs();
       imu_msg->set_timestamp(static_cast<double>(timestamp_ns) * 1e-9);
       imu_msg->set_gx(ReadLe<float>(data + 8));
@@ -396,6 +423,63 @@ bool ConvertImu(const std::filesystem::path& input_dir, const std::filesystem::p
   }
   spdlog::info("Wrote imu.dat: {} messages, {} skipped", imu_msg_list.imu_msgs_size(), skipped);
   return true;
+}
+
+bool WriteRawUlog(const std::filesystem::path& output_path, std::vector<uint64_t> lidar_timestamps_ns, std::vector<uint64_t> imu_timestamps_ns) {
+  if (lidar_timestamps_ns.size() < 2 && imu_timestamps_ns.size() < 2) {
+    spdlog::error("Cannot write raw.ulg without at least two LiDAR or IMU timestamps");
+    return false;
+  }
+
+  try {
+    const uint64_t first_lidar_ns = lidar_timestamps_ns.empty() ? std::numeric_limits<uint64_t>::max() : lidar_timestamps_ns.front();
+    const uint64_t first_imu_ns = imu_timestamps_ns.empty() ? std::numeric_limits<uint64_t>::max() : imu_timestamps_ns.front();
+    const uint64_t start_timestamp_us = std::min(first_lidar_ns, first_imu_ns) / 1000;
+    ulog_cpp::SimpleWriter writer(output_path.string(), start_timestamp_us);
+    writer.writeInfo("sys_name", std::string("KosmoHesaiConverter"));
+
+    if (lidar_timestamps_ns.size() >= 2) {
+      writer.writeMessageFormat("lidar_interval", SensorIntervalFields());
+    }
+    if (imu_timestamps_ns.size() >= 2) {
+      writer.writeMessageFormat("imu_interval", SensorIntervalFields());
+    }
+    writer.headerComplete();
+
+    uint16_t lidar_message_id = 0;
+    uint16_t imu_message_id = 0;
+    if (lidar_timestamps_ns.size() >= 2) {
+      lidar_message_id = writer.writeAddLoggedMessage("lidar_interval");
+    }
+    if (imu_timestamps_ns.size() >= 2) {
+      imu_message_id = writer.writeAddLoggedMessage("imu_interval");
+    }
+
+    size_t lidar_index = 1;
+    size_t imu_index = 1;
+    while (lidar_index < lidar_timestamps_ns.size() || imu_index < imu_timestamps_ns.size()) {
+      const bool write_lidar = lidar_index < lidar_timestamps_ns.size() &&
+                               (imu_index >= imu_timestamps_ns.size() || lidar_timestamps_ns[lidar_index] <= imu_timestamps_ns[imu_index]);
+      if (write_lidar) {
+        const uint64_t current_timestamp_ns = lidar_timestamps_ns[lidar_index];
+        const double interval_ms = TimestampIntervalMs(current_timestamp_ns, lidar_timestamps_ns[lidar_index - 1]);
+        writer.writeData(lidar_message_id, SensorIntervalSample{current_timestamp_ns / 1000, interval_ms});
+        ++lidar_index;
+      } else {
+        const uint64_t current_timestamp_ns = imu_timestamps_ns[imu_index];
+        const double interval_ms = TimestampIntervalMs(current_timestamp_ns, imu_timestamps_ns[imu_index - 1]);
+        writer.writeData(imu_message_id, SensorIntervalSample{current_timestamp_ns / 1000, interval_ms});
+        ++imu_index;
+      }
+    }
+    writer.fsync();
+    spdlog::info("Wrote raw.ulg: {} LiDAR intervals, {} IMU intervals", lidar_timestamps_ns.empty() ? 0 : lidar_timestamps_ns.size() - 1,
+                 imu_timestamps_ns.empty() ? 0 : imu_timestamps_ns.size() - 1);
+    return true;
+  } catch (const ulog_cpp::ExceptionBase& e) {
+    spdlog::error("Failed to write raw.ulg: {}", e.what());
+    return false;
+  }
 }
 
 YAML::Node RequireNode(const YAML::Node& parent, const std::string& key) {
@@ -420,6 +504,10 @@ Eigen::Matrix4d ReadMatrix4(const YAML::Node& node) {
     }
   }
   return matrix;
+}
+
+Eigen::Matrix4d ReadExtrinsicTransform(const YAML::Node& extrinsic, const std::string& name) {
+  return ReadMatrix4(RequireNode(RequireNode(extrinsic, name), "T"));
 }
 
 void SetExtrinsicFromMatrix(const Eigen::Matrix4d& transform, proto::SensorExtrinsic* extrinsic) {
@@ -449,15 +537,24 @@ bool ConvertCalibration(const std::filesystem::path& input_dir, const std::files
     const YAML::Node intrinsic = RequireNode(root, "intrinsic");
     const YAML::Node extrinsic = RequireNode(root, "extrinsic");
 
-    SetExtrinsicFromMatrix(ReadMatrix4(RequireNode(RequireNode(extrinsic, "T_lidar_2_imu"), "T")), calib.mutable_lidar_to_encoder());
+    // YAML convention:
+    //   p_imu    = T_lidar_2_imu    * p_lidar
+    //   p_camera = T_lidar_2_camera * p_lidar
+    // SensorCalib convention:
+    //   p_imu = CameraParam.extrinsic * p_camera
+    const Eigen::Matrix4d T_lidar_2_imu = ReadExtrinsicTransform(extrinsic, "T_lidar_2_imu");
+    SetExtrinsicFromMatrix(T_lidar_2_imu, calib.mutable_lidar_to_encoder());
 
     for (const std::string cam_name : {"cam0", "cam1", "cam2"}) {
       const YAML::Node k_node = intrinsic[cam_name];
       const YAML::Node d_node = intrinsic[cam_name + "_distortion"];
-      const YAML::Node t_node = extrinsic["T_lidar_2_" + cam_name];
-      if (!k_node || !d_node || !t_node) {
+      const std::string lidar_to_camera_name = "T_lidar_2_" + cam_name;
+      if (!k_node || !d_node || !extrinsic[lidar_to_camera_name]) {
         continue;
       }
+
+      const Eigen::Matrix4d T_lidar_2_camera = ReadExtrinsicTransform(extrinsic, lidar_to_camera_name);
+      const Eigen::Matrix4d T_imu_camera = T_lidar_2_imu * T_lidar_2_camera.inverse();
 
       auto cam = calib.add_camera_param();
       cam->set_name(cam_name);
@@ -469,7 +566,7 @@ bool ConvertCalibration(const std::filesystem::path& input_dir, const std::files
       cam->set_k2(d_node[1].as<double>());
       cam->set_k3(d_node[2].as<double>());
       cam->set_k4(d_node[3].as<double>());
-      SetExtrinsicFromMatrix(ReadMatrix4(RequireNode(t_node, "T")), cam->mutable_extrinsic());
+      SetExtrinsicFromMatrix(T_imu_camera, cam->mutable_extrinsic());
     }
 
     if (!WriteSensorCalibFile((output_dir / "calibration.dat").string(), calib)) {
@@ -498,14 +595,25 @@ int main(int argc, char** argv) {
   std::filesystem::create_directories(output_dir);
 
   bool ok = true;
+  bool imu_converted = false;
+  bool lidar_converted = false;
+  std::vector<uint64_t> lidar_timestamps_ns;
+  std::vector<uint64_t> imu_timestamps_ns;
   if (!FLAGS_skip_calibration) {
     ok = ConvertCalibration(input_dir, output_dir) && ok;
   }
   if (!FLAGS_skip_imu) {
-    ok = ConvertImu(input_dir, output_dir) && ok;
+    imu_converted = ConvertImu(input_dir, output_dir, &imu_timestamps_ns);
+    ok = imu_converted && ok;
   }
   if (!FLAGS_skip_lidar) {
-    ok = ConvertLidar(input_dir, output_dir) && ok;
+    lidar_converted = ConvertLidar(input_dir, output_dir, &lidar_timestamps_ns);
+    ok = lidar_converted && ok;
+  }
+  const bool sensor_conversion_requested = !FLAGS_skip_imu || !FLAGS_skip_lidar;
+  const bool requested_sensor_conversions_succeeded = (FLAGS_skip_imu || imu_converted) && (FLAGS_skip_lidar || lidar_converted);
+  if (sensor_conversion_requested && requested_sensor_conversions_succeeded) {
+    ok = WriteRawUlog(output_dir / "raw.ulg", std::move(lidar_timestamps_ns), std::move(imu_timestamps_ns)) && ok;
   }
 
   spdlog::info("done.");

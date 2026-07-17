@@ -21,7 +21,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Eigen3 REQUIRED)
 find_package(Ceres REQUIRED)
 find_package(gflags REQUIRED)
-find_package(OpenCV QUIET)
+find_package(OpenCV REQUIRED)
 find_package(VTK CONFIG QUIET)
 find_package(PCL REQUIRED COMPONENTS common io filters registration visualization)
 find_package(Boost CONFIG COMPONENTS program_options)
@@ -30,7 +30,8 @@ find_package(spdlog REQUIRED)
 find_package(PDAL CONFIG REQUIRED)
 find_package(Glog REQUIRED)
 find_package(PROJ CONFIG REQUIRED)
-find_package(CUDAToolkit QUIET)
+find_package(CUDAToolkit REQUIRED)
+find_package(colmap CONFIG REQUIRED)
 set(CMAKE_CUDA_ARCHITECTURES "75-virtual" CACHE STRING "CUDA architectures for pgo CUDA tools" FORCE)
 
 include_directories(
@@ -44,18 +45,12 @@ include_directories(
 
 add_subdirectory(../migration migration_build)
 
-set(PGO_COLMAP_TARGET "")
 if(TARGET colmap::colmap)
   set(PGO_COLMAP_TARGET colmap::colmap)
 elseif(TARGET colmap)
   set(PGO_COLMAP_TARGET colmap)
 else()
-  find_package(colmap CONFIG QUIET)
-  if(TARGET colmap::colmap)
-    set(PGO_COLMAP_TARGET colmap::colmap)
-  elseif(TARGET colmap)
-    set(PGO_COLMAP_TARGET colmap)
-  endif()
+  message(FATAL_ERROR "The required colmap package did not export colmap::colmap or colmap target.")
 endif()
 
 
@@ -98,117 +93,95 @@ if(VTK_FOUND)
   list(APPEND PGO_PRIVATE_LIBS ${VTK_LIBRARIES})
 endif()
 
-if(PGO_COLMAP_TARGET)
-  set(PGO_XSFM_TOOL_LIBS
-    migration_core
-    ${GFLAGS_LIBRARIES}
-    ${CERES_LIBRARIES}
-    ${PCL_LIBRARIES}
-    $<TARGET_NAME:pdalcpp>
-    PROJ::proj
-    spdlog::spdlog_header_only
-    OpenMP::OpenMP_CXX
-    ${PGO_COLMAP_TARGET}
-  )
+set(PGO_XSFM_TOOL_LIBS
+  migration_core
+  ${GFLAGS_LIBRARIES}
+  ${CERES_LIBRARIES}
+  ${PCL_LIBRARIES}
+  $<TARGET_NAME:pdalcpp>
+  PROJ::proj
+  spdlog::spdlog_header_only
+  OpenMP::OpenMP_CXX
+  ${PGO_COLMAP_TARGET}
+)
 
 add_executable(
-    xsfm_process_point_cloud
-    tools/xsfm_process_point_cloud.cc
-  )
-  target_link_libraries(xsfm_process_point_cloud ${PGO_XSFM_TOOL_LIBS})
-  if(NOT DEFINED VCPKG_INSTALLED_DIR OR "${VCPKG_INSTALLED_DIR}" STREQUAL "")
-    set(VCPKG_INSTALLED_DIR "F:/Library/vcpkg/installed")
-  endif()
-  set(CRASHPAD_HANDLER_SOURCE "${VCPKG_INSTALLED_DIR}/x64-windows/tools/crashpad_handler.exe")
-  if(NOT EXISTS "${CRASHPAD_HANDLER_SOURCE}")
-    set(CRASHPAD_HANDLER_SOURCE "${VCPKG_INSTALLED_DIR}/x64-windows/tools/crashpad/crashpad_handler.exe")
-  endif()
-  add_custom_command(TARGET xsfm_process_point_cloud POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:xsfm_process_point_cloud>"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${VCPKG_INSTALLED_DIR}/x64-windows/share/proj/proj.db"
-      "$<TARGET_FILE_DIR:xsfm_process_point_cloud>"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${CRASHPAD_HANDLER_SOURCE}"
-      "$<TARGET_FILE_DIR:xsfm_process_point_cloud>"
-  )
-
-if(OpenCV_FOUND)
-  set(PGO_XCOLOR_TOOL_LIBS
-    ${PGO_XSFM_TOOL_LIBS}
-    ${OpenCV_LIBS}
-  )
-
-  add_library(
-    pgo_xcolor_lib
-    STATIC
-    tools/xcolor_lib.cc
-    tools/xcolor_lib.h
-  )
-  target_link_libraries(pgo_xcolor_lib ${PGO_XCOLOR_TOOL_LIBS})
-
-  add_executable(
-    xcolor
-    tools/xcolor_main.cc
-  )
-  target_link_libraries(xcolor pgo_xcolor_lib ${PGO_XCOLOR_TOOL_LIBS})
-else()
-  message(
-    WARNING
-    "Skipping xcolor build in pgo: OpenCV was not found by CMake."
-  )
+  xsfm_process_point_cloud
+  tools/xsfm_process_point_cloud.cc
+)
+target_link_libraries(xsfm_process_point_cloud ${PGO_XSFM_TOOL_LIBS})
+if(NOT DEFINED VCPKG_INSTALLED_DIR OR "${VCPKG_INSTALLED_DIR}" STREQUAL "")
+  set(VCPKG_INSTALLED_DIR "F:/Library/vcpkg/installed")
 endif()
-
-if(OpenCV_FOUND AND CUDAToolkit_FOUND)
-  set(XSFM_POST_DEPTH_OBJ "${CMAKE_CURRENT_BINARY_DIR}/xsfm_post_depth_$<CONFIG>.obj")
-  add_custom_command(
-    OUTPUT "${XSFM_POST_DEPTH_OBJ}"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}"
-    COMMAND "${CUDAToolkit_NVCC_EXECUTABLE}"
-      -std=c++17
-      -gencode=arch=compute_75,code=compute_75
-      -c "${CMAKE_CURRENT_SOURCE_DIR}/tools/xsfm_post_depth.cu"
-      -I "${CMAKE_CURRENT_SOURCE_DIR}/tools"
-      -I "${CUDAToolkit_INCLUDE_DIRS}"
-      -Xcompiler=/EHsc
-      -Xcompiler=/MD
-      -o "${XSFM_POST_DEPTH_OBJ}"
-    DEPENDS
-      "${CMAKE_CURRENT_SOURCE_DIR}/tools/xsfm_post_depth.cu"
-      "${CMAKE_CURRENT_SOURCE_DIR}/tools/xsfm_post_depth.h"
-    VERBATIM
-  )
-  set_source_files_properties(
-    "${XSFM_POST_DEPTH_OBJ}"
-    PROPERTIES
-      GENERATED TRUE
-      EXTERNAL_OBJECT TRUE
-  )
-  add_executable(
-    xsfm_post
-    tools/xsfm_post.cc
-    tools/xsfm_post_depth.h
-    "${XSFM_POST_DEPTH_OBJ}"
-  )
-  target_link_libraries(
-    xsfm_post
-    ${PGO_XSFM_TOOL_LIBS}
-    ${OpenCV_LIBS}
-    CUDA::cudart
-  )
-else()
-  message(
-    WARNING
-    "Skipping xsfm_post build in pgo: OpenCV or CUDA Toolkit was not found by CMake."
-  )
+set(CRASHPAD_HANDLER_SOURCE "${VCPKG_INSTALLED_DIR}/x64-windows/tools/crashpad_handler.exe")
+if(NOT EXISTS "${CRASHPAD_HANDLER_SOURCE}")
+  set(CRASHPAD_HANDLER_SOURCE "${VCPKG_INSTALLED_DIR}/x64-windows/tools/crashpad/crashpad_handler.exe")
 endif()
-else()
-  message(
-    WARNING
-    "Skipping xcolor/xsfm_process_point_cloud/xsfm_post build in pgo: colmap target was not found."
-  )
-endif()
+add_custom_command(TARGET xsfm_process_point_cloud POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:xsfm_process_point_cloud>"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${VCPKG_INSTALLED_DIR}/x64-windows/share/proj/proj.db"
+    "$<TARGET_FILE_DIR:xsfm_process_point_cloud>"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CRASHPAD_HANDLER_SOURCE}"
+    "$<TARGET_FILE_DIR:xsfm_process_point_cloud>"
+)
 
+set(PGO_XCOLOR_TOOL_LIBS
+  ${PGO_XSFM_TOOL_LIBS}
+  ${OpenCV_LIBS}
+)
+
+add_library(
+  pgo_xcolor_lib
+  STATIC
+  tools/xcolor_lib.cc
+  tools/xcolor_lib.h
+)
+target_link_libraries(pgo_xcolor_lib ${PGO_XCOLOR_TOOL_LIBS})
+
+add_executable(
+  xcolor
+  tools/xcolor_main.cc
+)
+target_link_libraries(xcolor pgo_xcolor_lib ${PGO_XCOLOR_TOOL_LIBS})
+
+set(XSFM_POST_DEPTH_OBJ "${CMAKE_CURRENT_BINARY_DIR}/xsfm_post_depth_$<CONFIG>.obj")
+add_custom_command(
+  OUTPUT "${XSFM_POST_DEPTH_OBJ}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}"
+  COMMAND "${CUDAToolkit_NVCC_EXECUTABLE}"
+    -std=c++17
+    -gencode=arch=compute_75,code=compute_75
+    -c "${CMAKE_CURRENT_SOURCE_DIR}/tools/xsfm_post_depth.cu"
+    -I "${CMAKE_CURRENT_SOURCE_DIR}/tools"
+    -I "${CUDAToolkit_INCLUDE_DIRS}"
+    -Xcompiler=/EHsc
+    -Xcompiler=/MD
+    -o "${XSFM_POST_DEPTH_OBJ}"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/xsfm_post_depth.cu"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/xsfm_post_depth.h"
+  VERBATIM
+)
+set_source_files_properties(
+  "${XSFM_POST_DEPTH_OBJ}"
+  PROPERTIES
+    GENERATED TRUE
+    EXTERNAL_OBJECT TRUE
+)
+add_executable(
+  xsfm_post
+  tools/xsfm_post.cc
+  tools/xsfm_post_depth.h
+  "${XSFM_POST_DEPTH_OBJ}"
+)
+target_link_libraries(
+  xsfm_post
+  ${PGO_XSFM_TOOL_LIBS}
+  ${OpenCV_LIBS}
+  CUDA::cudart
+)
 add_library(
   pgo_private
   STATIC
