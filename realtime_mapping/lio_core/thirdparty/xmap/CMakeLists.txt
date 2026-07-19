@@ -12,11 +12,8 @@ set(XMAP_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR})
 set(XMAP_CONFIG_PATH "${XMAP_ROOT_DIR}/configs")
 set(XMAP_TEST_DATA_PATH "${XMAP_ROOT_DIR}/unit_test/test_data/")
 
-# Some source packages do not ship the legacy standalone map.yaml; the
-# application supplies the same settings through its device YAML instead.
-if(EXISTS "${XMAP_CONFIG_PATH}/map.yaml")
-    file(COPY "${XMAP_CONFIG_PATH}/map.yaml" DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
-endif()
+# 将 map.yaml 拷贝到输出目录
+file(COPY ${XMAP_CONFIG_PATH}/map.yaml DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 
 SET(CMAKE_BUILD_TYPE "Release")
 # SET(CMAKE_BUILD_TYPE "RelWithDebInfo")

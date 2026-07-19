@@ -8,7 +8,7 @@
 #define EXTRINSIC_CALIBRATION false
 
 // TODO: add WINDOW_SIZE to configs !!!
-#define WINDOW_SIZE 5
+#define WINDOW_SIZE 10
 
 #include "common/common_struct.h"
 #include "common/math_utils.h"

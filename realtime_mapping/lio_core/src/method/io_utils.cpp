@@ -7,27 +7,24 @@ namespace
 template <typename T, typename TOut>
 void collectImuOrMotorData(const std::deque<T> &data_queue, double start_time, double end_time, TOut &out_queue)
 {
-  int idx_beg = static_cast<int>(std::lower_bound(
+  int idx_beg = std::lower_bound(
                     data_queue.begin(),
                     data_queue.end(),
                     start_time,
                     [](const T &a, const double &b) { return a->timestamp < b; }) -
-                data_queue.begin()) - 1;
-  int idx_end = static_cast<int>(std::lower_bound(
+                data_queue.begin() - 1;
+  int idx_end = std::lower_bound(
                     data_queue.begin(),
                     data_queue.end(),
                     end_time,
                     [](const T &a, const double &b) { return a->timestamp < b; }) -
-                data_queue.begin());
+                data_queue.begin();
   // DCHECK_GE(idx_beg, 0);
   // DCHECK_LT(idx_beg, data_queue.size());
   // DCHECK_GE(idx_end, 0);
   // DCHECK_LT(idx_end, data_queue.size());
   // DCHECK_GE(idx_end, idx_beg);
 
-  if (data_queue.empty()) return;
-  idx_beg = std::max(idx_beg, 0);
-  idx_end = std::min(idx_end, static_cast<int>(data_queue.size()) - 1);
   for (int i = idx_beg; i <= idx_end; ++i)
   {
     out_queue.push_back(*data_queue[i]);
@@ -62,7 +59,6 @@ void lixel::IOUtils::addLidar(const PointCloudMsg::Ptr &msg)
       msg->points->points.begin(),
       msg->points->points.end(),
       [](const auto &a, const auto &b) { return a.timestamp < b.timestamp; });
-  int accepted_point_count = 0;
   for (int i = 0; i < msg->points->size(); ++i)
   {
     auto point = msg->points->points[i];
@@ -77,9 +73,8 @@ void lixel::IOUtils::addLidar(const PointCloudMsg::Ptr &msg)
       // << input_data_buff_.lidar_points_queue.back().timestamp << " " << point.timestamp;
     }
     input_data_buff_.lidar_points_queue.push_back(point);
-    ++accepted_point_count;
   }
-  input_data_buff_.lidar_frame_sizes_queue.push_back(accepted_point_count);
+  input_data_buff_.lidar_frame_sizes_queue.push_back(msg->points->size());
   input_data_buff_.lidar_frameids_queue.push_back(msg->frame_id);
 }
 
@@ -128,22 +123,8 @@ bool lixel::IOUtils::containsEnoughDataForSyncPackages(double sweep_duration)
   }
 
   // if data queue duration is not enough, return false
-  static bool trace_once = true;
-  if (trace_once)
-  {
-    std::fprintf(stderr, "sync check queues lidar=%zu frames=%zu imu=%zu\n",
-                 input_data_buff_.lidar_points_queue.size(), input_data_buff_.lidar_frame_sizes_queue.size(),
-                 input_data_buff_.imu_queue.size());
-    std::fflush(stderr);
-  }
   double common_begin_time = getCommonBeginTime();
   double common_end_time = getCommonEndTime();
-  if (trace_once)
-  {
-    std::fprintf(stderr, "sync check range %.9f %.9f\n", common_begin_time, common_end_time);
-    std::fflush(stderr);
-    trace_once = false;
-  }
   if (common_end_time - common_begin_time <= sweep_duration + MIN_COMMON_QUEUE_DURATION)
   {
     return false;
@@ -309,11 +290,6 @@ bool IOUtils::syncPackagesImplCutByOriginalSize(MeaureGroup &mg)
   mg.imu_vec.clear();
   mg.motor_vec.clear();
 
-  lslog(LSLOG_INFO) << "offline sync: points=" << input_data_buff_.lidar_frame_sizes_queue.front()
-                    << " lidar_queue=" << input_data_buff_.lidar_points_queue.size()
-                    << " imu_queue=" << input_data_buff_.imu_queue.size()
-                    << " common=[" << std::fixed << common_begin_time << "," << common_end_time << "]";
-
   for (int i = 0; i < input_data_buff_.lidar_frame_sizes_queue.front(); ++i)
   {
     mg.lidar_points->push_back(input_data_buff_.lidar_points_queue.front());
@@ -329,10 +305,7 @@ bool IOUtils::syncPackagesImplCutByOriginalSize(MeaureGroup &mg)
   mg.sweep_id = input_data_buff_.lidar_frameids_queue.front();
   input_data_buff_.lidar_frameids_queue.pop_front();
 
-  lslog(LSLOG_INFO) << "offline sync: lidar collected [" << std::fixed << mg.pcl_start_time << ","
-                    << mg.pcl_end_time << "]";
   syncPackagesImplHandleImu(mg);
-  lslog(LSLOG_INFO) << "offline sync: imu collected=" << mg.imu_vec.size();
   syncPackagesImplHandleMotor(mg);
   printSyncPackagesResult(mg);
 
@@ -359,11 +332,6 @@ lixel::LioResultMsg::Ptr lixel::IOUtils::getLioResult()
 double lixel::IOUtils::getInputDataCommonDuration()
 {
   std::lock_guard<std::recursive_mutex> lg{mtx_input_data_buff_};
-  if (input_data_buff_.imu_queue.empty() || input_data_buff_.lidar_points_queue.empty() ||
-      (motor_enabled_ && input_data_buff_.motor_queue.empty()))
-  {
-    return 0.0;
-  }
   double common_begin_time = getCommonBeginTime();
   double common_end_time = getCommonEndTime();
   return common_end_time - common_begin_time;
