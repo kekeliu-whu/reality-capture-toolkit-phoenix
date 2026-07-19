@@ -1,0 +1,22 @@
+<launch>
+	<arg name="rviz" default="true" />
+
+	<node pkg="lio_core_ros" type="lio_core_ros_node"
+		name="lio_core_ros" output="log"
+		args="
+		--offline_mode=true 
+		--bag_filename=$(arg bag_filename) 
+		--algorithm_config_filename=$(find lio_core_ros)/config/L2PRO.yaml
+		--use_external_calib=false
+		--external_calib_filepath=/tmp/
+		--output_dir=/tmp/
+		--output_dir_temp=/tmp/" />
+
+	<group if="$(arg rviz)">
+		<node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find lio_core_ros)/config/loam_livox.rviz" />
+	</group>
+
+	launch-prefix="valgrind --tool=massif"
+	launch-prefix="xterm -e gdb -ex run --args"
+
+</launch>

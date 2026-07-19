@@ -96,9 +96,9 @@ set(
     OpenSSL::Crypto
     yaml-cpp::yaml-cpp
     ulog_cpp
-    spdlog::spdlog_header_only
-    $<TARGET_NAME:pdalcpp>
-    fmt::fmt-header-only
+    spdlog::spdlog
+    pdalcpp
+    fmt::fmt
 )
 
 # add_executable(test_proto src/test_proto.cc ${PROJECT_SRCS})

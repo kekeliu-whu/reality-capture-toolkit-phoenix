@@ -1,0 +1,3 @@
+[submodule "lio_core/thirdparty/xmap"]
+	path = lio_core/thirdparty/xmap
+	url = git@gitlab.xgrids-dev.com:YouYuan/xmap.git

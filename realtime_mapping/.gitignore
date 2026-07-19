@@ -1,0 +1,12 @@
+*.vscode
+*build
+PCD
+*workspace
+*pyc
+*xginf
+tmp
+.cache
+cmake-*
+.idea
+lio_core_ros/config/calibration
+lio_core_ros/config/loam_livox.rviz
