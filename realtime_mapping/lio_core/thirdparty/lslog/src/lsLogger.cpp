@@ -32,26 +32,34 @@ void lsLogger::init(xgridsLogLevel log, const std::string &path, bool bCryptogra
   logger = logger_ptr;
 }
 
-hsLogEventWrap::~hsLogEventWrap() /*noexcept*/
+hsLogEventWrap::~hsLogEventWrap() noexcept
 {
-  switch (level_)
+  try
   {
-    case LogLevel::LSLOG_INFO:
-      info(ss.str());
-      break;
-    case LogLevel::LSLOG_DEBUG:
-      debug(ss.str());
-      break;
-    case LogLevel::LSLOG_WARNING:
-      warn(ss.str());
-      break;
-    case LogLevel::LSLOG_ERROR:
-      error(ss.str());
-      break;
-      //        case LogLevel::CONSOLE:
-      //            error(ss.str());
-      //            break;
-    default:
-      break;
+    switch (level_)
+    {
+      case LogLevel::LSLOG_INFO:
+        info(ss.str());
+        break;
+      case LogLevel::LSLOG_DEBUG:
+        debug(ss.str());
+        break;
+      case LogLevel::LSLOG_WARNING:
+        warn(ss.str());
+        break;
+      case LogLevel::LSLOG_ERROR:
+        error(ss.str());
+        break;
+      default:
+        break;
+    }
+  }
+  catch (const std::exception &e)
+  {
+    std::fprintf(stderr, "lsLogger write failed: %s\n", e.what());
+  }
+  catch (...)
+  {
+    std::fprintf(stderr, "lsLogger write failed with an unknown exception\n");
   }
 }

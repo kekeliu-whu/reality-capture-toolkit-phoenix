@@ -65,7 +65,7 @@ class  hsLogEventWrap {
  public:
   hsLogEventWrap(LogLevel level) : level_(level) {}
 
-  ~hsLogEventWrap() /*noexcept*/;
+  ~hsLogEventWrap() noexcept;
   hsLogEventWrap(const hsLogEventWrap&) = delete;
   hsLogEventWrap( hsLogEventWrap&&) = delete;
 
@@ -79,7 +79,7 @@ class  hsLogEventWrap {
 template <class T>
 void debug(T &&msg) {
   if(lsLogger::logger == nullptr) {
-    spdlog::stderr_color_mt("stderr_logger")->debug(std::forward<T>(msg));
+    spdlog::default_logger_raw()->debug(std::forward<T>(msg));
     return;
   }
   lsLogger::logger->debug(std::forward<T>(msg));
@@ -88,7 +88,7 @@ void debug(T &&msg) {
 template <class T>
 void info(T &&msg) {
   if(lsLogger::logger == nullptr) {
-    spdlog::stderr_color_mt("stderr_logger")->info(std::forward<T>(msg));
+    spdlog::default_logger_raw()->info(std::forward<T>(msg));
     return;
   }
   lsLogger::logger->info(std::forward<T>(msg));
@@ -97,7 +97,7 @@ void info(T &&msg) {
 template <class T>
 void warn(T &&msg) {
   if(lsLogger::logger == nullptr) {
-    spdlog::stderr_color_mt("stderr_logger")->warn(std::forward<T>(msg));
+    spdlog::default_logger_raw()->warn(std::forward<T>(msg));
     return;
   }
   lsLogger::logger->warn(std::forward<T>(msg));
@@ -106,7 +106,7 @@ void warn(T &&msg) {
 template <class T>
 void error(T &&msg) {
   if(lsLogger::logger == nullptr) {
-    spdlog::stderr_color_mt("stderr_logger")->error(std::forward<T>(msg));
+    spdlog::default_logger_raw()->error(std::forward<T>(msg));
     return;
   }
   lsLogger::logger->error(std::forward<T>(msg));
@@ -115,7 +115,7 @@ void error(T &&msg) {
 template <class T>
 void console(T &&msg) {
   if(lsLogger::logger == nullptr) {
-    spdlog::stderr_color_mt("stderr_logger")->critical(std::forward<T>(msg));
+    spdlog::default_logger_raw()->critical(std::forward<T>(msg));
     return;
   }
   lsLogger::logger->critical(std::forward<T>(msg));
@@ -124,7 +124,7 @@ void console(T &&msg) {
 template <typename... Args>
 void debug(Args &&...args) {
   if(lsLogger::logger == nullptr) {
-    spdlog::stderr_color_mt("stderr_logger")->debug(std::forward<Args>(args)...);
+    spdlog::default_logger_raw()->debug(std::forward<Args>(args)...);
     return;
   }
   lsLogger::logger->debug(std::forward<Args>(args)...);
@@ -133,7 +133,7 @@ void debug(Args &&...args) {
 template <typename... Args>
 void info(Args &&...args) {
   if(lsLogger::logger == nullptr) {
-    spdlog::stderr_color_mt("stderr_logger")->info(std::forward<Args>(args)...);
+    spdlog::default_logger_raw()->info(std::forward<Args>(args)...);
     return;
   }
   lsLogger::logger->info(std::forward<Args>(args)...);
@@ -142,7 +142,7 @@ void info(Args &&...args) {
 template <typename... Args>
 void warn(Args &&...args) {
   if(lsLogger::logger == nullptr) {
-    spdlog::stderr_color_mt("stderr_logger")->warn(std::forward<Args>(args)...);
+    spdlog::default_logger_raw()->warn(std::forward<Args>(args)...);
     return;
   }
   lsLogger::logger->warn(std::forward<Args>(args)...);
@@ -151,7 +151,7 @@ void warn(Args &&...args) {
 template <typename... Args>
 void error(Args &&...args) {
   if(lsLogger::logger == nullptr) {
-    spdlog::stderr_color_mt("stderr_logger")->error(std::forward<Args>(args)...);
+    spdlog::default_logger_raw()->error(std::forward<Args>(args)...);
     return;
   }
   lsLogger::logger->error(std::forward<Args>(args)...);
@@ -160,7 +160,7 @@ void error(Args &&...args) {
 template <typename... Args>
 void console(Args &&...args) {
   if(lsLogger::logger == nullptr) {
-    spdlog::stderr_color_mt("stderr_logger")->critical(std::forward<Args>(args)...);
+    spdlog::default_logger_raw()->critical(std::forward<Args>(args)...);
     return;
   }
   lsLogger::logger->critical(std::forward<Args>(args)...);
