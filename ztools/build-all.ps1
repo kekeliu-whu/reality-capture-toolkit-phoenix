@@ -46,6 +46,8 @@ $COLMAP_INSTALL_DIR = Join-Path $BUILD_ALL_DIR "install-colmap"
 $COLMAP_CMAKE_DIR = Join-Path $COLMAP_INSTALL_DIR "share\colmap"
 $ODOMETRY_SOURCE_DIR = Join-Path $PROJECT_ROOT "odometry"
 $ODOMETRY_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-odometry"
+$ODOMETRY_PHOENIX_SOURCE_DIR = Join-Path $PROJECT_ROOT "archive\odometry-phoenix"
+$ODOMETRY_PHOENIX_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-odometry-phoenix"
 $PGO_SOURCE_DIR = Join-Path $PROJECT_ROOT "pgo"
 $MIGRATION_DIR = Join-Path $PROJECT_ROOT "migration"
 $PGO_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-pgo"
@@ -60,6 +62,7 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Complete Build System" -ForegroundColor Cyan
 Write-Host "  * Colmap" -ForegroundColor Cyan
 Write-Host "  * Odometry" -ForegroundColor Cyan
+Write-Host "  * Odometry Phoenix" -ForegroundColor Cyan
 Write-Host "  * Python Tools" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
@@ -86,6 +89,11 @@ if (!(Test-Path $COLMAP_SOURCE_DIR)) {
 
 if (!(Test-Path $ODOMETRY_SOURCE_DIR)) {
     Write-Host "ERROR: Odometry source not found at $ODOMETRY_SOURCE_DIR" -ForegroundColor Red
+    exit 1
+}
+
+if (!(Test-Path $ODOMETRY_PHOENIX_SOURCE_DIR)) {
+    Write-Host "ERROR: Odometry Phoenix source not found at $ODOMETRY_PHOENIX_SOURCE_DIR" -ForegroundColor Red
     exit 1
 }
 
@@ -130,6 +138,7 @@ Write-Host ""
 Write-Host "Project Root: $PROJECT_ROOT" -ForegroundColor Gray
 Write-Host "Colmap Build: $COLMAP_BUILD_DIR" -ForegroundColor Gray
 Write-Host "Odometry Build: $ODOMETRY_BUILD_DIR" -ForegroundColor Gray
+Write-Host "Odometry Phoenix Build: $ODOMETRY_PHOENIX_BUILD_DIR" -ForegroundColor Gray
 Write-Host "PGO Build: $PGO_BUILD_DIR" -ForegroundColor Gray
 Write-Host "Python Tools: $PYTHON_TOOLS_DIR" -ForegroundColor Gray
 Write-Host ""
@@ -159,7 +168,7 @@ New-Item -ItemType Directory -Path $BUILD_ALL_DIR -Force | Out-Null
 # Stage 1: Build Colmap
 # ============================================================
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "Stage 1/3: Building Colmap" -ForegroundColor Cyan
+Write-Host "Stage 1/5: Building Colmap" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -237,7 +246,7 @@ Write-Host ""
 # Stage 2: Build Odometry
 # ============================================================
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "Stage 2/3: Building Odometry" -ForegroundColor Cyan
+Write-Host "Stage 2/5: Building Odometry" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -283,10 +292,59 @@ Write-Host "[OK] Odometry build completed" -ForegroundColor Green
 Write-Host ""
 
 # ============================================================
-# Stage 2.5: Build PGO
+# Stage 3: Build Odometry Phoenix
 # ============================================================
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "Stage 2.5/3: Building PGO" -ForegroundColor Cyan
+Write-Host "Stage 3/5: Building Odometry Phoenix" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host ""
+
+if (Test-Path $ODOMETRY_PHOENIX_BUILD_DIR) {
+    Write-Host "Removing existing build directory..." -ForegroundColor Gray
+    Remove-Item -Recurse -Force $ODOMETRY_PHOENIX_BUILD_DIR
+}
+
+Write-Host "Creating build directory..." -ForegroundColor Gray
+New-Item -ItemType Directory -Path $ODOMETRY_PHOENIX_BUILD_DIR -Force | Out-Null
+
+Write-Host "Configuring with CMake..." -ForegroundColor Yellow
+
+& $CMAKE_EXE `
+    -DCMAKE_EXPORT_COMPILE_COMMANDS:BOOL=TRUE `
+    "-DCMAKE_TOOLCHAIN_FILE=$VCPKG_TOOLCHAIN_FILE" `
+    --no-warn-unused-cli `
+    -S $ODOMETRY_PHOENIX_SOURCE_DIR `
+    -B $ODOMETRY_PHOENIX_BUILD_DIR `
+    -G "Visual Studio 17 2022" `
+    -T "host=x64" `
+    -A "x64"
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: Odometry Phoenix CMake configuration failed" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "Building..." -ForegroundColor Yellow
+
+& $CMAKE_EXE `
+    --build $ODOMETRY_PHOENIX_BUILD_DIR `
+    --config "Release" `
+    --target "odometry_phoenix" `
+    -j 24
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: Odometry Phoenix build failed" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "[OK] Odometry Phoenix build completed" -ForegroundColor Green
+Write-Host ""
+
+# ============================================================
+# Stage 4: Build PGO
+# ============================================================
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "Stage 4/5: Building PGO" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -334,10 +392,10 @@ Write-Host "[OK] PGO build completed" -ForegroundColor Green
 Write-Host ""
 
 # ============================================================
-# Stage 3: Build Python Tools
+# Stage 5: Build Python Tools
 # ============================================================
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "Stage 3/3: Compiling Python Tools to EXE" -ForegroundColor Cyan
+Write-Host "Stage 5/5: Compiling Python Tools to EXE" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -474,6 +532,10 @@ Write-Host ""
 
 Write-Host "[OK] Odometry" -ForegroundColor Green
 Write-Host "  Location: $ODOMETRY_BUILD_DIR" -ForegroundColor Gray
+Write-Host ""
+
+Write-Host "[OK] Odometry Phoenix" -ForegroundColor Green
+Write-Host "  Location: $ODOMETRY_PHOENIX_BUILD_DIR" -ForegroundColor Gray
 Write-Host ""
 
 Write-Host "[OK] PGO" -ForegroundColor Green

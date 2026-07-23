@@ -53,10 +53,8 @@ $PGO_BUILD_DIRS = @(
     (Join-Path $PGO_BUILD_DIR "Release")
 )
 $REALTIME_MAPPING_BUILD_DIRS = @(
-    (Join-Path $BUILD_ALL_DIR "build-realtime-mapping\Release"),
-    (Join-Path $PROJECT_ROOT "build-realtime-mapping-w5\Release"),
-    (Join-Path $PROJECT_ROOT "build-realtime-mapping\Release"),
-    (Join-Path $PROJECT_ROOT "build-realtime-mapping-asan\Release")
+    (Join-Path $BUILD_ALL_DIR "build-odometry-phoenix\Release"),
+    (Join-Path $PROJECT_ROOT "build-odometry-phoenix\Release")
 )
 
 # Executable requirements (required first, then optional)
@@ -424,7 +422,7 @@ function Test-PrerequisitesAndBuild {
         $script:SELECTED_REALTIME_MAPPING_BUILD_DIR = Split-Path -Path $realtimeMappingExe -Parent
         Write-Status "REALTIME_MAPPING.exe found: $($script:SELECTED_REALTIME_MAPPING_BUILD_DIR)"
     } else {
-        Write-Host "    [WARN] REALTIME_MAPPING.exe not found in realtime_mapping build directories" -ForegroundColor Yellow
+        Write-Host "    [WARN] REALTIME_MAPPING.exe not found in odometry-phoenix build directories" -ForegroundColor Yellow
     }
 
     Write-Status "Checking Colmap runtime resource files..."
@@ -815,17 +813,30 @@ function Copy-DataFiles {
     if (-not $l2ProYamlSource) {
         $l2ProYamlSource = Resolve-CandidatePath -Candidates @(
             (Get-ExistingPaths $REALTIME_MAPPING_BUILD_DIRS | ForEach-Object { Join-Path $_ "L2PRO.yaml" }),
-            (Join-Path $PROJECT_ROOT "realtime_mapping\lio_core_ros\config\L2PRO.yaml")
+            (Join-Path $PROJECT_ROOT "archive\odometry-phoenix\config\L2PRO.yaml")
         )
     }
 
     Write-Status "Copying L2PRO.yaml..."
-    if (-not $l2ProYamlSource) { Fail "L2PRO.yaml not found in realtime_mapping config directories" }
+    if (-not $l2ProYamlSource) { Fail "L2PRO.yaml not found in odometry-phoenix config directories" }
     try {
         Copy-Item -LiteralPath $l2ProYamlSource -Destination $PACK_DIR -Force -ErrorAction Stop
         Write-Host "    Copied L2PRO.yaml"
     } catch {
         Fail "Failed to copy L2PRO.yaml: $($_.Exception.Message)"
+    }
+
+    $k1YamlSource = Resolve-CandidatePath -Candidates @(
+        (Get-ExistingPaths $REALTIME_MAPPING_BUILD_DIRS | ForEach-Object { Join-Path $_ "K1.yaml" }),
+        (Join-Path $PROJECT_ROOT "archive\odometry-phoenix\config\K1.yaml")
+    )
+    Write-Status "Copying K1.yaml..."
+    if (-not $k1YamlSource) { Fail "K1.yaml not found in odometry-phoenix config directories" }
+    try {
+        Copy-Item -LiteralPath $k1YamlSource -Destination $PACK_DIR -Force -ErrorAction Stop
+        Write-Host "    Copied K1.yaml"
+    } catch {
+        Fail "Failed to copy K1.yaml: $($_.Exception.Message)"
     }
 }
 

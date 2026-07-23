@@ -1,84 +1,89 @@
-cmake_minimum_required(VERSION 3.10)
-project(odometry)
-
-if(CMAKE_TOOLCHAIN_FILE)
-    include(${CMAKE_TOOLCHAIN_FILE})
-endif(CMAKE_TOOLCHAIN_FILE)
-
-if(OPT_ASAN)
-  add_definitions(-D_DISABLE_VECTOR_ANNOTATION)
-  add_definitions(-D_DISABLE_STRING_ANNOTATION)
-  add_compile_options(/fsanitize=address)
-endif()
-
-if(MSVC)
-  add_compile_options(/MP)
-  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/O2 /Ob3 /MD /Zi")
-  add_compile_options($<$<CONFIG:Release>:/Zi>)
-  add_link_options($<$<CONFIG:Release>:/DEBUG>)
-endif()
-
-add_definitions(-D_USE_MATH_DEFINES)
-add_definitions(-DGLOG_USE_GLOG_EXPORT)
+cmake_minimum_required(VERSION 3.20)
+project(odometry_phoenix LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+if(MSVC)
+  add_compile_options(/MP)
+endif()
 
 find_package(Eigen3 REQUIRED)
-find_package(Ceres REQUIRED)
-find_package(gflags REQUIRED)
 find_package(PCL REQUIRED)
-find_package(Boost COMPONENTS program_options)
-find_package(OpenCV CONFIG REQUIRED)
-find_package(absl CONFIG REQUIRED)
-find_package(RapidJSON CONFIG REQUIRED)
+find_package(yaml-cpp REQUIRED)
+find_package(gflags CONFIG REQUIRED)
 find_package(Glog REQUIRED)
-find_package(GTest CONFIG REQUIRED)
-find_package(mimalloc CONFIG REQUIRED)
-find_package(crashpad CONFIG REQUIRED)
-find_package(PDAL CONFIG REQUIRED)
-find_package(OpenMP CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
+find_package(PDAL REQUIRED)
+find_package(OpenMP REQUIRED)
 
-include_directories(
+add_compile_definitions(
+  NOMINMAX
+  GLOG_USE_GLOG_EXPORT
+  GLOG_USE_GFLAGS
+  GLOG_NO_ABBREVIATED_SEVERITIES
+  MP_EN
+)
+
+add_subdirectory(thirdparty/xmap xmap_build)
+add_subdirectory(../../migration migration_build)
+
+add_library(odometry_phoenix_core STATIC
+  src/ieskf/ieskf.cpp
+  src/ieskf/ieskf_predict.cpp
+  src/ieskf/ieskf_update.cpp
+  src/ieskf/state_group.cpp
+  src/sensor_fusion/lidar_fusion.cpp
+  src/sensor_fusion/static_fusion.cpp
+  src/sensor_fusion/base_fusion.cpp
+  src/lio.cpp
+  src/common/common_lib.cpp
+  src/method/lio_init.cpp
+  src/method/preprocess.cpp
+  src/method/io_utils.cpp
+  src/method/uniform_sampling.cpp
+  src/method/undistort.cpp
+)
+
+target_include_directories(odometry_phoenix_core PUBLIC
+  interface
   src
-  ${EIGEN3_INCLUDE_DIRS}
-  ${CERES_INCLUDE_DIRS}
-  ${PCL_INCLUDE_DIRS}
+  thirdparty/xmap/include
 )
 
-add_subdirectory(../migration migration_build)
-
-
-set(
-  PGO_PRIVATE_SRCS
-  src/core/slam_core_lib.cc
-  src/core/preprocess.cc
-  src/io/msg_pack_synchronizer.cc
-  src/common/msg_conversions.cc
-)
-
-set(PGO_PRIVATE_LIBS
-  mimalloc
-  migration_core
-  ${GFLAGS_LIBRARIES}
+target_link_libraries(odometry_phoenix_core PUBLIC
+  Eigen3::Eigen
   ${PCL_LIBRARIES}
-  ${CERES_LIBRARIES}
+  yaml-cpp::yaml-cpp
   glog::glog
-  absl::flat_hash_map
-  absl::flat_hash_set
-  rapidjson
-  crashpad::crashpad
-  $<TARGET_NAME:pdalcpp>
+  spdlog::spdlog
+  xmap_lib
   OpenMP::OpenMP_CXX
-  spdlog::spdlog_header_only
 )
 
-function(add_private_tool name)
-  add_executable(${name} ${ARGN} ${PGO_PRIVATE_SRCS})
-  target_link_libraries(${name} ${PGO_PRIVATE_LIBS})
-endfunction()
+add_executable(odometry_phoenix app/main.cpp)
+target_link_libraries(odometry_phoenix PRIVATE
+  odometry_phoenix_core
+  migration_core
+  pdalcpp
+  gflags::gflags
+  glog::glog
+  spdlog::spdlog
+  yaml-cpp::yaml-cpp
+  OpenMP::OpenMP_CXX
+)
 
-add_private_tool(slam_core_main src/slam_core_main.cc)
-add_private_tool(accuracy_evaluation src/tools/accuracy_evaluation.cc)
+# Keep the packaged executable name stable for run-hs.ps1.
+set_target_properties(odometry_phoenix PROPERTIES
+  OUTPUT_NAME "REALTIME_MAPPING"
+)
+
+add_custom_command(TARGET odometry_phoenix POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${CMAKE_CURRENT_SOURCE_DIR}/config/L2PRO.yaml"
+          "$<TARGET_FILE_DIR:odometry_phoenix>/L2PRO.yaml"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${CMAKE_CURRENT_SOURCE_DIR}/config/K1.yaml"
+          "$<TARGET_FILE_DIR:odometry_phoenix>/K1.yaml"
+)
