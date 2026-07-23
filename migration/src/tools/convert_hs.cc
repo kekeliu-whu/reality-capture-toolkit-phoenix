@@ -1,21 +1,33 @@
 #include <gflags/gflags.h>
 #include <yaml-cpp/yaml.h>
 #include <Eigen/Eigen>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 #include <ulog_cpp/simple_writer.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <map>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
+#endif
 
 #include "migration/proto_io.h"
 #include "proto/calib.pb.h"
@@ -26,7 +38,13 @@ DEFINE_string(output_dir, R"(D:\output-hs)", "Output dir to save converted data"
 DEFINE_bool(skip_calibration, false, "Skip calib_info.yaml conversion");
 DEFINE_bool(skip_imu, false, "Skip ext_imu_*.mcap conversion");
 DEFINE_bool(skip_lidar, false, "Skip lidar_imu_*.mcap conversion");
+DEFINE_bool(skip_images, false, "Skip camera_*.mcap image export");
 DEFINE_string(camera_model, "OPENCV_FISHEYE", "Calibration camera model: OPENCV or OPENCV_FISHEYE");
+DEFINE_string(ffmpeg_path, "ffmpeg.exe", "FFmpeg executable used to decode cam0/cam1 H.265 frames");
+DEFINE_bool(image_flip_horizontal, true, "Flip exported camera images horizontally");
+DEFINE_bool(image_rotate_cw_180, true, "Rotate exported camera images clockwise by 180 degrees");
+DEFINE_bool(clear_image_camera_dirs, true, "Clear generated images/cam* directories before export");
+DEFINE_int32(image_jpeg_quality, 95, "JPEG quality for directly encoded camera images (1-100)");
 
 namespace {
 
@@ -247,6 +265,241 @@ std::vector<std::filesystem::path> GlobFiles(const std::filesystem::path& dir, c
   return files;
 }
 
+std::string ImageFilenameFromTimestamp(uint64_t timestamp_ns) {
+  const uint64_t seconds = timestamp_ns / 1000000000ULL;
+  const uint64_t microseconds = (timestamp_ns % 1000000000ULL) / 1000ULL;
+  std::ostringstream filename;
+  filename << seconds << '_' << std::setw(6) << std::setfill('0') << microseconds << ".jpg";
+  return filename.str();
+}
+
+void TransformExportedImage(cv::Mat* image) {
+  if (image == nullptr || image->empty()) {
+    return;
+  }
+  if (FLAGS_image_flip_horizontal) {
+    cv::flip(*image, *image, 1);
+  }
+  if (FLAGS_image_rotate_cw_180) {
+    cv::rotate(*image, *image, cv::ROTATE_180);
+  }
+}
+
+std::string QuoteCommandArgument(const std::string& argument) {
+  if (argument.find('"') != std::string::npos) {
+    throw std::runtime_error("Command argument contains an unsupported quote character: " + argument);
+  }
+  return '"' + argument + '"';
+}
+
+int RunCommand(const std::string& command) {
+#ifdef _WIN32
+  UINT code_page = CP_UTF8;
+  int wide_size = MultiByteToWideChar(code_page, MB_ERR_INVALID_CHARS, command.c_str(), -1, nullptr, 0);
+  if (wide_size == 0) {
+    code_page = CP_ACP;
+    wide_size = MultiByteToWideChar(code_page, 0, command.c_str(), -1, nullptr, 0);
+  }
+  if (wide_size == 0) {
+    spdlog::error("Failed to convert child-process command line to UTF-16");
+    return -1;
+  }
+
+  std::vector<wchar_t> command_line(static_cast<size_t>(wide_size));
+  if (MultiByteToWideChar(code_page, 0, command.c_str(), -1, command_line.data(), wide_size) == 0) {
+    spdlog::error("Failed to convert child-process command line to UTF-16");
+    return -1;
+  }
+
+  STARTUPINFOW startup_info{};
+  startup_info.cb = sizeof(startup_info);
+  PROCESS_INFORMATION process_info{};
+  if (!CreateProcessW(nullptr, command_line.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup_info, &process_info)) {
+    spdlog::error("Failed to start child process (Windows error {})", GetLastError());
+    return -1;
+  }
+
+  WaitForSingleObject(process_info.hProcess, INFINITE);
+  DWORD exit_code = 1;
+  GetExitCodeProcess(process_info.hProcess, &exit_code);
+  CloseHandle(process_info.hThread);
+  CloseHandle(process_info.hProcess);
+  return static_cast<int>(exit_code);
+#else
+  return std::system(command.c_str());
+#endif
+}
+
+std::string FfmpegImageFilter() {
+  std::vector<std::string> filters;
+  if (FLAGS_image_flip_horizontal) {
+    filters.emplace_back("hflip");
+  }
+  if (FLAGS_image_rotate_cw_180) {
+    // Two exact 90-degree transposes express the requested clockwise 180-degree
+    // rotation without resampling arbitrary angles.
+    filters.emplace_back("transpose=clock");
+    filters.emplace_back("transpose=clock");
+  }
+  std::ostringstream joined;
+  for (size_t i = 0; i < filters.size(); ++i) {
+    if (i != 0) {
+      joined << ',';
+    }
+    joined << filters[i];
+  }
+  return joined.str();
+}
+
+bool DecodeH265Camera(const std::string& camera_name,
+                      const std::filesystem::path& h265_path,
+                      const std::vector<uint64_t>& timestamps_ns,
+                      const std::filesystem::path& temp_dir,
+                      const std::filesystem::path& images_dir) {
+  if (timestamps_ns.empty()) {
+    spdlog::warn("No H.265 frames found for {}", camera_name);
+    return false;
+  }
+
+  const std::filesystem::path frame_pattern = temp_dir / (camera_name + "_%06d.jpg");
+  std::ostringstream command;
+  command << QuoteCommandArgument(FLAGS_ffmpeg_path)
+          << " -hide_banner -loglevel error -y -f hevc -i "
+          << QuoteCommandArgument(h265_path.string());
+  const std::string filter = FfmpegImageFilter();
+  if (!filter.empty()) {
+    command << " -vf " << QuoteCommandArgument(filter);
+  }
+  command << " -vsync 0 -frames:v " << timestamps_ns.size()
+          << " -start_number 0 -q:v 2 "
+          << QuoteCommandArgument(frame_pattern.string());
+
+  spdlog::info("Decoding {} {} H.265 frames with FFmpeg", timestamps_ns.size(), camera_name);
+  const int status = RunCommand(command.str());
+  if (status != 0) {
+    spdlog::error("FFmpeg failed for {} with status {}", camera_name, status);
+    return false;
+  }
+
+  const std::filesystem::path camera_output_dir = images_dir / camera_name;
+  std::filesystem::create_directories(camera_output_dir);
+  size_t exported = 0;
+  for (size_t i = 0; i < timestamps_ns.size(); ++i) {
+    std::ostringstream decoded_name;
+    decoded_name << camera_name << '_' << std::setw(6) << std::setfill('0') << i << ".jpg";
+    const std::filesystem::path decoded_path = temp_dir / decoded_name.str();
+    if (!std::filesystem::exists(decoded_path)) {
+      spdlog::error("FFmpeg produced only {} of {} expected {} frames", exported, timestamps_ns.size(), camera_name);
+      return false;
+    }
+    const std::filesystem::path output_path = camera_output_dir / ImageFilenameFromTimestamp(timestamps_ns[i]);
+    std::error_code error;
+    std::filesystem::remove(output_path, error);
+    error.clear();
+    std::filesystem::rename(decoded_path, output_path, error);
+    if (error) {
+      spdlog::error("Failed to move decoded image {} to {}: {}", decoded_path.string(), output_path.string(), error.message());
+      return false;
+    }
+    ++exported;
+  }
+  spdlog::info("Exported {} images to {}", exported, camera_output_dir.string());
+  return exported == timestamps_ns.size();
+}
+
+bool ConvertImages(const std::filesystem::path& input_dir, const std::filesystem::path& output_dir) {
+  const auto camera_files = GlobFiles(input_dir, "camera_", ".mcap");
+  if (camera_files.empty()) {
+    spdlog::error("No camera_*.mcap files found in {}", input_dir.string());
+    return false;
+  }
+
+  const std::filesystem::path images_dir = output_dir / "images";
+  const std::filesystem::path temp_dir = output_dir / ".convert_hs_camera_tmp";
+  std::error_code cleanup_error;
+  std::filesystem::remove_all(temp_dir, cleanup_error);
+  std::filesystem::create_directories(temp_dir);
+  std::filesystem::create_directories(images_dir);
+  for (const std::string camera_name : {"cam0", "cam1", "cam2"}) {
+    const std::filesystem::path camera_dir = images_dir / camera_name;
+    if (FLAGS_clear_image_camera_dirs) {
+      cleanup_error.clear();
+      std::filesystem::remove_all(camera_dir, cleanup_error);
+      if (cleanup_error) {
+        spdlog::error("Failed to clear {}: {}", camera_dir.string(), cleanup_error.message());
+        return false;
+      }
+    }
+    std::filesystem::create_directories(camera_dir);
+  }
+
+  const std::filesystem::path cam0_h265_path = temp_dir / "cam0.h265";
+  const std::filesystem::path cam1_h265_path = temp_dir / "cam1.h265";
+  std::ofstream cam0_h265(cam0_h265_path, std::ios::binary);
+  std::ofstream cam1_h265(cam1_h265_path, std::ios::binary);
+  if (!cam0_h265.is_open() || !cam1_h265.is_open()) {
+    spdlog::error("Failed to create temporary H.265 streams in {}", temp_dir.string());
+    return false;
+  }
+
+  std::vector<uint64_t> cam0_timestamps_ns;
+  std::vector<uint64_t> cam1_timestamps_ns;
+  size_t cam2_exported = 0;
+  size_t malformed_images = 0;
+  const int jpeg_quality = std::clamp(FLAGS_image_jpeg_quality, 1, 100);
+
+  try {
+    for (const auto& path : camera_files) {
+      spdlog::info("Converting camera MCAP {}", path.string());
+      McapReader(path).ReadMessages([&](const McapChannel& channel, const McapMessage& msg) {
+        if (channel.topic == "/camera/cam0/h265") {
+          cam0_h265.write(reinterpret_cast<const char*>(msg.data.data()), static_cast<std::streamsize>(msg.data.size()));
+          cam0_timestamps_ns.push_back(msg.log_time);
+          return;
+        }
+        if (channel.topic == "/camera/cam1/h265") {
+          cam1_h265.write(reinterpret_cast<const char*>(msg.data.data()), static_cast<std::streamsize>(msg.data.size()));
+          cam1_timestamps_ns.push_back(msg.log_time);
+          return;
+        }
+        if (channel.topic != "/camera/cam2/jpeg") {
+          return;
+        }
+
+        cv::Mat encoded(1, static_cast<int>(msg.data.size()), CV_8UC1, const_cast<uint8_t*>(msg.data.data()));
+        cv::Mat image = cv::imdecode(encoded, cv::IMREAD_COLOR | cv::IMREAD_IGNORE_ORIENTATION);
+        if (image.empty()) {
+          ++malformed_images;
+          return;
+        }
+        TransformExportedImage(&image);
+        const std::filesystem::path image_path = images_dir / "cam2" / ImageFilenameFromTimestamp(msg.log_time);
+        if (!cv::imwrite(image_path.string(), image, {cv::IMWRITE_JPEG_QUALITY, jpeg_quality})) {
+          ++malformed_images;
+          return;
+        }
+        ++cam2_exported;
+      });
+    }
+  } catch (const std::exception& error) {
+    spdlog::error("Failed while reading camera MCAP: {}", error.what());
+    return false;
+  }
+
+  cam0_h265.close();
+  cam1_h265.close();
+  const bool cam0_ok = DecodeH265Camera("cam0", cam0_h265_path, cam0_timestamps_ns, temp_dir, images_dir);
+  const bool cam1_ok = DecodeH265Camera("cam1", cam1_h265_path, cam1_timestamps_ns, temp_dir, images_dir);
+  spdlog::info("Exported {} cam2 JPEG images ({} malformed)", cam2_exported, malformed_images);
+
+  cleanup_error.clear();
+  std::filesystem::remove_all(temp_dir, cleanup_error);
+  if (cleanup_error) {
+    spdlog::warn("Failed to remove temporary camera directory {}: {}", temp_dir.string(), cleanup_error.message());
+  }
+  return cam0_ok && cam1_ok && cam2_exported > 0 && malformed_images == 0;
+}
+
 std::vector<PcWindow> ReadPcWindows(const std::filesystem::path& input_dir) {
   std::vector<PcWindow> windows;
   for (const auto& path : GlobFiles(input_dir, "pc_windows_", ".mcap")) {
@@ -376,7 +629,8 @@ bool ConvertLidar(const std::filesystem::path& input_dir, const std::filesystem:
         point->set_x(x);
         point->set_y(y);
         point->set_z(z);
-        point->set_intensity(static_cast<uint32_t>(std::max(0.0f, intensity)));
+        point->set_intensity(
+            static_cast<uint32_t>((std::max)(0.0f, intensity)));
       }
     });
   }
@@ -435,9 +689,16 @@ bool WriteRawUlog(const std::filesystem::path& output_path, std::vector<uint64_t
   }
 
   try {
-    const uint64_t first_lidar_ns = lidar_timestamps_ns.empty() ? std::numeric_limits<uint64_t>::max() : lidar_timestamps_ns.front();
-    const uint64_t first_imu_ns = imu_timestamps_ns.empty() ? std::numeric_limits<uint64_t>::max() : imu_timestamps_ns.front();
-    const uint64_t start_timestamp_us = std::min(first_lidar_ns, first_imu_ns) / 1000;
+    const uint64_t first_lidar_ns =
+        lidar_timestamps_ns.empty()
+            ? (std::numeric_limits<uint64_t>::max)()
+            : lidar_timestamps_ns.front();
+    const uint64_t first_imu_ns =
+        imu_timestamps_ns.empty()
+            ? (std::numeric_limits<uint64_t>::max)()
+            : imu_timestamps_ns.front();
+    const uint64_t start_timestamp_us =
+        (std::min)(first_lidar_ns, first_imu_ns) / 1000;
     ulog_cpp::SimpleWriter writer(output_path.string(), start_timestamp_us);
     writer.writeInfo("sys_name", std::string("KosmoHesaiConverter"));
 
@@ -635,6 +896,9 @@ int main(int argc, char** argv) {
   if (!FLAGS_skip_lidar) {
     lidar_converted = ConvertLidar(input_dir, output_dir, &lidar_timestamps_ns);
     ok = lidar_converted && ok;
+  }
+  if (!FLAGS_skip_images) {
+    ok = ConvertImages(input_dir, output_dir) && ok;
   }
   const bool sensor_conversion_requested = !FLAGS_skip_imu || !FLAGS_skip_lidar;
   const bool requested_sensor_conversions_succeeded = (FLAGS_skip_imu || imu_converted) && (FLAGS_skip_lidar || lidar_converted);

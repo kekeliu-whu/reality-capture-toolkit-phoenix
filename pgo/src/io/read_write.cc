@@ -77,10 +77,11 @@ void LoadRawScans(
       break;
     }
 
-    double scan_timestamp = 0.0;
-    if (lidar_msg->points().size() > 0) {
-      scan_timestamp = lidar_msg->points(0).timestamp();
-    }
+    // Both producers write one body-frame scan per body pose.  Treat the
+    // paired pose timestamp as the authoritative scan-end timestamp instead
+    // of deriving it from an individual point.
+    const double scan_timestamp =
+        traj_msg_list.pose_msgs(static_cast<int>(scan_count)).timestamp();
 
     // Use corresponding pose directly (1:1 correspondence)
     const Sophus::SE3d &pose_w = poses[scan_count];

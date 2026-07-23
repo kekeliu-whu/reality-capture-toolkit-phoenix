@@ -14,6 +14,11 @@ void setLioStatus(const lixel::KFState::ConstPtr &state, lixel::LioResultMsg::Pt
   lio_result->full_state.v = lixel::V3D(state->vel_);
   lio_result->full_state.ba = lixel::V3D(state->acc_bias_);
   lio_result->full_state.bg = lixel::V3D(state->gyo_bias_);
+#if GRAVITY_CALIBRATION
+  lio_result->full_state.gravity = lixel::V3D(state->gravity);
+#else
+  lio_result->full_state.gravity = lixel::V3D(lixel::DEFAULT_GRIVITY_VEC);
+#endif
   lio_result->full_state.timestamp = state->sw_timestamp[WINDOW_SIZE - 1];
 }
 }  // namespace

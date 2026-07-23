@@ -52,6 +52,12 @@ $ODOMETRY_BUILD_DIRS = @(
 $PGO_BUILD_DIRS = @(
     (Join-Path $PGO_BUILD_DIR "Release")
 )
+$REALTIME_MAPPING_BUILD_DIRS = @(
+    (Join-Path $BUILD_ALL_DIR "build-realtime-mapping\Release"),
+    (Join-Path $PROJECT_ROOT "build-realtime-mapping-w5\Release"),
+    (Join-Path $PROJECT_ROOT "build-realtime-mapping\Release"),
+    (Join-Path $PROJECT_ROOT "build-realtime-mapping-asan\Release")
+)
 
 # Executable requirements (required first, then optional)
 $REQUIRED_EXECUTABLES = @(
@@ -60,13 +66,16 @@ $REQUIRED_EXECUTABLES = @(
     "xsfm_pre.exe",
     "slam.exe",
     "slam_post.exe",
+    "REALTIME_MAPPING.exe",
     "insta_compute_pano_poses.exe",
     "insta_compute_poses.exe",
     "insta_data_extraction.exe",
     "insta_time_sync.exe",
     "xsfm_fix_rig_database.exe",
     "xsfm_inject_subview_priors.exe",
+    "xsfm_create_initial_model.exe",
     "convert_manifold.exe",
+    "convert_hs.exe",
     "crashpad_handler.exe",
     "xsfm_post.exe"
 )
@@ -80,7 +89,8 @@ $PYTHON_TOOL_EXECUTABLES = @(
     "insta_compute_poses.exe",
     "insta_time_sync.exe",
     "xsfm_inject_subview_priors.exe",
-    "xsfm_fix_rig_database.exe"
+    "xsfm_fix_rig_database.exe",
+    "xsfm_create_initial_model.exe"
 )
 $PYTHON_INTERNAL_REQUIRED_DIRS = @(
     "contourpy",
@@ -99,6 +109,7 @@ $PYTHON_INTERNAL_REQUIRED_DIRS = @(
     "telemetry_parser"
 )
 $script:SELECTED_MIGRATION_BUILD_DIR = $null
+$script:SELECTED_REALTIME_MAPPING_BUILD_DIR = $null
 $script:SELECTED_PROJ_DB = $null
 $script:DUMPBIN_EXE = $null
 
@@ -394,7 +405,8 @@ function Test-PrerequisitesAndBuild {
     $xcolorDirs = Get-ExistingPaths $XCOLOR_BUILD_DIRS
     $odometryDirs = Get-ExistingPaths $ODOMETRY_BUILD_DIRS
     $pgoDirs = Get-ExistingPaths $PGO_BUILD_DIRS
-    $allExeDirs = $xcolorDirs + $odometryDirs + $pgoDirs
+    $realtimeMappingDirs = Get-ExistingPaths $REALTIME_MAPPING_BUILD_DIRS
+    $allExeDirs = $xcolorDirs + $odometryDirs + $pgoDirs + $realtimeMappingDirs
     if (Test-Path $PYTHON_TOOLS_DIR) {
         $allExeDirs += (Resolve-Path $PYTHON_TOOLS_DIR).Path
     }
@@ -406,6 +418,13 @@ function Test-PrerequisitesAndBuild {
         Write-Status "convert_manifold.exe found: $($script:SELECTED_MIGRATION_BUILD_DIR)"
     } else {
         Write-Host "    [WARN] convert_manifold.exe not found in migration_build directories" -ForegroundColor Yellow
+    }
+    $realtimeMappingExe = Find-Artifact -Name "REALTIME_MAPPING.exe" -SearchDirs $realtimeMappingDirs
+    if ($realtimeMappingExe) {
+        $script:SELECTED_REALTIME_MAPPING_BUILD_DIR = Split-Path -Path $realtimeMappingExe -Parent
+        Write-Status "REALTIME_MAPPING.exe found: $($script:SELECTED_REALTIME_MAPPING_BUILD_DIR)"
+    } else {
+        Write-Host "    [WARN] REALTIME_MAPPING.exe not found in realtime_mapping build directories" -ForegroundColor Yellow
     }
 
     Write-Status "Checking Colmap runtime resource files..."
@@ -472,20 +491,29 @@ function Test-PrerequisitesAndBuild {
     foreach ($dir in $pgoDirs) {
         $pgoDllCount += @(Get-ChildItem $dir -Filter "*.dll" -ErrorAction SilentlyContinue).Count
     }
+    $realtimeMappingDllCount = 0
+    foreach ($dir in $realtimeMappingDirs) {
+        $realtimeMappingDllCount += @(Get-ChildItem $dir -Filter "*.dll" -ErrorAction SilentlyContinue).Count
+    }
     $migrationDllCount = 0
     if ($script:SELECTED_MIGRATION_BUILD_DIR -and (Test-Path $script:SELECTED_MIGRATION_BUILD_DIR)) {
         $migrationDllCount = @(Get-ChildItem $script:SELECTED_MIGRATION_BUILD_DIR -Filter "*.dll" -ErrorAction SilentlyContinue).Count
     }
-    $totalDllCount = $xcolorDllCount + $odometryDllCount + $pgoDllCount
+    $totalDllCount = $xcolorDllCount + $odometryDllCount + $pgoDllCount + $realtimeMappingDllCount
     if ($totalDllCount -eq 0) {
-        $missing += "No DLL files found in XColor/Odometry/PGO Release directories"
+        $missing += "No DLL files found in XColor/Odometry/PGO/Realtime Mapping Release directories"
     } else {
-        Write-Status "Dependency DLL files: $totalDllCount (XColor: $xcolorDllCount, Odometry: $odometryDllCount, PGO: $pgoDllCount)"
+        Write-Status "Dependency DLL files: $totalDllCount (XColor: $xcolorDllCount, Odometry: $odometryDllCount, PGO: $pgoDllCount, Realtime Mapping: $realtimeMappingDllCount)"
     }
     if ($migrationDllCount -gt 0) {
         Write-Status "Migration DLL files found: $migrationDllCount"
     } else {
         Write-Host "    [WARN] No migration DLL files found" -ForegroundColor Yellow
+    }
+    if ($realtimeMappingDllCount -gt 0) {
+        Write-Status "Realtime Mapping DLL files found: $realtimeMappingDllCount"
+    } else {
+        Write-Host "    [WARN] No Realtime Mapping DLL files found" -ForegroundColor Yellow
     }
 
     # CUDA DLLs are copied first, then pruned using the packaged PE dependency graph.
@@ -551,7 +579,8 @@ function Copy-ExecutableFiles {
     $xcolorDirs = Get-ExistingPaths $XCOLOR_BUILD_DIRS
     $odometryDirs = Get-ExistingPaths $ODOMETRY_BUILD_DIRS
     $pgoDirs = Get-ExistingPaths $PGO_BUILD_DIRS
-    $allExeSearchDirs = $xcolorDirs + $odometryDirs + $pgoDirs
+    $realtimeMappingDirs = Get-ExistingPaths $REALTIME_MAPPING_BUILD_DIRS
+    $allExeSearchDirs = $xcolorDirs + $odometryDirs + $pgoDirs + $realtimeMappingDirs
     if (Test-Path $PYTHON_TOOLS_DIR) {
         $allExeSearchDirs += (Resolve-Path $PYTHON_TOOLS_DIR).Path
     }
@@ -679,6 +708,7 @@ function Copy-Dependencies {
     $xcolorDirs = Get-ExistingPaths $XCOLOR_BUILD_DIRS
     $odometryDirs = Get-ExistingPaths $ODOMETRY_BUILD_DIRS
     $pgoDirs = Get-ExistingPaths $PGO_BUILD_DIRS
+    $realtimeMappingDirs = Get-ExistingPaths $REALTIME_MAPPING_BUILD_DIRS
 
     Write-Status "Copying XColor Release DLL files..."
     $xcolorDllCount = Copy-DllSet -SearchDirs $xcolorDirs -Label "XColor Release" -Required
@@ -699,6 +729,9 @@ function Copy-Dependencies {
     Write-Status "Copying PGO Release DLL files..."
     $pgoDllCount = Copy-DllSet -SearchDirs $pgoDirs -Label "PGO Release" -Required
 
+    Write-Status "Copying Realtime Mapping Release DLL files..."
+    $realtimeMappingDllCount = Copy-DllSet -SearchDirs $realtimeMappingDirs -Label "Realtime Mapping Release" -Required
+
     Write-Status "Copying CUDA DLL files..."
     if (-not (Test-Path $CUDA_BIN_DIR)) { Fail "CUDA directory not found: $CUDA_BIN_DIR" }
     $cudaDlls = @(Get-ChildItem $CUDA_BIN_DIR -Filter "*.dll" -File -ErrorAction Stop)
@@ -708,7 +741,7 @@ function Copy-Dependencies {
     }
     Write-Host "    Copied $($cudaDlls.Count) files"
 
-    if ($xcolorDllCount -eq 0 -or $odometryDllCount -eq 0 -or $pgoDllCount -eq 0) {
+    if ($xcolorDllCount -eq 0 -or $odometryDllCount -eq 0 -or $pgoDllCount -eq 0 -or $realtimeMappingDllCount -eq 0) {
         Fail "Required DLL copy failed for one or more build components"
     }
 
@@ -727,19 +760,13 @@ function Download-VocabTree {
             New-Item -ItemType Directory -Path $PACK_DIR -Force | Out-Null
         }
 
-        $proxy = $env:HTTPS_PROXY
-        if (-not $proxy) { $proxy = $env:https_proxy }
-        if (-not $proxy) { $proxy = $env:HTTP_PROXY }
-        if (-not $proxy) { $proxy = $env:http_proxy }
-
-        $invokeParams = @{ Uri = $url; OutFile = $destination; UseBasicParsing = $true; ErrorAction = 'Stop' }
-        if ($proxy) {
-            Write-Status "Using proxy: $proxy"
-            $invokeParams.Proxy = $proxy
-            # 允许基于系统凭据认证代理（可选）
-            $invokeParams.ProxyUseDefaultCredentials = $true
+        $invokeParams = @{
+            Uri = $url
+            OutFile = $destination
+            UseBasicParsing = $true
+            NoProxy = $true
+            ErrorAction = 'Stop'
         }
-
         Invoke-WebRequest @invokeParams
         Write-Status "Downloaded vocab tree file to $destination"
     } catch {
@@ -776,6 +803,29 @@ function Copy-DataFiles {
         Write-Host "    Copied pgo.json"
     } catch {
         Fail "Failed to copy pgo.json: $($_.Exception.Message)"
+    }
+
+    $l2ProYamlSource = $null
+    if ($script:SELECTED_REALTIME_MAPPING_BUILD_DIR) {
+        $candidate = Join-Path $script:SELECTED_REALTIME_MAPPING_BUILD_DIR "L2PRO.yaml"
+        if (Test-Path $candidate) {
+            $l2ProYamlSource = $candidate
+        }
+    }
+    if (-not $l2ProYamlSource) {
+        $l2ProYamlSource = Resolve-CandidatePath -Candidates @(
+            (Get-ExistingPaths $REALTIME_MAPPING_BUILD_DIRS | ForEach-Object { Join-Path $_ "L2PRO.yaml" }),
+            (Join-Path $PROJECT_ROOT "realtime_mapping\lio_core_ros\config\L2PRO.yaml")
+        )
+    }
+
+    Write-Status "Copying L2PRO.yaml..."
+    if (-not $l2ProYamlSource) { Fail "L2PRO.yaml not found in realtime_mapping config directories" }
+    try {
+        Copy-Item -LiteralPath $l2ProYamlSource -Destination $PACK_DIR -Force -ErrorAction Stop
+        Write-Host "    Copied L2PRO.yaml"
+    } catch {
+        Fail "Failed to copy L2PRO.yaml: $($_.Exception.Message)"
     }
 }
 

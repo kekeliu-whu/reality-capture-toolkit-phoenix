@@ -22,9 +22,9 @@ Here is a Markdown table listing the open source projects and their respective o
   * pgo/pgo (optinal)
   * pgo/point_cloud_process
 * SFM
-  * xsfm
+  * COLMAP global mapper
 * Render
-  * xcolor
+  * pgo/xcolor
 
 
 # Usage

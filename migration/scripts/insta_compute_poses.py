@@ -375,7 +375,6 @@ def process_poses(poses_file, calib_file, image_folder, output_file, image_list=
     # Load calibration
     calib = load_calibration_from_pb(calib_file)
 
-    print(f"calib {calib}")
     print(f"[OK] Loaded calibration from {calib_file}")
 
     # Get camera-IMU extrinsic parameters

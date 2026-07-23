@@ -14,6 +14,7 @@ $VENV_SCRIPTS_DIR = Join-Path $PROJECT_ROOT ".venv\Scripts"
 $PYTHON_EXE = Join-Path $VENV_SCRIPTS_DIR "python.exe"
 $PYINSTALLER_EXE = Join-Path $VENV_SCRIPTS_DIR "pyinstaller.exe"
 $CUDA_ARCHITECTURES = "75-virtual;90-virtual"
+$CUDA_TOOLKIT_ROOT = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8"
 
 # Use project-local Python tools directly instead of relying on shell activation.
 Write-Host "Checking Python virtual environment..." -ForegroundColor Yellow
@@ -34,8 +35,9 @@ Write-Host "  CUDA architectures: $CUDA_ARCHITECTURES" -ForegroundColor Gray
 Write-Host ""
 
 # CMake executable path
-$CMAKE_EXE = "D:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
-$VCPKG_TOOLCHAIN_FILE = "F:/Library/vcpkg/scripts/buildsystems/vcpkg.cmake"
+$CMAKE_EXE = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+$VCPKG_TOOLCHAIN_FILE = "D:/vcpkg/scripts/buildsystems/vcpkg.cmake"
+$PROTOC_EXE = "D:\vcpkg\installed\x64-windows\tools\protobuf\protoc.exe"
 
 $BUILD_ALL_DIR = Join-Path $PROJECT_ROOT "build-all"
 $COLMAP_SOURCE_DIR = Join-Path $PROJECT_ROOT "colmap"
@@ -45,9 +47,11 @@ $COLMAP_CMAKE_DIR = Join-Path $COLMAP_INSTALL_DIR "share\colmap"
 $ODOMETRY_SOURCE_DIR = Join-Path $PROJECT_ROOT "odometry"
 $ODOMETRY_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-odometry"
 $PGO_SOURCE_DIR = Join-Path $PROJECT_ROOT "pgo"
+$MIGRATION_DIR = Join-Path $PROJECT_ROOT "migration"
 $PGO_BUILD_DIR = Join-Path $BUILD_ALL_DIR "build-pgo"
 $SCRIPTS_DIR = Join-Path $PROJECT_ROOT "migration\scripts"
 $PYTHON_TOOLS_DIR = Join-Path $BUILD_ALL_DIR "build-python-tools"
+$PYTHON_PROTO_DIR = Join-Path $SCRIPTS_DIR "_generated"
 
 # ============================================================
 # Title and Prerequisites Check
@@ -66,6 +70,11 @@ Write-Host ""
 # Check CMake executable
 if (!(Test-Path $CMAKE_EXE)) {
     Write-Host "ERROR: CMake not found at $CMAKE_EXE" -ForegroundColor Red
+    exit 1
+}
+
+if (!(Test-Path $PROTOC_EXE)) {
+    Write-Host "ERROR: protoc not found at $PROTOC_EXE" -ForegroundColor Red
     exit 1
 }
 
@@ -97,7 +106,8 @@ $PYTHON_FILES = @(
     "insta_compute_poses.py",
     "insta_time_sync.py",
     'xsfm_inject_subview_priors.py',
-    'xsfm_fix_rig_database.py'
+    'xsfm_fix_rig_database.py',
+    'xsfm_create_initial_model.py'
 )
 
 $missing = $false
@@ -115,15 +125,6 @@ if ($missing) {
 
 Write-Host "[PASS] All prerequisites found" -ForegroundColor Green
 Write-Host ""
-
-# Clean up and create build-all directory
-if (Test-Path $BUILD_ALL_DIR) {
-    Write-Host "Cleaning up existing build-all directory..." -ForegroundColor Gray
-    Remove-Item -Recurse -Force $BUILD_ALL_DIR
-}
-
-Write-Host "Creating build-all directory..." -ForegroundColor Gray
-New-Item -ItemType Directory -Path $BUILD_ALL_DIR -Force | Out-Null
 
 Write-Host ""
 Write-Host "Project Root: $PROJECT_ROOT" -ForegroundColor Gray
@@ -143,6 +144,16 @@ if ($TestOnly) {
     Write-Host ""
     exit 0
 }
+
+# Clean up and create build-all directory only for a real build. TestOnly must
+# remain a read-only prerequisite check.
+if (Test-Path $BUILD_ALL_DIR) {
+    Write-Host "Cleaning up existing build-all directory..." -ForegroundColor Gray
+    Remove-Item -Recurse -Force $BUILD_ALL_DIR
+}
+
+Write-Host "Creating build-all directory..." -ForegroundColor Gray
+New-Item -ItemType Directory -Path $BUILD_ALL_DIR -Force | Out-Null
 
 # ============================================================
 # Stage 1: Build Colmap
@@ -176,7 +187,7 @@ Write-Host "Configuring with CMake..." -ForegroundColor Yellow
     -S $COLMAP_SOURCE_DIR `
     -B $COLMAP_BUILD_DIR `
     -G "Visual Studio 17 2022" `
-    -T "host=x64" `
+    -T "host=x64,cuda=$CUDA_TOOLKIT_ROOT" `
     -A "x64"
 
 if ($LASTEXITCODE -ne 0) {
@@ -298,7 +309,7 @@ Write-Host "Configuring with CMake..." -ForegroundColor Yellow
     -S $PGO_SOURCE_DIR `
     -B $PGO_BUILD_DIR `
     -G "Visual Studio 17 2022" `
-    -T "host=x64" `
+    -T "host=x64,cuda=$CUDA_TOOLKIT_ROOT" `
     -A "x64"
 
 if ($LASTEXITCODE -ne 0) {
@@ -333,6 +344,27 @@ Write-Host ""
 # Change to scripts directory
 Push-Location $SCRIPTS_DIR
 
+# Generate Python protobuf bindings required by the Insta tools. They are kept
+# in a temporary import root so generated sources do not pollute the repository.
+if (Test-Path $PYTHON_PROTO_DIR) {
+    Remove-Item $PYTHON_PROTO_DIR -Recurse -Force
+}
+New-Item -ItemType Directory -Path $PYTHON_PROTO_DIR -Force | Out-Null
+
+$protoFiles = @(
+    (Join-Path $MIGRATION_DIR "proto\sensors.proto"),
+    (Join-Path $MIGRATION_DIR "proto\calib.proto")
+)
+
+Write-Host "Generating Python protobuf bindings..." -ForegroundColor Yellow
+& $PROTOC_EXE "--proto_path=$MIGRATION_DIR" "--python_out=$PYTHON_PROTO_DIR" $protoFiles
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: Failed to generate Python protobuf bindings" -ForegroundColor Red
+    Remove-Item $PYTHON_PROTO_DIR -Recurse -Force -ErrorAction SilentlyContinue
+    Pop-Location
+    exit 1
+}
+
 # Generate a single PyInstaller spec that puts all EXEs into one shared bundle.
 # Using exclude_binaries=True + single COLLECT deduplicates _internal across all EXEs.
 $specLines = @'
@@ -345,14 +377,15 @@ _scripts = [
     'insta_compute_poses',
     'insta_time_sync',
     'xsfm_inject_subview_priors',
-    'xsfm_fix_rig_database'
+    'xsfm_fix_rig_database',
+    'xsfm_create_initial_model'
 ]
 
 _analyses = []
 for _name in _scripts:
     _a = Analysis(
         [_name + '.py'],
-        pathex=['.'],
+        pathex=['.', '_generated'],
         binaries=[],
         datas=[],
         hiddenimports=[],
@@ -414,10 +447,15 @@ if ($exit_code -eq 0 -and (Test-Path $bundle_dist)) {
 # Cleanup
 Write-Host ""
 Write-Host "Cleaning up temporary files..." -ForegroundColor Gray
-Remove-Item (Join-Path $SCRIPTS_DIR "build"), (Join-Path $SCRIPTS_DIR "dist"), $specFile -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $SCRIPTS_DIR "build"), (Join-Path $SCRIPTS_DIR "dist"), $specFile, $PYTHON_PROTO_DIR -Recurse -Force -ErrorAction SilentlyContinue
 
 # Restore location
 Pop-Location
+
+if ($success -ne $PYTHON_FILES.Count) {
+    Write-Host "ERROR: Python tools compilation failed" -ForegroundColor Red
+    exit 1
+}
 
 Write-Host "[OK] Python tools compilation completed" -ForegroundColor Green
 Write-Host ""

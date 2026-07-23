@@ -4,16 +4,28 @@ project(xmap)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fexceptions")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -pthread  -fexceptions -DNOMINMAX")
+if(MSVC)
+    # The sources are UTF-8 and contain Chinese comments.  Without /utf-8,
+    # MSVC interprets them as CP936 and can accidentally continue a comment
+    # onto the following type declaration.
+    add_compile_options(/utf-8 /bigobj)
+    add_compile_definitions(NOMINMAX)
+else()
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fexceptions")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -fexceptions -DNOMINMAX")
+endif()
 
 set(XMAP_ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(XMAP_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR})
 set(XMAP_CONFIG_PATH "${XMAP_ROOT_DIR}/configs")
 set(XMAP_TEST_DATA_PATH "${XMAP_ROOT_DIR}/unit_test/test_data/")
 
-# 将 map.yaml 拷贝到输出目录
-file(COPY ${XMAP_CONFIG_PATH}/map.yaml DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+# map.yaml is optional for the offline app, which passes its complete runtime
+# configuration explicitly. Some source packages do not ship the example
+# configs directory.
+if(EXISTS "${XMAP_CONFIG_PATH}/map.yaml")
+    file(COPY ${XMAP_CONFIG_PATH}/map.yaml DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+endif()
 
 SET(CMAKE_BUILD_TYPE "Release")
 # SET(CMAKE_BUILD_TYPE "RelWithDebInfo")
@@ -29,7 +41,9 @@ elseif (${CMAKE_BUILD_TYPE} MATCHES "RelWithDebInfo")
     SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -g")
 else ()
     SET(CMAKE_BUILD_TYPE "Release")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
+    if(NOT MSVC)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
+    endif()
 endif ()
 
 

@@ -64,6 +64,11 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_SEED,
         help="Random seed used when the target image is unavailable",
     )
+    parser.add_argument(
+        "--output-prefix",
+        default="single_image",
+        help="Prefix for the output LAS, PCD, and selected image",
+    )
     return parser.parse_args()
 
 
@@ -116,6 +121,26 @@ def load_calibration(filepath: str) -> dict:
     if ext == ".json":
         with open(filepath, "r", encoding="utf-8") as f:
             calib_json = json.load(f)
+
+        if isinstance(calib_json, list):
+            cameras = {}
+            for cam_param in calib_json[0].get("cameras", []):
+                params = cam_param.get("camera_params", [])
+                if len(params) < 8:
+                    continue
+                name = cam_param.get("image_prefix", "default").rstrip("/")
+                cameras[name] = {
+                    "model": "opencv_fisheye",
+                    "fx": float(params[0]),
+                    "fy": float(params[1]),
+                    "cx": float(params[2]),
+                    "cy": float(params[3]),
+                    "k1": float(params[4]),
+                    "k2": float(params[5]),
+                    "k3": float(params[6]),
+                    "k4": float(params[7]),
+                }
+            return cameras
 
         cameras = {}
         for cam_param in calib_json.get("cameras", []):
@@ -316,6 +341,7 @@ def colorize_pointcloud(
     base_dir: str,
     target_img: str,
     max_points: int,
+    output_prefix: str,
     seed: int | None = None,
 ) -> None:
     if seed is not None:
@@ -343,7 +369,10 @@ def colorize_pointcloud(
 
     # ── 加载位姿 & 标定 ──
     poses = load_img_poses(os.path.join(base_dir, "images", "ImgPose.txt"))
-    calibs = load_calibration(os.path.join(base_dir, "calibration.dat"))
+    calibration_path = os.path.join(base_dir, "calibration.dat")
+    if calib_pb2 is None:
+        calibration_path = os.path.join(base_dir, "images", "rig.json")
+    calibs = load_calibration(calibration_path)
     print(f"位姿条目：{len(poses)} 条")
 
     existing_poses = [
@@ -363,10 +392,10 @@ def colorize_pointcloud(
             or target_img in p["img_path"]
         ):
             pose = p
-            print(f"✓ 在ImgPose.txt中找到对应的pose")
+            print("[OK] 在 ImgPose.txt 中找到对应 pose")
             break
     if pose is None:
-        print(f"✗ 警告：未找到 '{target_img}'，使用随机图片")
+        print(f"[WARN] 未找到 '{target_img}'，使用随机图片")
         pose = random.choice(existing_poses)
 
     img_rel = pose["img_path"]
@@ -453,16 +482,18 @@ def colorize_pointcloud(
     out_las.green = (colors[:, 1].astype(np.uint16)) << 8
     out_las.blue = (colors[:, 2].astype(np.uint16)) << 8
 
-    out_path = os.path.join(base_dir, "recolored.las")
+    out_path = os.path.join(base_dir, f"{output_prefix}_recolored.las")
     out_las.write(out_path)
     print(f"\n已保存（局部坐标，无全局偏移）：{out_path}")
 
-    camera_center_path = os.path.join(base_dir, "camera_center.pcd")
+    camera_center_path = os.path.join(base_dir, f"{output_prefix}_camera_center.pcd")
     write_single_point_pcd(camera_center_path, t_c2w_local)
     print(f"已保存相机中心点：{camera_center_path}")
 
     image_ext = os.path.splitext(img_path)[1] or ".jpg"
-    output_image_path = os.path.join(base_dir, f"selected_image{image_ext}")
+    output_image_path = os.path.join(
+        base_dir, f"{output_prefix}_selected_image{image_ext}"
+    )
     shutil.copy2(img_path, output_image_path)
     print(f"已复制选中图片到输出目录：{output_image_path}")
 
@@ -477,6 +508,7 @@ def main() -> int:
         base_dir=args.base_dir,
         target_img=args.target_img,
         max_points=args.max_points,
+        output_prefix=args.output_prefix,
         seed=seed,
     )
     return 0

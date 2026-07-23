@@ -3,11 +3,15 @@
 #include <iomanip>
 #include <sstream>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include <spdlog/spdlog.h>
 
 std::string GetExeDirectory() {
   char path[MAX_PATH];
-  GetModuleFileNameA(NULL, path, MAX_PATH);
+  GetModuleFileNameA(nullptr, path, MAX_PATH);
 
   std::string fullPath(path);
   size_t pos = fullPath.find_last_of("\\/");

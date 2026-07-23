@@ -8,7 +8,12 @@ endif(CMAKE_TOOLCHAIN_FILE)
 add_definitions(-D_USE_MATH_DEFINES -DPROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
 if(MSVC)
+  add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
   add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/MP>)
+  # COLMAP pulls in OpenImageIO's header-only fmt definition, while
+  # migration/spdlog link the compiled fmt library. Keep PGO translation
+  # units on the compiled fmt mode to avoid duplicate fmt symbols.
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/UFMT_HEADER_ONLY>)
   set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/O2 /Ob3 /MD /Zi")
   add_compile_options($<$<AND:$<CONFIG:Release>,$<COMPILE_LANGUAGE:C,CXX>>:/Zi>)
   add_link_options($<$<CONFIG:Release>:/DEBUG>)
