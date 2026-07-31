@@ -1,13 +1,19 @@
 
 #include "xcolor_lib.h"
 
+#include "migration/inc_las_writer.h"
 #include "migration/string.h"
 #include "migration/utils.h"
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <opencv2/opencv.hpp>
@@ -18,9 +24,149 @@
 #include <pdal/io/BufferReader.hpp>
 #include <spdlog/spdlog.h>
 
+#ifdef _WIN32
+#include <Windows.h>
+#else
+#include <sys/mman.h>
+#endif
+
 namespace xcolor {
 
 namespace {
+
+constexpr uint32_t kInvalidCandidateBlock =
+    std::numeric_limits<uint32_t>::max();
+constexpr size_t kCandidateBlocksPerCommit = 65536;
+constexpr size_t kOutputPointChunkSize = 250000;
+
+struct PackedColorCandidate {
+  float distance = 0.0f;
+  uint32_t color = 0;
+};
+static_assert(sizeof(PackedColorCandidate) == 8);
+
+struct CandidateBlock {
+  std::array<PackedColorCandidate, kColorInlierMaxNum> candidates;
+};
+
+struct PointCandidateState {
+  uint32_t block_index = kInvalidCandidateBlock;
+  uint8_t count = 0;
+  uint8_t padding[3] = {0, 0, 0};
+};
+static_assert(sizeof(PointCandidateState) == 8);
+
+uint32_t PackColor(const cv::Vec3b& color) {
+  return static_cast<uint32_t>(color[0]) |
+         (static_cast<uint32_t>(color[1]) << 8) |
+         (static_cast<uint32_t>(color[2]) << 16);
+}
+
+cv::Vec3b UnpackColor(uint32_t color) {
+  return {static_cast<uint8_t>(color & 0xff),
+          static_cast<uint8_t>((color >> 8) & 0xff),
+          static_cast<uint8_t>((color >> 16) & 0xff)};
+}
+
+class CandidateBlockPool {
+ public:
+  explicit CandidateBlockPool(size_t max_blocks) : max_blocks_(max_blocks) {
+    if (max_blocks_ > std::numeric_limits<uint32_t>::max()) {
+      throw std::runtime_error("Point cloud is too large for candidate indexing");
+    }
+    reserved_bytes_ = max_blocks_ * sizeof(CandidateBlock);
+#ifdef _WIN32
+    blocks_ = static_cast<CandidateBlock*>(
+        VirtualAlloc(nullptr, reserved_bytes_, MEM_RESERVE, PAGE_NOACCESS));
+    if (blocks_ == nullptr) {
+      throw std::bad_alloc();
+    }
+#else
+    blocks_ = static_cast<CandidateBlock*>(
+        mmap(nullptr, reserved_bytes_, PROT_NONE,
+             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    if (blocks_ == MAP_FAILED) {
+      blocks_ = nullptr;
+      throw std::bad_alloc();
+    }
+#endif
+    spdlog::info(
+        "Reserved {:.2f} GB virtual address space for up to {} compact "
+        "top-{} candidate blocks",
+        static_cast<double>(reserved_bytes_) / (1024.0 * 1024.0 * 1024.0),
+        max_blocks_,
+        kColorInlierMaxNum);
+  }
+
+  CandidateBlockPool(const CandidateBlockPool&) = delete;
+  CandidateBlockPool& operator=(const CandidateBlockPool&) = delete;
+
+  ~CandidateBlockPool() {
+    if (blocks_ == nullptr) {
+      return;
+    }
+#ifdef _WIN32
+    VirtualFree(blocks_, 0, MEM_RELEASE);
+#else
+    munmap(blocks_, reserved_bytes_);
+#endif
+  }
+
+  uint32_t Allocate() {
+    const uint32_t index = next_block_.fetch_add(1, std::memory_order_relaxed);
+    if (index >= max_blocks_) {
+      throw std::runtime_error("Candidate block pool exhausted");
+    }
+    EnsureCommitted(index);
+    blocks_[index] = CandidateBlock{};
+    return index;
+  }
+
+  CandidateBlock& Get(uint32_t index) { return blocks_[index]; }
+  const CandidateBlock& Get(uint32_t index) const { return blocks_[index]; }
+
+  size_t size() const {
+    return std::min<size_t>(next_block_.load(std::memory_order_relaxed),
+                            max_blocks_);
+  }
+
+ private:
+  void EnsureCommitted(uint32_t index) {
+    if (index < committed_blocks_.load(std::memory_order_acquire)) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(commit_mutex_);
+    const size_t committed =
+        committed_blocks_.load(std::memory_order_relaxed);
+    if (index < committed) {
+      return;
+    }
+    const size_t desired = std::min(
+        max_blocks_,
+        ((static_cast<size_t>(index) / kCandidateBlocksPerCommit) + 1) *
+            kCandidateBlocksPerCommit);
+    const size_t block_count = desired - committed;
+    void* address = blocks_ + committed;
+    const size_t bytes = block_count * sizeof(CandidateBlock);
+#ifdef _WIN32
+    if (VirtualAlloc(address, bytes, MEM_COMMIT, PAGE_READWRITE) == nullptr) {
+      throw std::bad_alloc();
+    }
+#else
+    if (mprotect(address, bytes, PROT_READ | PROT_WRITE) != 0) {
+      throw std::bad_alloc();
+    }
+#endif
+    committed_blocks_.store(desired, std::memory_order_release);
+  }
+
+  CandidateBlock* blocks_ = nullptr;
+  size_t max_blocks_ = 0;
+  size_t reserved_bytes_ = 0;
+  std::atomic<uint32_t> next_block_{0};
+  std::atomic<size_t> committed_blocks_{0};
+  std::mutex commit_mutex_;
+};
 
 void PrintProgress(double progress) {
   static int last_progress = -1;
@@ -217,28 +363,28 @@ std::optional<std::pair<double, cv::Vec3b>> ComputeColorCandidates(
   return std::make_pair(distance, color);
 }
 
-cv::Vec3b ComputeMedianColor(
-    const std::vector<std::pair<double, cv::Vec3b>>& color_candidates,
-    int inlier_threshold) {
+cv::Vec3b ComputeMedianColor(const CandidateBlock& block,
+                             int candidate_count,
+                             int inlier_threshold) {
   cv::Vec3b result = {0, 0, 0};
 
   for (int k = 0; k < 3; ++k) {
-    std::vector<uint8_t> color_channel_candidates;
-    color_channel_candidates.reserve(color_candidates.size());
-
-    for (const auto& candidate : color_candidates) {
-      color_channel_candidates.push_back(candidate.second[k]);
+    std::array<uint8_t, kColorInlierMaxNum> color_channel_candidates{};
+    for (int i = 0; i < candidate_count; ++i) {
+      color_channel_candidates[i] =
+          UnpackColor(block.candidates[i].color)[k];
     }
 
-    int mid_idx = color_channel_candidates.size() / 2;
+    const int mid_idx = candidate_count / 2;
     std::nth_element(color_channel_candidates.begin(),
                      color_channel_candidates.begin() + mid_idx,
-                     color_channel_candidates.end());
-    uint8_t mid_color = color_channel_candidates[mid_idx];
+                     color_channel_candidates.begin() + candidate_count);
+    const uint8_t mid_color = color_channel_candidates[mid_idx];
 
     int color_sum = 0;
     int color_num = 0;
-    for (uint8_t color_val : color_channel_candidates) {
+    for (int i = 0; i < candidate_count; ++i) {
+      const uint8_t color_val = color_channel_candidates[i];
       if (std::abs((int)color_val - (int)mid_color) < inlier_threshold) {
         color_sum += color_val;
         color_num++;
@@ -251,19 +397,20 @@ cv::Vec3b ComputeMedianColor(
   return result;
 }
 
-cv::Vec3b ComputeMeanColor(
-    const std::vector<std::pair<double, cv::Vec3b>>& color_candidates) {
+cv::Vec3b ComputeMeanColor(const CandidateBlock& block, int candidate_count) {
   cv::Vec3i color_sum = {0, 0, 0};
-  for (const auto& candidate : color_candidates) {
-    color_sum += candidate.second;
+  for (int i = 0; i < candidate_count; ++i) {
+    color_sum += UnpackColor(block.candidates[i].color);
   }
-  return {static_cast<uint8_t>(color_sum[0] / (int)color_candidates.size()),
-          static_cast<uint8_t>(color_sum[1] / (int)color_candidates.size()),
-          static_cast<uint8_t>(color_sum[2] / (int)color_candidates.size())};
+  return {static_cast<uint8_t>(color_sum[0] / candidate_count),
+          static_cast<uint8_t>(color_sum[1] / candidate_count),
+          static_cast<uint8_t>(color_sum[2] / candidate_count)};
 }
 
-void WritePointCloudToLAS(const std::string& filename,
-                          const pcl::PointCloud<pcl::PointXYZRGB>& cloud) {
+void WritePointCloudToLAS(
+    const std::string& filename,
+    const pcl::PointCloud<pcl::PointXYZRGB>& cloud,
+    const std::vector<PointCandidateState>& point_states) {
   spdlog::info("Saving point cloud to {}", filename);
 
   pdal::PointTable table;
@@ -274,37 +421,42 @@ void WritePointCloudToLAS(const std::string& filename,
   table.layout()->registerDim(pdal::Dimension::Id::Green);
   table.layout()->registerDim(pdal::Dimension::Id::Blue);
 
+  migration::IncrementalLasWriter writer;
+  writer.initialize(filename, table);
+
   pdal::PointViewPtr view = std::make_shared<pdal::PointView>(table);
+  size_t output_count = 0;
   for (size_t i = 0; i < cloud.size(); ++i) {
-    view->setField(pdal::Dimension::Id::X, i, cloud[i].x);
-    view->setField(pdal::Dimension::Id::Y, i, cloud[i].y);
-    view->setField(pdal::Dimension::Id::Z, i, cloud[i].z);
-    view->setField(pdal::Dimension::Id::Red,   i, cloud[i].r);
-    view->setField(pdal::Dimension::Id::Green, i, cloud[i].g);
-    view->setField(pdal::Dimension::Id::Blue,  i, cloud[i].b);
+    if (point_states[i].count == 0) {
+      continue;
+    }
+    const size_t chunk_index = view->size();
+    view->setField(pdal::Dimension::Id::X, chunk_index, cloud[i].x);
+    view->setField(pdal::Dimension::Id::Y, chunk_index, cloud[i].y);
+    view->setField(pdal::Dimension::Id::Z, chunk_index, cloud[i].z);
+    view->setField(pdal::Dimension::Id::Red, chunk_index, cloud[i].r);
+    view->setField(pdal::Dimension::Id::Green, chunk_index, cloud[i].g);
+    view->setField(pdal::Dimension::Id::Blue, chunk_index, cloud[i].b);
+    ++output_count;
+
+    if (view->size() >= kOutputPointChunkSize) {
+      writer.writeView(view);
+      view = std::make_shared<pdal::PointView>(table);
+    }
   }
-
-  pdal::BufferReader reader;
-  reader.addView(view);
-
-  pdal::StageFactory factory;
-  pdal::Stage* writer = factory.createStage("writers.las");
-  pdal::Options opts;
-  opts.add(pdal::Option("filename", PlatformToUTF8(filename)));
-  opts.add(pdal::Option("scale_x", 0.0001));
-  opts.add(pdal::Option("scale_y", 0.0001));
-  opts.add(pdal::Option("scale_z", 0.0001));
-  writer->setOptions(opts);
-  writer->setInput(reader);
-  writer->prepare(table);
-  writer->execute(table);
+  writer.writeView(view);
+  writer.finalize(table);
+  spdlog::info("Wrote {} colored points in chunks of at most {}",
+               output_count,
+               kOutputPointChunkSize);
 }
 
 void PerformXColor(const std::vector<Image>& images,
                    pcl::PointCloud<pcl::PointXYZRGB>& cloud_rgb,
                    std::string output_path,
                    int color_candidate_limit) {
-  const int candidate_limit = std::max(1, color_candidate_limit);
+  const int candidate_limit =
+      std::clamp(color_candidate_limit, 1, kColorInlierMaxNum);
   PrintProgress(0.0);
   const std::filesystem::path output_dir(output_path);
   std::error_code error_code;
@@ -321,8 +473,11 @@ void PerformXColor(const std::vector<Image>& images,
 
   PrintMemoryUsage();
 
-  // Step 1: 为每个点准备颜色候选值存储
-  std::vector<PointColorCandidates> point_color_candidates(cloud_rgb.size());
+  // Keep only a compact 8-byte state per input point. Candidate blocks are
+  // committed lazily for points that are actually visible in at least one
+  // image, avoiding one heap-allocated std::vector per point.
+  std::vector<PointCandidateState> point_candidate_states(cloud_rgb.size());
+  CandidateBlockPool candidate_pool(cloud_rgb.size());
 
   // Step 2: 逐图片处理，实时读取深度图并对整片点云做深度可见性过滤
   spdlog::info("Collecting color candidates from images...");
@@ -382,21 +537,35 @@ void PerformXColor(const std::vector<Image>& images,
           image.pose);
 
       if (color_candidate_opt) {
-        auto& candidates = point_color_candidates[point_idx].candidates;
+        auto& state = point_candidate_states[point_idx];
+        if (state.block_index == kInvalidCandidateBlock) {
+          state.block_index = candidate_pool.Allocate();
+        }
+        auto& block = candidate_pool.Get(state.block_index);
         const auto& candidate = color_candidate_opt.value();
-        // 二分查找找到插入位置
-        auto it = std::lower_bound(
-            candidates.begin(),
-            candidates.end(),
-            candidate,
-            [](const auto& a, const auto& b) { return a.first < b.first; });
-        candidates.insert(it, candidate);
+        const PackedColorCandidate packed = {
+            static_cast<float>(candidate.first), PackColor(candidate.second)};
 
-        // 如果超过限制，删除最后一个（距离最远的）
-        if (static_cast<int>(candidates.size()) > candidate_limit) {
-          candidates.pop_back();
+        int insert_at = 0;
+        while (insert_at < state.count &&
+               block.candidates[insert_at].distance < packed.distance) {
+          ++insert_at;
+        }
+        if (insert_at < candidate_limit) {
+          const int new_count =
+              std::min<int>(state.count + 1, candidate_limit);
+          for (int i = new_count - 1; i > insert_at; --i) {
+            block.candidates[i] = block.candidates[i - 1];
+          }
+          block.candidates[insert_at] = packed;
+          state.count = static_cast<uint8_t>(new_count);
         }
       }
+    }
+    if ((image_idx + 1) % 100 == 0 || image_idx + 1 == images.size()) {
+      spdlog::info("Candidate pool contains {} visible points after {} images",
+                   candidate_pool.size(),
+                   image_idx + 1);
     }
     print_image_progress();
   }
@@ -406,18 +575,19 @@ void PerformXColor(const std::vector<Image>& images,
   PrintProgress(96.0);
 #pragma omp parallel for
   for (int point_idx = 0; point_idx < cloud_rgb.size(); ++point_idx) {
-    auto& candidates = point_color_candidates[point_idx].candidates;
-
-    if (candidates.empty()) {
+    const auto& state = point_candidate_states[point_idx];
+    if (state.count == 0) {
       continue;
     }
+    const auto& block = candidate_pool.Get(state.block_index);
 
     // Candidates were limited to the nearest samples while processing images.
     cv::Vec3b final_color;
-    if (candidates.size() >= kMinCandidateNum) {
-      final_color = ComputeMedianColor(candidates, kColorInlierThreshold);
+    if (state.count >= kMinCandidateNum) {
+      final_color =
+          ComputeMedianColor(block, state.count, kColorInlierThreshold);
     } else {
-      final_color = ComputeMeanColor(candidates);
+      final_color = ComputeMeanColor(block, state.count);
     }
 
     cloud_rgb[point_idx].b = final_color[0];
@@ -425,20 +595,14 @@ void PerformXColor(const std::vector<Image>& images,
     cloud_rgb[point_idx].r = final_color[2];
   }
 
-  pcl::PointCloud<pcl::PointXYZRGB> final_colored_cloud;
-  final_colored_cloud.reserve(cloud_rgb.size());
-  for (int point_idx = 0; point_idx < cloud_rgb.size(); ++point_idx) {
-    if (!point_color_candidates[point_idx].candidates.empty()) {
-      final_colored_cloud.push_back(cloud_rgb[point_idx]);
-    }
-  }
   PrintProgress(98.0);
   spdlog::info("Final colored point cloud contains {} / {} points",
-               final_colored_cloud.size(),
+               candidate_pool.size(),
                cloud_rgb.size());
   PrintProgress(99.0);
   WritePointCloudToLAS((output_dir / "xcolor.las").string(),
-                       final_colored_cloud);
+                       cloud_rgb,
+                       point_candidate_states);
   PrintProgress(100.0);
 }
 

@@ -14,7 +14,7 @@
 namespace xcolor {
 
 constexpr int kMinCandidateNum = 3;
-constexpr int kColorInlierMaxNum = 15;
+constexpr int kColorInlierMaxNum = 10;
 constexpr int kColorInlierThreshold = 60;
 constexpr int kRangeInlier = 40;
 constexpr double kRayCasterVoxelResolution = 0.08;

@@ -425,6 +425,16 @@ int main(int argc, char** argv) {
           cloud->back().timestamp, cloud);
       message->frame_id = static_cast<int>(frame_id++);
       core.addSensorData(message);
+
+      // Keep the offline producer close to the mapping consumer. Without
+      // backpressure, a long recording is decoded into the in-memory LiDAR
+      // queue much faster than mapping can consume it, eventually exhausting
+      // the process commit limit. Leave only the short synchronization window
+      // required by IOUtils buffered; the sensor ordering and SLAM inputs stay
+      // unchanged.
+      while (core.containsEnoughDataForSyncPackages()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      }
     }
     lidar_reader.Close();
 

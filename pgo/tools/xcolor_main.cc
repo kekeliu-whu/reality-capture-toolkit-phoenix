@@ -223,8 +223,10 @@ void ReadImages(const std::string& sfm_path,
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  if (FLAGS_max_color_candidates < 1) {
-    spdlog::error("--max_color_candidates must be >= 1");
+  if (FLAGS_max_color_candidates < 1 ||
+      FLAGS_max_color_candidates > xcolor::kColorInlierMaxNum) {
+    spdlog::error("--max_color_candidates must be in [1, {}]",
+                  xcolor::kColorInlierMaxNum);
     return 1;
   }
   spdlog::set_level(spdlog::level::debug);

@@ -8,6 +8,9 @@ param(
   [Parameter(Mandatory=$false, HelpMessage="Path to the FAISS vocabulary tree")]
   [string]$vocabTreePath = "",
 
+  [Parameter(Mandatory=$false, HelpMessage="Point cloud LAS file; defaults to dataDir\map_opt.las")]
+  [string]$PointCloudPath = "",
+
   [Parameter(Mandatory=$false, HelpMessage="Camera directories to delete and exclude, for example cam2")]
   [string[]]$ExcludeCamera = @(),
 
@@ -119,7 +122,11 @@ if ([string]::IsNullOrWhiteSpace($vocabTreePath) -or -not (Test-Path -LiteralPat
 
 # Verify required files exist
 Write-Host "Checking required files..." -ForegroundColor Cyan
-$lasFile = "$dataDir\map_opt.las"
+$lasFile = if ([string]::IsNullOrWhiteSpace($PointCloudPath)) {
+  Join-Path $dataDir "map_opt.las"
+} else {
+  $PointCloudPath
+}
 $poseFile = "$dataDir\images\ImgPose.txt"
 
 Write-Host "Looking for: $lasFile" -ForegroundColor Yellow
@@ -131,6 +138,7 @@ if (-not (Test-Path $lasFile)) {
   Get-ChildItem $dataDir -Recurse -Filter "*.las" 2>/dev/null | ForEach-Object { Write-Host "  $_" }
   exit 1
 }
+$lasFile = (Resolve-Path -LiteralPath $lasFile).Path
 
 if (-not (Test-Path $poseFile)) {
   Write-Host "ERROR: Pose file not found at: $poseFile" -ForegroundColor Red
@@ -187,7 +195,7 @@ Write-Host "Files verified successfully!" -ForegroundColor Green
 # Step 1: Process point cloud with xsfm_process_point_cloud.exe
 Write-Host "Step 1: Processing point cloud..." -ForegroundColor Green
 & $xsfm_pc_exe `
-  --las_filename "$dataDir\map_opt.las" `
+  --las_filename "$lasFile" `
   --initial_pose_filename "$activePoseFile" `
   --output_dir "$dataDir\xsfm" `
   --nooutput_full `
@@ -233,6 +241,7 @@ Write-Host "Step 3: Sequential matching..." -ForegroundColor Green
   --database_path "$dataDir\xsfm\xsfm.db" `
   --SequentialMatching.vocab_tree_path "$vocabTreePath" `
   --SequentialMatching.loop_detection 1 `
+  --SequentialMatching.quadratic_overlap 0 `
   --TwoViewGeometry.filter_stationary_matches 1
 
 if ($LASTEXITCODE -ne 0) {
@@ -377,7 +386,7 @@ if (-not $images_path) {
 & $xcolor_main_exe `
   --images_path "$images_path" `
   --sfm_result_path "$xsfmPostSfmPath" `
-  --point_cloud_filename "$dataDir\map_opt.las" `
+  --point_cloud_filename "$lasFile" `
   --output_path "$dataDir"
 
 if ($LASTEXITCODE -ne 0) {
