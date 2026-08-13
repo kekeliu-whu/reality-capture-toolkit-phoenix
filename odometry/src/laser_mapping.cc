@@ -820,24 +820,31 @@ int main(int argc, char **argv) {
           las_writer->writeView(view);
         }
 
-        // Write undistorted lidar scan (body frame, motion-distortion corrected)
+        // Write the motion-undistorted scan in the IMU/body frame.  Keep this
+        // coordinate convention in sync with traj.dat: slam_post pairs every
+        // scan with the pose at the same index and applies that pose directly.
         {
           auto undist_msg = std::make_shared<proto::LidarMsg>();
           for (int i = 0; i < (int)feats_undistort->points.size(); i++) {
+            const Eigen::Vector3d point_lidar(feats_undistort->points[i].x, feats_undistort->points[i].y,
+                                              feats_undistort->points[i].z);
+            const Eigen::Vector3d point_imu =
+                g_state_point.offset_R_L_I * point_lidar + g_state_point.offset_T_L_I;
             auto pt = undist_msg->add_points();
-            pt->set_x(feats_undistort->points[i].x);
-            pt->set_y(feats_undistort->points[i].y);
-            pt->set_z(feats_undistort->points[i].z);
+            pt->set_x(static_cast<float>(point_imu.x()));
+            pt->set_y(static_cast<float>(point_imu.y()));
+            pt->set_z(static_cast<float>(point_imu.z()));
             pt->set_intensity(feats_undistort->points[i].intensity);
             pt->set_timestamp(Measures.lidar_end_time);
           }
           lidar_undist_writer.Write(undist_msg);
         }
 
-        // Write low-frequency pose (one per LiDAR scan)
+        // Write T_world_imu (one pose per LiDAR scan).  Gravity is already
+        // expressed in the world frame and is consumed as such by slam_post.
         {
-          Eigen::Quaterniond rot = g_state_point.rot * g_state_point.offset_R_L_I;
-          Eigen::Vector3d pos = g_state_point.rot.toRotationMatrix() * g_state_point.offset_T_L_I + g_state_point.pos;
+          const Eigen::Quaterniond rot = g_state_point.rot;
+          const Eigen::Vector3d pos = g_state_point.pos;
 
           auto pose_msg = traj_dat.add_pose_msgs();
           pose_msg->set_timestamp(Measures.lidar_end_time);
@@ -853,10 +860,10 @@ int main(int argc, char **argv) {
           pose_msg->set_gz(g_state_point.grav[2]);
         }
 
-        // Write low-frequency pose to traj.txt (one per LiDAR scan)
+        // Write the same T_world_imu pose to trajectory.txt.
         {
-          Eigen::Quaterniond rot = g_state_point.rot * g_state_point.offset_R_L_I;
-          Eigen::Vector3d pos = g_state_point.rot.toRotationMatrix() * g_state_point.offset_T_L_I + g_state_point.pos;
+          const Eigen::Quaterniond rot = g_state_point.rot;
+          const Eigen::Vector3d pos = g_state_point.pos;
           const Eigen::Vector3d rpy = safeQuaternionToRPY(Eigen::Vector4d(rot.x(), rot.y(), rot.z(), rot.w()));
           fp_traj << fmt::format(
                          "{:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f} {:.12f}",
