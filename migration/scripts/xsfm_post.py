@@ -1101,10 +1101,13 @@ def load_source_mask(mask_path: Path) -> np.ndarray | None:
 
 def find_source_mask_path(mask_dir: Path, image_name: str) -> Path | None:
     relative_image_path = Path(image_name)
+    camera_name = relative_image_path.parts[0] if len(relative_image_path.parts) > 1 else ""
     candidates = (
         mask_dir / f"{image_name}{MASK_EXT}",
         mask_dir / relative_image_path.with_suffix(MASK_EXT),
         mask_dir / relative_image_path,
+        mask_dir / f"{camera_name}{MASK_EXT}",
+        mask_dir / camera_name / f"mask{MASK_EXT}",
     )
     for candidate in candidates:
         if candidate.exists():

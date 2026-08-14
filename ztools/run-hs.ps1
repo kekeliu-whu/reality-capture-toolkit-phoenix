@@ -195,6 +195,7 @@ if (-not $SkipConversion) {
         "--ffmpeg_path=$FfmpegPath",
         "--image_flip_horizontal=true",
         "--image_rotate_cw_180=true",
+        "--include_cam2=false",
         "--clear_image_camera_dirs=$((-not $KeepExistingImages).ToString().ToLowerInvariant())"
     )
     Invoke-NativeStep -Description "HS conversion" -Executable $ConvertHsExe -Arguments $convertArgs
@@ -207,7 +208,7 @@ $ImagesDir = Join-Path $OutputDir "images"
 Assert-File $CalibrationFile "Calibration"
 Assert-File $ImuFile "IMU data"
 Assert-File $LidarFile "LiDAR data"
-foreach ($cameraName in @("cam0", "cam1", "cam2")) {
+foreach ($cameraName in @("cam0", "cam1")) {
     $cameraDir = Join-Path $ImagesDir $cameraName
     $imageCount = @(Get-ChildItem -LiteralPath $cameraDir -Filter "*.jpg" -File -ErrorAction SilentlyContinue).Count
     if ($imageCount -eq 0) {

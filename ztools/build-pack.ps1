@@ -74,12 +74,14 @@ $REQUIRED_EXECUTABLES = @(
     "xsfm_create_initial_model.exe",
     "convert_manifold.exe",
     "convert_hs.exe",
+    "export_imu_frames.exe",
     "crashpad_handler.exe",
     "xsfm_post.exe"
 )
 $OPTIONAL_EXECUTABLES = @()
 $EXECUTABLE_SOURCE_DIR_OVERRIDES = @{
     "xsfm_post.exe" = $PGO_BUILD_DIRS
+    "export_imu_frames.exe" = $XCOLOR_MIGRATION_BUILD_DIRS
 }
 $PYTHON_TOOL_EXECUTABLES = @(
     "insta_data_extraction.exe",
@@ -776,6 +778,22 @@ function Download-VocabTree {
 
 function Copy-DataFiles {
     Write-Section "Copying data files"
+
+    $cameraMasksSource = Join-Path $PROJECT_ROOT "ztools\assets\camera_masks"
+    $cameraMasksDestination = Join-Path $PACK_DIR "camera_masks"
+    Write-Status "Copying fixed camera masks..."
+    foreach ($cameraName in @("cam0", "cam1")) {
+        $maskSource = Join-Path $cameraMasksSource "$cameraName.png"
+        if (-not (Test-Path -LiteralPath $maskSource -PathType Leaf)) {
+            Fail "Fixed camera mask not found: $maskSource"
+        }
+    }
+    try {
+        Copy-Item -LiteralPath $cameraMasksSource -Destination $cameraMasksDestination -Recurse -Force -ErrorAction Stop
+        Write-Host "    Copied camera_masks/cam0.png and camera_masks/cam1.png"
+    } catch {
+        Fail "Failed to copy fixed camera masks: $($_.Exception.Message)"
+    }
 
     Write-Status "Copying proj.db..."
     if (-not $script:SELECTED_PROJ_DB) {

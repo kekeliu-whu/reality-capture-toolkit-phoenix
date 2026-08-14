@@ -39,6 +39,7 @@ DEFINE_bool(skip_calibration, false, "Skip calib_info.yaml conversion");
 DEFINE_bool(skip_imu, false, "Skip ext_imu_*.mcap conversion");
 DEFINE_bool(skip_lidar, false, "Skip lidar_imu_*.mcap conversion");
 DEFINE_bool(skip_images, false, "Skip camera_*.mcap image export");
+DEFINE_bool(include_cam2, false, "Include the front cam2 JPEG stream and calibration (disabled by default)");
 DEFINE_string(camera_model, "OPENCV_FISHEYE", "Calibration camera model: OPENCV or OPENCV_FISHEYE");
 DEFINE_string(ffmpeg_path, "ffmpeg.exe", "FFmpeg executable used to decode cam0/cam1 H.265 frames");
 DEFINE_bool(image_flip_horizontal, true, "Flip exported camera images horizontally");
@@ -420,6 +421,10 @@ bool ConvertImages(const std::filesystem::path& input_dir, const std::filesystem
   std::filesystem::remove_all(temp_dir, cleanup_error);
   std::filesystem::create_directories(temp_dir);
   std::filesystem::create_directories(images_dir);
+  std::vector<std::string> camera_names = {"cam0", "cam1"};
+  if (FLAGS_include_cam2) {
+    camera_names.emplace_back("cam2");
+  }
   for (const std::string camera_name : {"cam0", "cam1", "cam2"}) {
     const std::filesystem::path camera_dir = images_dir / camera_name;
     if (FLAGS_clear_image_camera_dirs) {
@@ -430,7 +435,9 @@ bool ConvertImages(const std::filesystem::path& input_dir, const std::filesystem
         return false;
       }
     }
-    std::filesystem::create_directories(camera_dir);
+    if (camera_name != "cam2" || FLAGS_include_cam2) {
+      std::filesystem::create_directories(camera_dir);
+    }
   }
 
   const std::filesystem::path cam0_h265_path = temp_dir / "cam0.h265";
@@ -462,7 +469,7 @@ bool ConvertImages(const std::filesystem::path& input_dir, const std::filesystem
           cam1_timestamps_ns.push_back(msg.log_time);
           return;
         }
-        if (channel.topic != "/camera/cam2/jpeg") {
+        if (!FLAGS_include_cam2 || channel.topic != "/camera/cam2/jpeg") {
           return;
         }
 
@@ -490,14 +497,19 @@ bool ConvertImages(const std::filesystem::path& input_dir, const std::filesystem
   cam1_h265.close();
   const bool cam0_ok = DecodeH265Camera("cam0", cam0_h265_path, cam0_timestamps_ns, temp_dir, images_dir);
   const bool cam1_ok = DecodeH265Camera("cam1", cam1_h265_path, cam1_timestamps_ns, temp_dir, images_dir);
-  spdlog::info("Exported {} cam2 JPEG images ({} malformed)", cam2_exported, malformed_images);
+  if (FLAGS_include_cam2) {
+    spdlog::info("Exported {} cam2 JPEG images ({} malformed)", cam2_exported, malformed_images);
+  } else {
+    spdlog::info("Skipped cam2 image export");
+  }
 
   cleanup_error.clear();
   std::filesystem::remove_all(temp_dir, cleanup_error);
   if (cleanup_error) {
     spdlog::warn("Failed to remove temporary camera directory {}: {}", temp_dir.string(), cleanup_error.message());
   }
-  return cam0_ok && cam1_ok && cam2_exported > 0 && malformed_images == 0;
+  const bool cam2_ok = !FLAGS_include_cam2 || (cam2_exported > 0 && malformed_images == 0);
+  return cam0_ok && cam1_ok && cam2_ok;
 }
 
 std::vector<PcWindow> ReadPcWindows(const std::filesystem::path& input_dir) {
@@ -839,7 +851,11 @@ bool ConvertCalibration(const std::filesystem::path& input_dir, const std::files
     const Eigen::Matrix4d T_lidar_2_imu = ReadExtrinsicTransform(extrinsic, "T_lidar_2_imu");
     SetTransformFromMatrix(T_lidar_2_imu, calib.mutable_direct()->mutable_imu_from_lidar());
 
-    for (const std::string cam_name : {"cam0", "cam1", "cam2"}) {
+    std::vector<std::string> camera_names = {"cam0", "cam1"};
+    if (FLAGS_include_cam2) {
+      camera_names.emplace_back("cam2");
+    }
+    for (const std::string& cam_name : camera_names) {
       const YAML::Node k_node = intrinsic[cam_name];
       const YAML::Node d_node = intrinsic[cam_name + "_distortion"];
       const std::string lidar_to_camera_name = "T_lidar_2_" + cam_name;

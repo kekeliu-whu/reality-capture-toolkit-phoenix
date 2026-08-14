@@ -350,12 +350,31 @@ if ([string]::IsNullOrWhiteSpace($sfmModelDir)) {
   exit 1
 }
 
-& $xsfm_post_exe `
-  --model-dir "$sfmModelDir" `
-  --image-dir "$dataDir\images" `
-  --output-dir "$xsfmPostOutputDir" `
-  --point-cloud-path "$dataDir\xsfm\localenu_normal.pcd" `
-  --overwrite
+$xsfmPostArgs = @(
+  "--model-dir", $sfmModelDir,
+  "--image-dir", "$dataDir\images",
+  "--output-dir", $xsfmPostOutputDir,
+  "--point-cloud-path", "$dataDir\xsfm\localenu_normal.pcd",
+  "--image-step", "2",
+  "--depth-voxel-size", "0.03",
+  "--overwrite"
+)
+$cameraMaskDir = Join-Path $BUILD_PACK "camera_masks"
+if (-not (Test-Path -LiteralPath $cameraMaskDir -PathType Container)) {
+  Write-Host "ERROR: Fixed camera mask directory not found: $cameraMaskDir" -ForegroundColor Red
+  exit 1
+}
+foreach ($cameraName in $activeCameraNames) {
+  $cameraMaskFile = Join-Path $cameraMaskDir "$cameraName.png"
+  if (-not (Test-Path -LiteralPath $cameraMaskFile -PathType Leaf)) {
+    Write-Host "ERROR: Fixed camera mask not found: $cameraMaskFile" -ForegroundColor Red
+    exit 1
+  }
+}
+Write-Host "Using packaged fixed camera masks: $cameraMaskDir" -ForegroundColor Green
+$xsfmPostArgs += @("--mask-dir", $cameraMaskDir)
+
+& $xsfm_post_exe @xsfmPostArgs
 
 if ($LASTEXITCODE -ne 0) {
   Write-Host "Error in Step 4.5 (xsfm post)" -ForegroundColor Red

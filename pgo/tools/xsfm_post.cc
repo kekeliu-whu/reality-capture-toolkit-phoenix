@@ -490,6 +490,12 @@ std::optional<fs::path> FindSourceMaskPath(const fs::path& mask_dir,
   std::vector<fs::path> candidates = {
       mask_dir / (image_name + kMaskExt), mask_dir / relative.replace_extension(kMaskExt)};
   candidates.push_back(mask_dir / fs::path(image_name));
+  const fs::path image_path(image_name);
+  if (image_path.has_parent_path()) {
+    const fs::path camera_name = *image_path.begin();
+    candidates.push_back(mask_dir / (camera_name.string() + kMaskExt));
+    candidates.push_back(mask_dir / camera_name / (std::string("mask") + kMaskExt));
+  }
   for (const auto& path : candidates) {
     if (fs::exists(path)) {
       return path;
