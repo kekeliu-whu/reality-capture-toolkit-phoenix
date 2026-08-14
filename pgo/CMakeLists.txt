@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.10)
 project(pgo)
 
+include(CTest)
+
 if(CMAKE_TOOLCHAIN_FILE)
     include(${CMAKE_TOOLCHAIN_FILE})
 endif(CMAKE_TOOLCHAIN_FILE)
@@ -173,6 +175,16 @@ add_executable(
   tools/xcolor_main.cc
 )
 target_link_libraries(xcolor pgo_xcolor_lib ${PGO_XCOLOR_TOOL_LIBS})
+
+if(BUILD_TESTING)
+  find_package(GTest REQUIRED)
+  add_executable(
+    xcolor_lib_test
+    tools/xcolor_lib_test.cc
+  )
+  target_link_libraries(xcolor_lib_test pgo_xcolor_lib GTest::gtest_main)
+  add_test(NAME xcolor_lib_test COMMAND xcolor_lib_test)
+endif()
 
 set(XSFM_POST_DEPTH_OBJ "${CMAKE_CURRENT_BINARY_DIR}/xsfm_post_depth_$<CONFIG>.obj")
 add_custom_command(

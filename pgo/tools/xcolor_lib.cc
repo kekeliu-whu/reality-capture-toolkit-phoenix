@@ -312,7 +312,9 @@ bool IsMaskPixelAllowed(const cv::Mat& mask, const Eigen::Vector2d& pixel) {
     return false;
   }
 
-  return mask.at<uint8_t>(pixel_y, pixel_x) == 0;
+  // Source and cubemap masks use the conventional validity encoding:
+  // non-zero pixels are valid, while zero pixels must be excluded.
+  return mask.at<uint8_t>(pixel_y, pixel_x) != 0;
 }
 
 DepthIntrinsics DepthIntrinsicsFromCamera(const colmap::Camera& camera) {

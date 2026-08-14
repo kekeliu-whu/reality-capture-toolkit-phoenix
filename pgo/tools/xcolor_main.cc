@@ -3,6 +3,7 @@
 #include <colmap/scene/reconstruction.h>
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -36,7 +37,7 @@ DEFINE_string(sfm_result_path,
               "SFM databaset filename");
 DEFINE_string(point_cloud_filename,
               R"(Z:\rick\dataset\jiuzhou\zhujiangguihuadasha\output\small_plane_refined.las)",
-              "Point cloud filename (LAS format)");
+              "Point cloud filename (LAS, LAZ, or PCD format)");
 DEFINE_string(output_path,
               R"(Z:\rick\dataset\jiuzhou\zhujiangguihuadasha\output)",
               "Output path");
@@ -128,6 +129,37 @@ pcl::PointCloud<pcl::PointXYZRGB> ReadPointCloudFromLAS(
 
   spdlog::info("Loaded {} points from LAS file", cloud.size());
   return cloud;
+}
+
+pcl::PointCloud<pcl::PointXYZRGB> ReadPointCloud(
+    const std::string& filename) {
+  const fs::path path(filename);
+  std::string extension = path.extension().string();
+  std::transform(
+      extension.begin(), extension.end(), extension.begin(), ::tolower);
+  if (extension == ".las" || extension == ".laz") {
+    return ReadPointCloudFromLAS(filename);
+  }
+  if (extension == ".pcd") {
+    spdlog::info("Reading point cloud from PCD file: {}", filename);
+    pcl::PointCloud<pcl::PointXYZ> xyz_cloud;
+    if (pcl::io::loadPCDFile(filename, xyz_cloud) != 0) {
+      throw std::runtime_error("Failed to load PCD file: " + filename);
+    }
+    pcl::PointCloud<pcl::PointXYZRGB> cloud;
+    cloud.reserve(xyz_cloud.size());
+    for (const auto& xyz : xyz_cloud) {
+      pcl::PointXYZRGB point;
+      point.x = xyz.x;
+      point.y = xyz.y;
+      point.z = xyz.z;
+      point.r = point.g = point.b = 0;
+      cloud.push_back(point);
+    }
+    spdlog::info("Loaded {} points from PCD file", cloud.size());
+    return cloud;
+  }
+  throw std::runtime_error("Unsupported point-cloud format: " + extension);
 }
 
 void ReadImages(const std::string& sfm_path,
@@ -250,7 +282,7 @@ int main(int argc, char** argv) {
   // loading point cloud
   spdlog::info("Loading point cloud from {} ...", FLAGS_point_cloud_filename);
   pcl::PointCloud<pcl::PointXYZRGB> cloud =
-      xcolor::ReadPointCloudFromLAS(FLAGS_point_cloud_filename);
+      xcolor::ReadPointCloud(FLAGS_point_cloud_filename);
   PrintMemoryUsage();
   if (cloud.empty()) {
     spdlog::error("Load point cloud failed: {}", FLAGS_point_cloud_filename);
