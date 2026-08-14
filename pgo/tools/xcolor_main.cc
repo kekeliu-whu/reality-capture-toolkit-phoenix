@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <limits>
 #include <map>
 #include <optional>
 #include <random>
@@ -97,11 +98,11 @@ std::optional<fs::path> FindMaskFile(const fs::path& masks_root,
 
 }  // namespace
 
-pcl::PointCloud<pcl::PointXYZRGB> ReadPointCloudFromLAS(
+pcl::PointCloud<pcl::PointXYZRGBNormal> ReadPointCloudFromLAS(
     const std::string& filename) {
   spdlog::info("Reading point cloud from LAS file: {}", filename);
 
-  pcl::PointCloud<pcl::PointXYZRGB> cloud;
+  pcl::PointCloud<pcl::PointXYZRGBNormal> cloud;
 
   // Use PDAL to read LAS file
   pdal::StageFactory factory;
@@ -120,10 +121,13 @@ pcl::PointCloud<pcl::PointXYZRGB> ReadPointCloudFromLAS(
   // Convert PDAL points to PCL format
   cloud.reserve(view->size());
   for (size_t i = 0; i < view->size(); ++i) {
-    pcl::PointXYZRGB point;
+    pcl::PointXYZRGBNormal point;
     point.x = view->getFieldAs<double>(pdal::Dimension::Id::X, i);
     point.y = view->getFieldAs<double>(pdal::Dimension::Id::Y, i);
     point.z = view->getFieldAs<double>(pdal::Dimension::Id::Z, i);
+    point.normal_x = std::numeric_limits<float>::quiet_NaN();
+    point.normal_y = std::numeric_limits<float>::quiet_NaN();
+    point.normal_z = std::numeric_limits<float>::quiet_NaN();
     cloud.push_back(point);
   }
 
@@ -131,7 +135,7 @@ pcl::PointCloud<pcl::PointXYZRGB> ReadPointCloudFromLAS(
   return cloud;
 }
 
-pcl::PointCloud<pcl::PointXYZRGB> ReadPointCloud(
+pcl::PointCloud<pcl::PointXYZRGBNormal> ReadPointCloud(
     const std::string& filename) {
   const fs::path path(filename);
   std::string extension = path.extension().string();
@@ -142,21 +146,31 @@ pcl::PointCloud<pcl::PointXYZRGB> ReadPointCloud(
   }
   if (extension == ".pcd") {
     spdlog::info("Reading point cloud from PCD file: {}", filename);
-    pcl::PointCloud<pcl::PointXYZ> xyz_cloud;
-    if (pcl::io::loadPCDFile(filename, xyz_cloud) != 0) {
+    pcl::PointCloud<pcl::PointNormal> source_cloud;
+    if (pcl::io::loadPCDFile(filename, source_cloud) != 0) {
       throw std::runtime_error("Failed to load PCD file: " + filename);
     }
-    pcl::PointCloud<pcl::PointXYZRGB> cloud;
-    cloud.reserve(xyz_cloud.size());
-    for (const auto& xyz : xyz_cloud) {
-      pcl::PointXYZRGB point;
-      point.x = xyz.x;
-      point.y = xyz.y;
-      point.z = xyz.z;
+    pcl::PointCloud<pcl::PointXYZRGBNormal> cloud;
+    cloud.reserve(source_cloud.size());
+    size_t valid_normal_count = 0;
+    for (const auto& source : source_cloud) {
+      pcl::PointXYZRGBNormal point;
+      point.x = source.x;
+      point.y = source.y;
+      point.z = source.z;
+      point.normal_x = source.normal_x;
+      point.normal_y = source.normal_y;
+      point.normal_z = source.normal_z;
       point.r = point.g = point.b = 0;
+      if (point.getNormalVector3fMap().allFinite() &&
+          point.getNormalVector3fMap().squaredNorm() >= 1e-12f) {
+        ++valid_normal_count;
+      }
       cloud.push_back(point);
     }
-    spdlog::info("Loaded {} points from PCD file", cloud.size());
+    spdlog::info("Loaded {} points from PCD file; {} have valid normals",
+                 cloud.size(),
+                 valid_normal_count);
     return cloud;
   }
   throw std::runtime_error("Unsupported point-cloud format: " + extension);
@@ -281,7 +295,7 @@ int main(int argc, char** argv) {
 
   // loading point cloud
   spdlog::info("Loading point cloud from {} ...", FLAGS_point_cloud_filename);
-  pcl::PointCloud<pcl::PointXYZRGB> cloud =
+  pcl::PointCloud<pcl::PointXYZRGBNormal> cloud =
       xcolor::ReadPointCloud(FLAGS_point_cloud_filename);
   PrintMemoryUsage();
   if (cloud.empty()) {

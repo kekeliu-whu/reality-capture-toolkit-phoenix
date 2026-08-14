@@ -1,5 +1,7 @@
 #include "xcolor_lib.h"
 
+#include <limits>
+
 #include <gtest/gtest.h>
 
 namespace xcolor {
@@ -24,6 +26,26 @@ TEST(XColorMaskTest, RejectsPixelsOutsideMask) {
   EXPECT_FALSE(IsMaskPixelAllowed(mask, Eigen::Vector2d(-1.0, 0.0)));
   EXPECT_FALSE(IsMaskPixelAllowed(mask, Eigen::Vector2d(2.0, 0.0)));
   EXPECT_FALSE(IsMaskPixelAllowed(mask, Eigen::Vector2d(0.0, 2.0)));
+}
+
+TEST(XColorNormalTest, AcceptsCameraOnNormalSide) {
+  EXPECT_TRUE(IsNormalFacingCamera(Eigen::Vector3d(0.0, 0.0, 2.0),
+                                   Eigen::Vector3d(0.0, 0.0, -1.0)));
+}
+
+TEST(XColorNormalTest, RejectsCameraBehindSurfaceAndAtTangent) {
+  EXPECT_FALSE(IsNormalFacingCamera(Eigen::Vector3d(0.0, 0.0, 2.0),
+                                    Eigen::Vector3d(0.0, 0.0, 1.0)));
+  EXPECT_FALSE(IsNormalFacingCamera(Eigen::Vector3d(0.0, 0.0, 2.0),
+                                    Eigen::Vector3d(1.0, 0.0, 0.0)));
+}
+
+TEST(XColorNormalTest, SkipsFilteringForMissingNormal) {
+  EXPECT_TRUE(IsNormalFacingCamera(Eigen::Vector3d(0.0, 0.0, 2.0),
+                                   Eigen::Vector3d::Zero()));
+  EXPECT_TRUE(IsNormalFacingCamera(
+      Eigen::Vector3d(0.0, 0.0, 2.0),
+      Eigen::Vector3d::Constant(std::numeric_limits<double>::quiet_NaN())));
 }
 
 }  // namespace

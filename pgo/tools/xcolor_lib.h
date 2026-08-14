@@ -47,10 +47,12 @@ struct PointColorCandidates {
 };
 
 bool IsMaskPixelAllowed(const cv::Mat& mask, const Eigen::Vector2d& pixel);
+bool IsNormalFacingCamera(const Eigen::Vector3d& point_in_camera,
+                          const Eigen::Vector3d& normal_in_camera);
 DepthIntrinsics DepthIntrinsicsFromCamera(const colmap::Camera& camera);
 
 void PerformXColor(const std::vector<Image>& images,
-                   pcl::PointCloud<pcl::PointXYZRGB>& cloud_rgb,
+                   pcl::PointCloud<pcl::PointXYZRGBNormal>& cloud_rgb,
                    std::string output_path,
                    int color_candidate_limit = kColorInlierMaxNum);
 

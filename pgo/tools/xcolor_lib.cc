@@ -317,6 +317,14 @@ bool IsMaskPixelAllowed(const cv::Mat& mask, const Eigen::Vector2d& pixel) {
   return mask.at<uint8_t>(pixel_y, pixel_x) != 0;
 }
 
+bool IsNormalFacingCamera(const Eigen::Vector3d& point_in_camera,
+                          const Eigen::Vector3d& normal_in_camera) {
+  if (!normal_in_camera.allFinite() || normal_in_camera.squaredNorm() < 1e-12) {
+    return true;
+  }
+  return normal_in_camera.dot(-point_in_camera) > 0.0;
+}
+
 DepthIntrinsics DepthIntrinsicsFromCamera(const colmap::Camera& camera) {
   DepthIntrinsics intrinsics;
   intrinsics.width = static_cast<int>(camera.width);
@@ -329,7 +337,7 @@ DepthIntrinsics DepthIntrinsicsFromCamera(const colmap::Camera& camera) {
 }
 
 std::optional<std::pair<double, cv::Vec3b>> ComputeColorCandidates(
-    const pcl::PointXYZRGB& point,
+    const pcl::PointXYZRGBNormal& point,
     const cv::Mat& image,
     const cv::Mat& mask,
     const cv::Mat& depth_meters,
@@ -339,6 +347,12 @@ std::optional<std::pair<double, cv::Vec3b>> ComputeColorCandidates(
   Eigen::Vector3d pt_in_cam = pose * point.getVector3fMap().cast<double>();
   if (pt_in_cam.z() < 0) {
     return std::nullopt;  // Point is behind camera
+  }
+
+  const Eigen::Vector3d normal_in_cam =
+      pose.rotation() * point.getNormalVector3fMap().cast<double>();
+  if (!IsNormalFacingCamera(pt_in_cam, normal_in_cam)) {
+    return std::nullopt;  // Camera sees the back side of the surface
   }
 
   auto pixel_opt = camera.ImgFromCam(pt_in_cam / pt_in_cam.z());
@@ -411,7 +425,7 @@ cv::Vec3b ComputeMeanColor(const CandidateBlock& block, int candidate_count) {
 
 void WritePointCloudToLAS(
     const std::string& filename,
-    const pcl::PointCloud<pcl::PointXYZRGB>& cloud,
+    const pcl::PointCloud<pcl::PointXYZRGBNormal>& cloud,
     const std::vector<PointCandidateState>& point_states) {
   spdlog::info("Saving point cloud to {}", filename);
 
@@ -454,7 +468,7 @@ void WritePointCloudToLAS(
 }
 
 void PerformXColor(const std::vector<Image>& images,
-                   pcl::PointCloud<pcl::PointXYZRGB>& cloud_rgb,
+                   pcl::PointCloud<pcl::PointXYZRGBNormal>& cloud_rgb,
                    std::string output_path,
                    int color_candidate_limit) {
   const int candidate_limit =
