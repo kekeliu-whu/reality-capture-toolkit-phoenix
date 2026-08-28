@@ -1,0 +1,11 @@
+work/
+code/build*/
+code/bin/
+code/lib/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+*.tmp
+*.temp
+regression
+test_resources

@@ -1,0 +1,80 @@
+{
+  "date": "2026-08-24",
+  "dataset": "/media/cybergeo/12T/CSSJ/datasets_rec/2026-02-08_07.33.20",
+  "reference": "/media/cybergeo/12T/CSSJ/datasets_proc_reference_g11_0109/2026-02-08_07.33.20",
+  "slam": {
+    "status": "not_aligned",
+    "imu_samples": 8480,
+    "adjacent_imu_factors": 1616,
+    "factor_residual_dimension": 9,
+    "exact_parameter_blocks": 15,
+    "candidate_reverted": true,
+    "candidate_ate_translation_mean_mm": 20.971,
+    "candidate_ate_translation_p95_mm": 39.661,
+    "candidate_ate_rotation_mean_deg": 0.290,
+    "candidate_ate_rotation_p95_deg": 0.431,
+    "candidate_rpe_1s_translation_mm": 4.443,
+    "candidate_rpe_1s_rotation_deg": 0.152
+  },
+  "color": {
+    "status": "partially_aligned",
+    "invalid_depth_replay": {
+      "path": "/tmp/nv_pct_captured_current.EA8nlh/depth",
+      "reason": "GDB parallel access order is not view ID order",
+      "all_negative_duplicate_maps": 12,
+      "invalid_direct_points": 318626,
+      "invalid_rgb_mae_8bit": 72.072378582225
+    },
+    "final_ovs": {
+      "reference_direct_points": 9463771,
+      "clean_direct_points": 9464532,
+      "direct_point_delta": 761,
+      "mask_iou": 0.999910931005551,
+      "matched_observations": 27749713,
+      "observation_rgb_exact_fraction": 0.9999999279271825,
+      "observation_rgb_max_delta": 1,
+      "oracle_gamma_direct_rgb_mae_8bit": 0.22983312856885052,
+      "oracle_gamma_full_rgb_mae_8bit": 0.3221218544823184
+    },
+    "auto_gamma_default_rgb_mae_8bit": 6.113879692420307,
+    "zero_histogram_experiment": {
+      "binary_dynamic_ranges_exact": "24/24",
+      "enabled_in_default": false,
+      "rgb_mae_8bit": 7.324627736136529,
+      "rgb_rmse_8bit": 11.485043669027885,
+      "psnr_db": 26.928150592055967,
+      "within_max_channel_delta_20_fraction": 0.872879078683678,
+      "bias_candidate_minus_reference": [
+        -4.4009085911050665,
+        -4.243272768607748,
+        -4.05046749087624
+      ],
+      "wall_seconds": 119.4,
+      "peak_rss_kib": 3544504
+    },
+    "reference_standalone_seconds": 18.9
+  },
+  "panorama": {
+    "status": "partially_aligned",
+    "method": "four-level screened-Laplacian depth densification",
+    "weight_ray": 1,
+    "before_mean_mae_1024": 10.2900788784,
+    "after_mean_mae_1024": 9.8801902135,
+    "before_mean_ssim_1024": 0.9073110421,
+    "after_mean_ssim_1024": 0.9257778227,
+    "before_mean_mae_8192": 11.6250178019,
+    "after_mean_mae_8192": 10.9626569748,
+    "original_projection_clean_stitch_mean_mae_2048": 5.4993577798
+  },
+  "tests": {
+    "ctest": "2/2",
+    "python": "14/14",
+    "runner_py_compile": true,
+    "slam_probe_py_compile": true,
+    "surface_frozen_acceptance": true
+  },
+  "workers": {
+    "surface_colorizer_sha256": "fc713fa7021cdd8389412de923226475e402c919fd679da321da73a19495ca86",
+    "panorama_sha256": "560c9e8db51ae3c31c308b0c98659cfd329d31c4e1e6139ff16e2510c8680925"
+  }
+}

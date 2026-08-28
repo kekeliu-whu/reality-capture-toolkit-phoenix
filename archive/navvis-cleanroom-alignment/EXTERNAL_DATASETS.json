@@ -1,0 +1,44 @@
+{
+  "schema": "navvis-cleanroom-external-resources-v1",
+  "bundle_root": ".",
+  "path_note": "All absolute paths below describe the source workstation and are not bundled dependencies.",
+  "canonical_g11": {
+    "dataset_id": "2026-02-08_07.33.20",
+    "recording": "/media/cybergeo/12T/CSSJ/datasets_rec/2026-02-08_07.33.20",
+    "reference": "/media/cybergeo/12T/CSSJ/datasets_proc_reference_g11_0109/2026-02-08_07.33.20",
+    "reference_pointcloud": "/media/cybergeo/12T/CSSJ/datasets_proc_reference_g11_0109/2026-02-08_07.33.20/pointcloud.ply",
+    "reference_trajectory": "/media/cybergeo/12T/CSSJ/datasets_proc_reference_g11_0109/2026-02-08_07.33.20/artifacts/trajectory.bag",
+    "latest_cleanroom": "/media/cybergeo/12T/CSSJ/datasets_proc_regression_20260823/2026-02-08_07.33.20",
+    "latest_surface_pointcloud": "/media/cybergeo/12T/CSSJ/datasets_proc_regression_20260823/2026-02-08_07.33.20/pointcloud_surface.ply",
+    "latest_colored_pointcloud": "/media/cybergeo/12T/CSSJ/datasets_proc_regression_20260823/2026-02-08_07.33.20/pointcloud.ply",
+    "latest_panoramas": "/media/cybergeo/12T/CSSJ/datasets_proc_regression_20260823/2026-02-08_07.33.20/panoramas",
+    "performance_experiments": "/media/cybergeo/12T/CSSJ/datasets_proc_performance_alignment_20260823",
+    "optimized_surface": "/media/cybergeo/12T/CSSJ/datasets_proc_performance_alignment_20260823/surface_scratch_freespace_8pre_8x4/pointcloud_surface.ply",
+    "optimized_panorama_run": "/media/cybergeo/12T/CSSJ/datasets_proc_performance_alignment_20260823/pano_parallel_8k_6capture"
+  },
+  "large_g11": {
+    "dataset_id": "2026-08-10_20.13.41",
+    "recording": "/media/cybergeo/12T/CSSJ/datasets_rec/2026-08-10_20.13.41",
+    "reference": "/media/cybergeo/12T/CSSJ/datasets_proc_reference/2026-08-10_20.13.41",
+    "notes": "Final expansion regression only; reference has 159147139 points and 299 panoramas."
+  },
+  "g10_vlp16": {
+    "dataset_id": "2023-05-15_10.18.42",
+    "recording": "/media/cybergeo/12T/CSSJ/datasets_rec/2023-05-15_10.18.42",
+    "reference": "/media/cybergeo/12T/CSSJ/datasets_proc_reference_vlp16/2023-05-15_10.18.42",
+    "valid_same_data_ground_truth": false,
+    "notes": "The raw recording is currently missing. Do not claim numerical alignment."
+  },
+  "other_available_dataset": {
+    "dataset_id": "2026-01-11_19.13.58",
+    "recording": "/media/cybergeo/12T/CSSJ/datasets_rec/2026-01-11_19.13.58",
+    "notes": "Not the canonical current module regression."
+  },
+  "vendor_binaries": {
+    "postprocessing": "/usr/bin/navvis-postprocessing",
+    "surface_filter": "/usr/bin/nv_cloud-surface-filter",
+    "panorama_renderer": "/usr/bin/nv_panorama-renderer",
+    "pointcloud_coloring": "/opt/NavVis/pointcloud-coloring/bin/nv_colorcloud",
+    "policy": "Reference-only static/dynamic analysis under authorization; never an implicit clean-room production dependency."
+  }
+}

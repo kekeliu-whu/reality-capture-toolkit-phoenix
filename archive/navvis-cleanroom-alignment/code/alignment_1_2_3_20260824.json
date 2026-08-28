@@ -1,0 +1,59 @@
+{
+  "date": "2026-08-24",
+  "superseded_by": "alignment_followup_20260824.json",
+  "dataset": "/media/cybergeo/12T/CSSJ/datasets_rec/2026-02-08_07.33.20",
+  "reference": "/media/cybergeo/12T/CSSJ/datasets_proc_reference_g11_0109/2026-02-08_07.33.20",
+  "slam": {
+    "status": "not_aligned",
+    "topology_exact": true,
+    "nodes": 1617,
+    "submaps": 6,
+    "memberships_reference": 2581,
+    "memberships_clean": 2572,
+    "loops_reference": 15,
+    "loops_clean": 18,
+    "loop_tp": 7,
+    "loop_fp": 11,
+    "loop_fn": 8,
+    "residual_eval_seconds_before": 5.09,
+    "residual_eval_seconds_after": 0.681,
+    "full_200_nfev_seconds": 42.84,
+    "imu_reference_samples": 8480,
+    "imu_clean_preintegrated_factors": 1616
+  },
+  "color": {
+    "status": "partially_aligned",
+    "crop_points": 122701,
+    "crop_auto_gamma_rgb_mae_255": 0.057943,
+    "full_previous_rgb_mae_255": 26.8549,
+    "exposure_points_reference": 416789,
+    "exposure_points_clean": 416789,
+    "exposure_colored_reference": 261325,
+    "exposure_colored_clean": 261408,
+    "full_auto_gamma_rgb_mae_255": 6.113879692420307,
+    "full_auto_gamma_psnr_db": 28.21299741317617,
+    "full_oracle_gamma_rgb_mae_255": 0.3221218545,
+    "full_ceres_gamma_rgb_mae_255": 6.405,
+    "clean_full_wall_seconds": 95.05,
+    "reference_standalone_wall_seconds": 18.90
+  },
+  "panorama": {
+    "status": "partially_aligned",
+    "count": 6,
+    "width": 8192,
+    "height": 4096,
+    "mae_before_255": 15.4569,
+    "mae_after_255": 10.2901,
+    "ssim_before": 0.698,
+    "ssim_after": 0.9073110421498617,
+    "wall_seconds": 145.78,
+    "reference_image_panorama_wall_seconds": 88.31,
+    "peak_rss_gb": 6.65
+  },
+  "tests": {
+    "ctest": "2/2",
+    "python": "14/14",
+    "runner_py_compile": true,
+    "short_end_to_end_smoke": true
+  }
+}
