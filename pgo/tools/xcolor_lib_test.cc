@@ -48,5 +48,10 @@ TEST(XColorNormalTest, SkipsFilteringForMissingNormal) {
       Eigen::Vector3d::Constant(std::numeric_limits<double>::quiet_NaN())));
 }
 
+TEST(XColorDistanceTest, UsesDirectCameraDistance) {
+  EXPECT_DOUBLE_EQ(ComputeCandidateDistance(Eigen::Vector3d(3.0, 4.0, 12.0)),
+                   13.0);
+}
+
 }  // namespace
 }  // namespace xcolor

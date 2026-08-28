@@ -325,6 +325,10 @@ bool IsNormalFacingCamera(const Eigen::Vector3d& point_in_camera,
   return normal_in_camera.dot(-point_in_camera) > 0.0;
 }
 
+double ComputeCandidateDistance(const Eigen::Vector3d& point_in_camera) {
+  return point_in_camera.norm();
+}
+
 DepthIntrinsics DepthIntrinsicsFromCamera(const colmap::Camera& camera) {
   DepthIntrinsics intrinsics;
   intrinsics.width = static_cast<int>(camera.width);
@@ -375,7 +379,7 @@ std::optional<std::pair<double, cv::Vec3b>> ComputeColorCandidates(
   }
 
   cv::Vec3b color = image.at<cv::Vec3b>(pixel.y(), pixel.x());
-  double distance = pt_in_cam.norm();
+  const double distance = ComputeCandidateDistance(pt_in_cam);
   return std::make_pair(distance, color);
 }
 
@@ -436,6 +440,8 @@ void WritePointCloudToLAS(
   table.layout()->registerDim(pdal::Dimension::Id::Red);
   table.layout()->registerDim(pdal::Dimension::Id::Green);
   table.layout()->registerDim(pdal::Dimension::Id::Blue);
+  table.layout()->registerDim(pdal::Dimension::Id::ReturnNumber);
+  table.layout()->registerDim(pdal::Dimension::Id::NumberOfReturns);
 
   migration::IncrementalLasWriter writer;
   writer.initialize(filename, table);
@@ -453,6 +459,10 @@ void WritePointCloudToLAS(
     view->setField(pdal::Dimension::Id::Red, chunk_index, cloud[i].r);
     view->setField(pdal::Dimension::Id::Green, chunk_index, cloud[i].g);
     view->setField(pdal::Dimension::Id::Blue, chunk_index, cloud[i].b);
+    view->setField(pdal::Dimension::Id::ReturnNumber, chunk_index, uint8_t{1});
+    view->setField(pdal::Dimension::Id::NumberOfReturns,
+                   chunk_index,
+                   point_states[i].count);
     ++output_count;
 
     if (view->size() >= kOutputPointChunkSize) {

@@ -3,8 +3,11 @@
 #include <colmap/scene/reconstruction.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <map>
 #include <optional>
@@ -96,6 +99,46 @@ std::optional<fs::path> FindMaskFile(const fs::path& masks_root,
   return std::nullopt;
 }
 
+bool HasNamedFloatNormalExtraBytes(const std::string& filename) {
+  std::ifstream input(filename, std::ios::binary);
+  std::array<unsigned char, 227> header{};
+  if (!input.read(reinterpret_cast<char*>(header.data()), header.size()) ||
+      std::string(reinterpret_cast<const char*>(header.data()), 4) != "LASF") {
+    return false;
+  }
+  const auto read_u16 = [&](size_t offset) {
+    return static_cast<uint16_t>(header[offset]) |
+           (static_cast<uint16_t>(header[offset + 1]) << 8);
+  };
+  const auto read_u32 = [&](size_t offset) {
+    return static_cast<uint32_t>(header[offset]) |
+           (static_cast<uint32_t>(header[offset + 1]) << 8) |
+           (static_cast<uint32_t>(header[offset + 2]) << 16) |
+           (static_cast<uint32_t>(header[offset + 3]) << 24);
+  };
+  constexpr std::array<uint16_t, 11> kBaseRecordLengths = {
+      20, 28, 26, 34, 57, 63, 30, 36, 38, 59, 67};
+  const uint8_t point_format = header[104] & 0x3f;
+  const uint16_t record_length = read_u16(105);
+  if (point_format >= kBaseRecordLengths.size() ||
+      record_length < kBaseRecordLengths[point_format] + 12) {
+    return false;
+  }
+  const uint16_t header_size = read_u16(94);
+  const uint32_t point_offset = read_u32(96);
+  if (point_offset <= header_size || point_offset - header_size > 16 * 1024 * 1024) {
+    return false;
+  }
+  std::string vlr_bytes(point_offset - header_size, '\0');
+  input.seekg(header_size);
+  if (!input.read(vlr_bytes.data(), vlr_bytes.size())) {
+    return false;
+  }
+  return vlr_bytes.find("NormalX") != std::string::npos &&
+         vlr_bytes.find("NormalY") != std::string::npos &&
+         vlr_bytes.find("NormalZ") != std::string::npos;
+}
+
 }  // namespace
 
 pcl::PointCloud<pcl::PointXYZRGBNormal> ReadPointCloudFromLAS(
@@ -109,6 +152,11 @@ pcl::PointCloud<pcl::PointXYZRGBNormal> ReadPointCloudFromLAS(
   pdal::Stage* reader = factory.createStage("readers.las");
   pdal::Options opts;
   opts.add(pdal::Option("filename", PlatformToUTF8(filename)));
+  if (HasNamedFloatNormalExtraBytes(filename)) {
+    opts.add(pdal::Option(
+        "extra_dims", "NormalX=float,NormalY=float,NormalZ=float"));
+    spdlog::info("Reading named NormalX/NormalY/NormalZ LAS extra bytes");
+  }
   reader->setOptions(opts);
 
   pdal::PointTable table;
@@ -118,20 +166,40 @@ pcl::PointCloud<pcl::PointXYZRGBNormal> ReadPointCloudFromLAS(
 
   spdlog::info("Converting {} points from LAS to PCL format", view->size());
 
+  const pdal::Dimension::Id normal_x_dim = view->layout()->findDim("NormalX");
+  const pdal::Dimension::Id normal_y_dim = view->layout()->findDim("NormalY");
+  const pdal::Dimension::Id normal_z_dim = view->layout()->findDim("NormalZ");
+  const bool has_normals = normal_x_dim != pdal::Dimension::Id::Unknown &&
+                           normal_y_dim != pdal::Dimension::Id::Unknown &&
+                           normal_z_dim != pdal::Dimension::Id::Unknown;
+
   // Convert PDAL points to PCL format
   cloud.reserve(view->size());
+  size_t valid_normal_count = 0;
   for (size_t i = 0; i < view->size(); ++i) {
     pcl::PointXYZRGBNormal point;
     point.x = view->getFieldAs<double>(pdal::Dimension::Id::X, i);
     point.y = view->getFieldAs<double>(pdal::Dimension::Id::Y, i);
     point.z = view->getFieldAs<double>(pdal::Dimension::Id::Z, i);
-    point.normal_x = std::numeric_limits<float>::quiet_NaN();
-    point.normal_y = std::numeric_limits<float>::quiet_NaN();
-    point.normal_z = std::numeric_limits<float>::quiet_NaN();
+    if (has_normals) {
+      point.normal_x = view->getFieldAs<float>(normal_x_dim, i);
+      point.normal_y = view->getFieldAs<float>(normal_y_dim, i);
+      point.normal_z = view->getFieldAs<float>(normal_z_dim, i);
+      if (point.getNormalVector3fMap().allFinite() &&
+          point.getNormalVector3fMap().squaredNorm() >= 1e-12f) {
+        ++valid_normal_count;
+      }
+    } else {
+      point.normal_x = std::numeric_limits<float>::quiet_NaN();
+      point.normal_y = std::numeric_limits<float>::quiet_NaN();
+      point.normal_z = std::numeric_limits<float>::quiet_NaN();
+    }
     cloud.push_back(point);
   }
 
-  spdlog::info("Loaded {} points from LAS file", cloud.size());
+  spdlog::info("Loaded {} points from LAS file; {} have valid normals",
+               cloud.size(),
+               valid_normal_count);
   return cloud;
 }
 

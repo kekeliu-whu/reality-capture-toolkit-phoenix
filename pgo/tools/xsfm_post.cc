@@ -77,6 +77,7 @@ struct Args {
   int image_step = 2;
   int num_workers = 10;
   bool overwrite = false;
+  bool front_only = false;
   bool generate_depths = true;
   std::string depth_mode = "dense";
   float depth_scale = 0.25f;
@@ -263,7 +264,15 @@ void ValidateRotationMatrix(const std::string& name,
   }
 }
 
-std::vector<FaceSpec> BuildFaceSpecs() {
+std::vector<FaceSpec> BuildFaceSpecs(bool front_only) {
+  if (front_only) {
+    FaceSpec front;
+    front.name = "front";
+    front.rotation_face_to_source = Eigen::Matrix3d::Identity();
+    ValidateRotationMatrix(front.name, front.rotation_face_to_source);
+    return {front};
+  }
+
   const double sq2 = std::sqrt(2.0);
   const double sq3 = std::sqrt(3.0);
   const double sq6 = std::sqrt(6.0);
@@ -343,6 +352,8 @@ Args ParseArgs(int argc, char** argv) {
       args.num_workers = std::stoi(require_value(key));
     } else if (key == "--overwrite") {
       args.overwrite = true;
+    } else if (key == "--front-only" || key == "--front_only") {
+      args.front_only = true;
     } else if (key == "--generate-depths" || key == "--generate_depths") {
       args.generate_depths = true;
     } else if (key == "--skip-depths" || key == "--skip_depths") {
@@ -1014,7 +1025,10 @@ int Run(int argc, char** argv) {
 
   colmap::Reconstruction reconstruction;
   reconstruction.Read(args.model_dir.string());
-  const std::vector<FaceSpec> face_specs = BuildFaceSpecs();
+  const std::vector<FaceSpec> face_specs = BuildFaceSpecs(args.front_only);
+  spdlog::info("[Setup] Perspective views per fisheye image: {} ({})",
+               face_specs.size(),
+               args.front_only ? "front-only" : "three-face coverage");
 
   std::set<colmap::camera_t> fisheye_camera_ids;
   std::set<colmap::camera_t> non_fisheye_camera_ids;
