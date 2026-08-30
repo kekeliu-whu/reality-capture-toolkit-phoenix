@@ -32,13 +32,17 @@ from typing import Iterable
 
 import cv2
 import numpy as np
-import rosbag
 from PIL import Image
 from scipy.spatial import cKDTree
 from scipy.spatial.transform import Rotation, Slerp
 
 RECON_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RECON_ROOT / "src"))
+
+try:
+    import rosbag  # type: ignore[import-not-found]
+except ModuleNotFoundError:
+    from navvis_recon import rosbag_compat as rosbag
 
 from navvis_recon.slam_reconstruction import (  # noqa: E402
     Trajectory as SlamTrajectory,

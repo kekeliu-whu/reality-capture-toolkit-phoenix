@@ -1,6 +1,9 @@
 #include "navvis_recon/slam_batch_collator.hpp"
 #include "navvis_recon/slam_frontend.hpp"
+#include "navvis_recon/slam_imu_file.hpp"
+#ifndef _WIN32
 #include "navvis_recon/slam_rosbag.hpp"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -24,6 +27,7 @@ namespace {
 struct Options {
   std::filesystem::path archive;
   std::filesystem::path imu_bag;
+  std::filesystem::path imu_file;
   std::filesystem::path output;
   std::filesystem::path state_output;
   std::size_t batch_limit = 0U;
@@ -84,6 +88,8 @@ Options parseOptions(const int argc, char** argv) {
       options.archive = value();
     } else if (argument == "--imu-bag") {
       options.imu_bag = value();
+    } else if (argument == "--imu-file") {
+      options.imu_file = value();
     } else if (argument == "--output") {
       options.output = value();
     } else if (argument == "--state-output") {
@@ -113,7 +119,8 @@ Options parseOptions(const int argc, char** argv) {
       options.frontend.motion_filter_maximum_angle_rad = 0.0;
     } else if (argument == "--help") {
       std::cout
-          << "usage: navvis_recon_slam --archive NVSLAM6 --imu-bag BAG "
+          << "usage: navvis_recon_slam --archive NVSLAM6 "
+             "(--imu-bag BAG | --imu-file RAW_IMU) "
              "--output TRAJECTORY.csv [--state-output FRONTEND.bin] "
              "[--batch-limit N] [--threads N] "
              "[--initial-pose tx,ty,tz,qx,qy,qz,qw] "
@@ -125,10 +132,17 @@ Options parseOptions(const int argc, char** argv) {
       throw std::invalid_argument("unknown option: " + argument);
     }
   }
-  if (options.archive.empty() || options.imu_bag.empty() ||
-      options.output.empty()) {
-    throw std::invalid_argument("--archive, --imu-bag and --output are required");
+  if (options.archive.empty() || options.output.empty() ||
+      (options.imu_bag.empty() == options.imu_file.empty())) {
+    throw std::invalid_argument(
+        "--archive, --output and exactly one of --imu-bag/--imu-file are required");
   }
+#ifdef _WIN32
+  if (!options.imu_bag.empty()) {
+    throw std::invalid_argument(
+        "--imu-bag requires ROS1; export it and pass --imu-file on Windows");
+  }
+#endif
   return options;
 }
 
@@ -300,15 +314,38 @@ int main(int argc, char** argv) {
     const Options options = parseOptions(argc, argv);
     const auto total_started = std::chrono::steady_clock::now();
     navvis_recon::slam::SlamBatchCollator collator(options.archive);
-    const std::size_t batch_count =
+    std::size_t batch_count =
         options.batch_limit == 0U
             ? collator.batchCount()
             : std::min(options.batch_limit, collator.batchCount());
     const std::int64_t end_timestamp_ns =
         collator.batchTimestampsNs().at(batch_count - 1U);
-    std::vector<navvis_recon::slam::ImuSample> imu =
-        navvis_recon::slam::loadRawImuRosbag(
-            options.imu_bag, "/imu/imu_raw/data", end_timestamp_ns);
+    std::vector<navvis_recon::slam::ImuSample> imu;
+    if (!options.imu_file.empty()) {
+      imu = navvis_recon::slam::loadRawImuFile(
+          options.imu_file, end_timestamp_ns);
+    } else {
+#ifndef _WIN32
+      imu = navvis_recon::slam::loadRawImuRosbag(
+          options.imu_bag, "/imu/imu_raw/data", end_timestamp_ns);
+#endif
+    }
+    const auto supported_end = std::upper_bound(
+        collator.batchTimestampsNs().begin(),
+        collator.batchTimestampsNs().begin() + batch_count,
+        imu.back().timestamp_ns);
+    const std::size_t supported_batch_count = static_cast<std::size_t>(
+        supported_end - collator.batchTimestampsNs().begin());
+    if (supported_batch_count < batch_count) {
+      std::cerr << "SLAM C++ trimming "
+                << (batch_count - supported_batch_count)
+                << " trailing batches beyond IMU support; last_imu_ns="
+                << imu.back().timestamp_ns << '\n';
+      batch_count = supported_batch_count;
+    }
+    if (batch_count == 0U) {
+      throw std::runtime_error("no lidar batches fall within IMU support");
+    }
     const double input_seconds = secondsSince(total_started);
 
     navvis_recon::slam::Pose predictor_initial =

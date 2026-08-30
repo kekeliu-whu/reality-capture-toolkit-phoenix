@@ -1830,9 +1830,10 @@ void renderPctDepthMaps(const std::vector<SurfacePoint>& surfels,
         return query;
     };
 
-    const auto intersect_candidates = [&surfels](const Vec3f& origin, const Vec3f& ray,
-                                                 const RayCandidateArray& candidates,
-                                                 std::size_t count) {
+    const auto intersect_candidates =
+        [&surfels, disc_radius_squared](const Vec3f& origin, const Vec3f& ray,
+                                        const RayCandidateArray& candidates,
+                                        std::size_t count) {
         float best_range_squared = std::numeric_limits<float>::max();
         bool found = false;
         for (std::size_t candidate = 0; candidate < count; ++candidate) {
@@ -2330,7 +2331,12 @@ const cv::Mat& fibonacciNormalDirections() {
             const float angle = turns * two_pi;
             float sine = 0.0F;
             float cosine = 0.0F;
+#if defined(_MSC_VER)
+            sine = ::sinf(angle);
+            cosine = ::cosf(angle);
+#else
             ::sincosf(angle, &sine, &cosine);
+#endif
             const float z = 1.0F - ((value + value) + 1.0F) / code_scale;
             const float radius = ::sqrtf(std::max(0.0F, 1.0F - z * z));
             result.at<float>(code, 0) = radius * cosine;

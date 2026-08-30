@@ -5,13 +5,18 @@
 #include <cerrno>
 #include <cmath>
 #include <cstring>
+#ifdef _WIN32
+#define NOMINMAX
+#include <Windows.h>
+#else
 #include <fcntl.h>
-#include <limits>
-#include <stdexcept>
-#include <string>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
+#include <limits>
+#include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace navvis_recon {
@@ -123,7 +128,23 @@ std::uint64_t checkedAdvance(
 }
 
 std::runtime_error systemFailure(const std::string& operation) {
+#ifdef _WIN32
+    const DWORD code = GetLastError();
+    char* buffer = nullptr;
+    const DWORD length = FormatMessageA(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+            FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr, code, 0, reinterpret_cast<char*>(&buffer), 0, nullptr);
+    std::string message = length != 0U && buffer != nullptr
+                              ? std::string(buffer, length)
+                              : "Windows error " + std::to_string(code);
+    if (buffer != nullptr) {
+        LocalFree(buffer);
+    }
+    return std::runtime_error(operation + ": " + message);
+#else
     return std::runtime_error(operation + ": " + std::strerror(errno));
+#endif
 }
 
 const std::array<float, 6>& sensorOrigins() {
@@ -185,17 +206,35 @@ FormatDescription describeFormat(SlamArchiveVersion version) {
 
 struct SlamScanArchive::Impl {
     ~Impl() {
+#ifdef _WIN32
+        if (mapping != nullptr) {
+            UnmapViewOfFile(mapping);
+        }
+        if (mapping_handle != nullptr) {
+            CloseHandle(mapping_handle);
+        }
+        if (file_handle != INVALID_HANDLE_VALUE) {
+            CloseHandle(file_handle);
+        }
+#else
         if (mapping != MAP_FAILED) {
             ::munmap(mapping, mapping_size);
         }
         if (file_descriptor >= 0) {
             ::close(file_descriptor);
         }
+#endif
     }
 
     std::filesystem::path path;
+#ifdef _WIN32
+    HANDLE file_handle = INVALID_HANDLE_VALUE;
+    HANDLE mapping_handle = nullptr;
+    void* mapping = nullptr;
+#else
     int file_descriptor = -1;
     void* mapping = MAP_FAILED;
+#endif
     std::size_t mapping_size = 0U;
     std::uint64_t file_size = 0U;
     SlamArchiveVersion version = SlamArchiveVersion::V1;
@@ -249,6 +288,27 @@ SlamScanArchive::SlamScanArchive(const std::filesystem::path& path)
     }
 
     impl_->path = path;
+#ifdef _WIN32
+    impl_->file_handle = CreateFileW(
+        path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (impl_->file_handle == INVALID_HANDLE_VALUE) {
+        throw systemFailure("cannot open SLAM scan archive " + path.string());
+    }
+    if (GetFileType(impl_->file_handle) != FILE_TYPE_DISK) {
+        throw std::runtime_error("SLAM scan archive is not a regular file: " + path.string());
+    }
+    LARGE_INTEGER status_size{};
+    if (!GetFileSizeEx(impl_->file_handle, &status_size)) {
+        throw systemFailure("cannot stat SLAM scan archive " + path.string());
+    }
+    if (status_size.QuadPart < 0 ||
+        static_cast<std::uint64_t>(status_size.QuadPart) >
+            std::numeric_limits<std::size_t>::max()) {
+        throw std::runtime_error("SLAM scan archive size is unsupported");
+    }
+    impl_->file_size = static_cast<std::uint64_t>(status_size.QuadPart);
+#else
     impl_->file_descriptor = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
     if (impl_->file_descriptor < 0) {
         throw systemFailure("cannot open SLAM scan archive " + path.string());
@@ -266,16 +326,30 @@ SlamScanArchive::SlamScanArchive(const std::filesystem::path& path)
         throw std::runtime_error("SLAM scan archive size is unsupported");
     }
     impl_->file_size = static_cast<std::uint64_t>(status.st_size);
+#endif
     impl_->mapping_size = static_cast<std::size_t>(impl_->file_size);
     if (impl_->mapping_size < kMagicSize) {
         throw std::runtime_error("truncated SLAM scan archive magic");
     }
 
+#ifdef _WIN32
+    impl_->mapping_handle = CreateFileMappingW(
+        impl_->file_handle, nullptr, PAGE_READONLY, 0, 0, nullptr);
+    if (impl_->mapping_handle == nullptr) {
+        throw systemFailure("cannot create SLAM scan archive mapping " + path.string());
+    }
+    impl_->mapping = MapViewOfFile(
+        impl_->mapping_handle, FILE_MAP_READ, 0, 0, impl_->mapping_size);
+    if (impl_->mapping == nullptr) {
+        throw systemFailure("cannot map SLAM scan archive " + path.string());
+    }
+#else
     impl_->mapping = ::mmap(
         nullptr, impl_->mapping_size, PROT_READ, MAP_PRIVATE, impl_->file_descriptor, 0);
     if (impl_->mapping == MAP_FAILED) {
         throw systemFailure("cannot mmap SLAM scan archive " + path.string());
     }
+#endif
 
     const std::byte* bytes = impl_->bytes();
     bool recognized = false;
@@ -357,6 +431,15 @@ SlamScanArchive::SlamScanArchive(const std::filesystem::path& path)
             return left.timestamp_ns < right.timestamp_ns;
         });
 
+#ifdef _WIN32
+    LARGE_INTEGER final_size{};
+    if (!GetFileSizeEx(impl_->file_handle, &final_size)) {
+        throw systemFailure("cannot re-stat SLAM scan archive " + path.string());
+    }
+    if (final_size.QuadPart != status_size.QuadPart) {
+        throw std::runtime_error("SLAM scan archive changed while metadata was read");
+    }
+#else
     struct stat final_status {};
     if (::fstat(impl_->file_descriptor, &final_status) != 0) {
         throw systemFailure("cannot re-stat SLAM scan archive " + path.string());
@@ -364,6 +447,7 @@ SlamScanArchive::SlamScanArchive(const std::filesystem::path& path)
     if (final_status.st_size != status.st_size) {
         throw std::runtime_error("SLAM scan archive changed while metadata was read");
     }
+#endif
 }
 
 SlamScanArchive::~SlamScanArchive() = default;

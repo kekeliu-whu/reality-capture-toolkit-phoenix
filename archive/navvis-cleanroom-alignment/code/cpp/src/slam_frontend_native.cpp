@@ -4,6 +4,7 @@
 #include <Eigen/Geometry>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -2687,9 +2688,8 @@ int navvis_recon_slam_oriented_surfel_geometry(
        normals == nullptr || eigenvalues == nullptr)) {
     return 1;
   }
-  int failure = 0;
-#pragma omp parallel for schedule(static) if (state_count >= 1024) \
-    reduction(max : failure)
+  std::atomic<bool> failure{false};
+#pragma omp parallel for schedule(static) if (state_count >= 1024)
   for (std::int64_t signed_index = 0;
        signed_index < static_cast<std::int64_t>(state_count);
        ++signed_index) {
@@ -2698,7 +2698,7 @@ int navvis_recon_slam_oriented_surfel_geometry(
     Eigen::Vector3f values_ascending;
     if (!surfel_geometry(covariances + 9 * index, &normal,
                          &values_ascending)) {
-      failure = 2;
+      failure.store(true, std::memory_order_relaxed);
       continue;
     }
     orient_surfel_normal(means + 3 * index, viewpoint_means + 3 * index,
@@ -2708,7 +2708,7 @@ int navvis_recon_slam_oriented_surfel_geometry(
       normals[3 * index + axis] = normal[axis];
     }
   }
-  return failure;
+  return failure.load(std::memory_order_relaxed) ? 2 : 0;
 }
 
 // Perform the single Gauss-Newton point-to-plane step used by the local

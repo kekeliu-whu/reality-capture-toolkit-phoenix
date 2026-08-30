@@ -9,6 +9,7 @@ dependencies = [
     "opencv-python>=4.5",
     "Pillow>=9",
     "Brotli>=1",
+    "rosbags>=0.10; sys_platform == 'win32'",
 ]
 
 [tool.pytest.ini_options]

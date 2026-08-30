@@ -613,7 +613,7 @@ cv::Mat1d PanoramaDepthRenderer::render(
     std::vector<int> candidates;
     std::size_t projected = 0U;
 
-    const auto panorama_ray = [width, height](int column, int row) {
+    const auto panorama_ray = [width, height, pi](int column, int row) {
         const double latitude =
             (0.5 - (static_cast<double>(row) + 0.5) / height) * pi;
         const double longitude =

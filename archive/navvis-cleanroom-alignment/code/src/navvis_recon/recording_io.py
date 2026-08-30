@@ -10,7 +10,10 @@ from typing import Iterable, Iterator
 import xml.etree.ElementTree as ET
 
 import numpy as np
-import rosbag
+try:
+    import rosbag  # type: ignore[import-not-found]
+except ModuleNotFoundError:
+    from . import rosbag_compat as rosbag
 from scipy.spatial.transform import Rotation
 
 

@@ -161,7 +161,12 @@ Vec3f decodeSphericalFibonacci(std::uint32_t index) {
     const double angle = 2.0 * pi * fractional_turn;
     double sine = 0.0;
     double cosine = 0.0;
+#if defined(_MSC_VER)
+    sine = std::sin(angle);
+    cosine = std::cos(angle);
+#else
     ::sincos(angle, &sine, &cosine);
+#endif
     return Vec3f(static_cast<float>(radius * cosine), static_cast<float>(radius * sine),
                  static_cast<float>(z));
 }

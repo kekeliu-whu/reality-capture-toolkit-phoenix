@@ -27,6 +27,11 @@
 #include <unordered_map>
 #include <vector>
 
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
+
 namespace fs = std::filesystem;
 using namespace navvis_recon;
 
@@ -111,6 +116,15 @@ float pandarSdkElevationCos(float radians) {
     return ::cosf(radians);
 }
 
+void pandarSdkSinCos(float radians, float* sine, float* cosine) {
+#if defined(_MSC_VER)
+    *sine = ::sinf(radians);
+    *cosine = ::cosf(radians);
+#else
+    ::sincosf(radians, sine, cosine);
+#endif
+}
+
 // Exact parameters embedded in cloud_builder's
 // PlaneFilter<PointXYZNormalITR> used for the G11 vertical-foot region.
 constexpr float kFootRegionRadiusSquared = 0.25F;
@@ -156,7 +170,7 @@ PandarSdkTrigonometry::PandarSdkTrigonometry() {
     for (int index = 0; index < kPandarAngleCount; ++index) {
         const double degrees = static_cast<double>(index) * 0.01;
         const float radians = static_cast<float>(degrees * kPiDouble / 180.0);
-        ::sincosf(radians, &azimuth_sin[index], &azimuth_cos[index]);
+        pandarSdkSinCos(radians, &azimuth_sin[index], &azimuth_cos[index]);
     }
     for (int ring = 0; ring < kRings; ++ring) {
         const float radians = static_cast<float>(
@@ -1201,8 +1215,8 @@ std::array<std::array<DecodedPoint, kRings>, kBlocks> decodePandarPacket(
             float cos_azimuth = 0.0F;
             float sin_elevation = 0.0F;
             float cos_elevation = 0.0F;
-            ::sincosf(azimuth, &sin_azimuth, &cos_azimuth);
-            ::sincosf(elevation, &sin_elevation, &cos_elevation);
+            pandarSdkSinCos(azimuth, &sin_azimuth, &cos_azimuth);
+            pandarSdkSinCos(elevation, &sin_elevation, &cos_elevation);
             result[block][ring].xyz = Vec3f(
                 corrected_distance * cos_azimuth * cos_elevation +
                     calibration.ray_parallax_amplitude *
@@ -1655,7 +1669,9 @@ OrderedPandarScan orderPandarScan(
         Vec3f::Constant(std::numeric_limits<float>::quiet_NaN()));
     std::vector<float> point_angles(points.size());
 #pragma omp parallel for schedule(static)
-    for (std::size_t index = 0; index < points.size(); ++index) {
+    for (std::int64_t signed_index = 0;
+         signed_index < static_cast<std::int64_t>(points.size()); ++signed_index) {
+        const std::size_t index = static_cast<std::size_t>(signed_index);
         const Vec3f& xyz = result.coordinates[index];
         point_angles[index] = std::atan2(xyz.y(), xyz.x());
     }
@@ -2122,7 +2138,10 @@ void decodePandarScan(
     using DecodedPacket = std::array<std::array<DecodedPoint, kRings>, kBlocks>;
     std::vector<DecodedPacket> decoded(scan.packets.size());
 #pragma omp parallel for schedule(static)
-    for (std::size_t packet_index = 0; packet_index < scan.packets.size(); ++packet_index) {
+    for (std::int64_t signed_packet_index = 0;
+         signed_packet_index < static_cast<std::int64_t>(scan.packets.size());
+         ++signed_packet_index) {
+        const std::size_t packet_index = static_cast<std::size_t>(signed_packet_index);
         decoded[packet_index] = decodePandarPacket(
             scan.packets[packet_index].data, scan.sensor, options);
     }
@@ -2282,7 +2301,9 @@ std::size_t flushPandarSlamScan(
         scan.sensor == 0U ? options.rig_from_horiz : options.rig_from_vert;
     std::vector<SlamScanPointNs> accepted;
     accepted.reserve(scan.points.size());
-    for (std::size_t index = 0; index < scan.points.size(); ++index) {
+    for (std::int64_t signed_index = 0;
+         signed_index < static_cast<std::int64_t>(scan.points.size()); ++signed_index) {
+        const std::size_t index = static_cast<std::size_t>(signed_index);
         const Eigen::Vector3d filter_point =
             scan.points[index].point.filter_xyz.cast<double>();
         // Preserve finite long-range returns in the raw SLAM archive.  The
@@ -2596,7 +2617,9 @@ std::size_t flushPandarScan(
     }
     const auto transform_started = SteadyClock::now();
 #pragma omp parallel for schedule(static)
-    for (std::size_t index = 0; index < scan.points.size(); ++index) {
+    for (std::int64_t signed_index = 0;
+         signed_index < static_cast<std::int64_t>(scan.points.size()); ++signed_index) {
+        const std::size_t index = static_cast<std::size_t>(signed_index);
         const BufferedPandarPoint& buffered = scan.points[index];
         const Eigen::Matrix4f& world_from_sensor =
             world_from_sensor_matrices[point_transform_indices[index]];
@@ -2733,6 +2756,11 @@ PacketFormat processVelodynePacket(
 
 int main(int argc, char** argv) {
     try {
+#ifdef _WIN32
+        if (_setmode(_fileno(stdin), _O_BINARY) == -1) {
+            throw std::runtime_error("failed to set stdin to binary mode");
+        }
+#endif
         const auto total_started = SteadyClock::now();
         const Options options = parseArguments(argc, argv);
         if (!options.slam_scans_output.empty()) {

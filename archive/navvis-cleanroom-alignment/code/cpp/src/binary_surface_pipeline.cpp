@@ -589,7 +589,10 @@ std::vector<BinarySurfacePoint> estimateNormals(const std::vector<BinarySurfaceI
 #ifdef _OPENMP
 #pragma omp for schedule(static)
 #endif
-        for (std::size_t point_index = 0U; point_index < input.size(); ++point_index) {
+        for (std::int64_t signed_point_index = 0;
+             signed_point_index < static_cast<std::int64_t>(input.size());
+             ++signed_point_index) {
+            const std::size_t point_index = static_cast<std::size_t>(signed_point_index);
             Vec3f selected_normal = Vec3f::Zero();
             bool fallback_written = false;
             for (const float radius : radii) {
@@ -652,7 +655,10 @@ std::vector<BinarySurfacePoint> selectSurfacePoints(const std::vector<BinarySurf
 #ifdef _OPENMP
 #pragma omp for schedule(static)
 #endif
-        for (std::size_t point_index = 0U; point_index < input.size(); ++point_index) {
+        for (std::int64_t signed_point_index = 0;
+             signed_point_index < static_cast<std::int64_t>(input.size());
+             ++signed_point_index) {
+            const std::size_t point_index = static_cast<std::size_t>(signed_point_index);
             index.radius(input[point_index].xyz, options.selection_radius, neighbors);
             ranked.clear();
             if (ranked.capacity() < neighbors.size()) {
@@ -1076,7 +1082,10 @@ std::vector<float> meanNeighborDistances(const std::vector<BinarySurfacePoint>& 
 #ifdef _OPENMP
 #pragma omp for schedule(static)
 #endif
-        for (std::size_t point_index = 0U; point_index < points.size(); ++point_index) {
+        for (std::int64_t signed_point_index = 0;
+             signed_point_index < static_cast<std::int64_t>(points.size());
+             ++signed_point_index) {
+            const std::size_t point_index = static_cast<std::size_t>(signed_point_index);
             std::size_t neighbor_count = 0U;
             index.nearest(points[point_index].xyz, count, neighbors.data(), neighbor_count);
             float sum = 0.0F;
@@ -1156,7 +1165,9 @@ std::vector<BinarySurfacePoint> adaptiveSor(const std::vector<BinarySurfacePoint
 #ifdef _OPENMP
 #pragma omp for schedule(static)
 #endif
-        for (std::size_t index = 0U; index < input.size(); ++index) {
+        for (std::int64_t signed_index = 0;
+             signed_index < static_cast<std::int64_t>(input.size()); ++signed_index) {
+            const std::size_t index = static_cast<std::size_t>(signed_index);
             std::size_t neighbor_count = 0U;
             spatial.nearest(input[index].normal, query_count, neighbors.data(), neighbor_count);
             for (std::size_t neighbor = 0U; neighbor < neighbor_count; ++neighbor) {
@@ -1228,7 +1239,10 @@ std::vector<BinarySurfacePoint> postFilter(const std::vector<BinarySurfacePoint>
 #ifdef _OPENMP
 #pragma omp for schedule(static)
 #endif
-        for (std::size_t point_index = 0U; point_index < input.size(); ++point_index) {
+        for (std::int64_t signed_point_index = 0;
+             signed_point_index < static_cast<std::int64_t>(input.size());
+             ++signed_point_index) {
+            const std::size_t point_index = static_cast<std::size_t>(signed_point_index);
             index.radius(input[point_index].xyz, options.post_radius, neighbors);
             const BinarySurfacePoint& query = input[point_index];
             const float squared_radius = options.post_radius * options.post_radius;
@@ -1969,7 +1983,9 @@ classifyBinaryOcclusionRays(const std::vector<BinarySurfaceInput>& raw_rays,
 #ifdef _OPENMP
 #pragma omp for schedule(static)
 #endif
-        for (std::size_t index = 0U; index < raw_rays.size(); ++index) {
+        for (std::int64_t signed_index = 0;
+             signed_index < static_cast<std::int64_t>(raw_rays.size()); ++signed_index) {
+            const std::size_t index = static_cast<std::size_t>(signed_index);
             statuses[index] = classifyOcclusionRay(
                 raw_rays[index], helper, octree, local_index, occlusion_options, endpoint_neighbors,
                 diagnostics != nullptr ? &(*diagnostics)[index] : nullptr);

@@ -1,6 +1,8 @@
 #include <libraw/libraw.h>
 
+#if !defined(_WIN32)
 #include <dlfcn.h>
+#endif
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -514,6 +516,7 @@ void checkLibRaw(int status, const fs::path& path, const char* operation) {
 class DngHost {
 public:
     DngHost() {
+#if !defined(_WIN32)
         // The LibRaw 0.22 build installed with NavVis delegates this camera's
         // 8-bit linear DNG to Adobe's DNG SDK. dng_host is 0x68 bytes in the
         // installed ABI (also visible in the original stack layout). Its
@@ -523,6 +526,7 @@ public:
         destructor_ = resolve<Destructor>("_ZN8dng_hostD1Ev");
         constructor_(storage_.data(), nullptr, nullptr);
         live_ = true;
+#endif
     }
 
     DngHost(const DngHost&) = delete;
@@ -530,16 +534,25 @@ public:
 
     ~DngHost() { destroy(); }
 
-    void* get() { return storage_.data(); }
+    void* get() {
+#if defined(_WIN32)
+        return nullptr;
+#else
+        return storage_.data();
+#endif
+    }
 
     void destroy() {
+#if !defined(_WIN32)
         if (live_) {
             destructor_(storage_.data());
             live_ = false;
         }
+#endif
     }
 
 private:
+#if !defined(_WIN32)
     template <typename Function>
     static Function resolve(const char* symbol) {
         dlerror();
@@ -559,6 +572,7 @@ private:
     Constructor constructor_ = nullptr;
     Destructor destructor_ = nullptr;
     bool live_ = false;
+#endif
 };
 
 void configureCommonRawParameters(libraw_data_t* raw) {
@@ -630,9 +644,12 @@ ProcessedDng postprocessDngHighQuality(const fs::path& path) {
         throw std::runtime_error("libraw_init failed");
     }
     try {
-        static_cast<LibRaw*>(raw->parent_class)->set_dng_host(dng_host.get());
+        if (dng_host.get() != nullptr) {
+            static_cast<LibRaw*>(raw->parent_class)->set_dng_host(dng_host.get());
+        }
         configureCommonRawParameters(raw);
-        checkLibRaw(libraw_open_file(raw, path.c_str()), path, "open");
+        const std::string raw_path = path.string();
+        checkLibRaw(libraw_open_file(raw, raw_path.c_str()), path, "open");
         checkLibRaw(libraw_unpack(raw), path, "unpack");
         const float iso_sensitivity = raw->other.iso_speed;
         // Preserve the TIFF display orientation before user_flip=0 is applied
@@ -1627,6 +1644,13 @@ BlendResult blendEquirectangular(
         throw std::runtime_error("Multi-band blend inputs have inconsistent sizes");
     }
 
+    int maximum_bands = 0;
+    for (int rows = images.front().rows, columns = images.front().cols;
+         rows > 1 && columns > 1; rows /= 2, columns /= 2) {
+        ++maximum_bands;
+    }
+    number_of_bands = std::min(number_of_bands, maximum_bands);
+
     std::vector<cv::Mat> accumulated_images;
     std::vector<cv::Mat> accumulated_weights;
     accumulated_images.reserve(number_of_bands + 1);
@@ -1637,6 +1661,8 @@ BlendResult blendEquirectangular(
     // time: retaining all four image/weight pyramids adds several GiB at 8K
     // without affecting the accumulation order or ROI-parent semantics.
     for (std::size_t camera = 0; camera < images.size(); ++camera) {
+        std::cerr << "Blend: building camera " << (camera + 1U) << '/'
+                  << images.size() << " pyramid\n";
         const BlendPyramids pyramid = buildBlendPyramids(
             images[camera], seam_masks[camera], number_of_bands);
         if (camera == 0U) {
@@ -1660,6 +1686,8 @@ BlendResult blendEquirectangular(
             accumulated_images[level] += image_float.mul(weight3);
             accumulated_weights[level] += pyramid.weight[level];
         }
+        std::cerr << "Blend: accumulated camera " << (camera + 1U) << '/'
+                  << images.size() << '\n';
     }
 
     // The binary normalization worker computes one float32 reciprocal from
@@ -1949,6 +1977,8 @@ cv::Mat stitch(
     std::vector<cv::Mat> prepared_images;
     prepared_images.reserve(images.size());
     for (std::size_t index = 0; index < images.size(); ++index) {
+        std::cerr << "Blend: preparing camera " << (index + 1U) << '/'
+                  << images.size() << '\n';
         prepared_images.push_back(
             pyramidInpaint(images[index], masks[index], false));
         if (!debug_directory.empty()) {

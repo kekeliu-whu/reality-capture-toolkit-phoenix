@@ -9,12 +9,18 @@ find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 find_package(OpenCV 4 REQUIRED COMPONENTS core imgproc photo imgcodecs stitching)
 find_package(OpenMP)
 find_package(Ceres QUIET)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(ROS1 REQUIRED IMPORTED_TARGET rosbag sensor_msgs)
-find_library(
-    BrotliEncoder_LIBRARY
-    NAMES brotlienc libbrotlienc.so.1
-    REQUIRED)
+if(WIN32)
+    find_package(unofficial-brotli CONFIG REQUIRED)
+    find_package(PCL CONFIG REQUIRED COMPONENTS common octree)
+    set(BrotliEncoder_LIBRARY unofficial::brotli::brotlienc)
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(ROS1 REQUIRED IMPORTED_TARGET rosbag sensor_msgs)
+    find_library(
+        BrotliEncoder_LIBRARY
+        NAMES brotlienc libbrotlienc.so.1
+        REQUIRED)
+endif()
 find_path(
     PCL_HEADER_ONLY_INCLUDE_DIR
     NAMES pcl/octree/octree_search.h
@@ -24,18 +30,34 @@ if(NOT PCL_HEADER_ONLY_INCLUDE_DIR)
         "PCL octree headers are required for the byte-exact panorama sparse-depth renderer. "
         "Install libpcl-dev or pass -DPCL_HEADER_ONLY_INCLUDE_DIR=/path/to/pcl/include.")
 endif()
-find_path(
-    LibRaw_INCLUDE_DIR
-    NAMES libraw/libraw.h
-    HINTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/libraw/include")
-# nv_image-postprocessing is linked to LibRaw 0.22 (SONAME liblibraw.so.24).
-# Its public C structure is ABI-versioned, so compiling against the older
-# Debian 0.20 headers while loading .24 silently writes the wrong offsets.
-find_file(
-    LibRaw22_LIBRARY
-    NAMES liblibraw.so.24
-    PATHS /lib /usr/lib /usr/local/lib
-    PATH_SUFFIXES x86_64-linux-gnu aarch64-linux-gnu)
+if(WIN32)
+    find_package(libraw CONFIG REQUIRED)
+    set(LibRaw22_LIBRARY libraw::raw_r)
+    get_target_property(LibRaw_INCLUDE_DIR libraw::raw_r INTERFACE_INCLUDE_DIRECTORIES)
+else()
+    find_path(
+        LibRaw_INCLUDE_DIR
+        NAMES libraw/libraw.h
+        HINTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/libraw/include")
+    # nv_image-postprocessing is linked to LibRaw 0.22 (SONAME liblibraw.so.24).
+    # Its public C structure is ABI-versioned, so compiling against the older
+    # Debian 0.20 headers while loading .24 silently writes the wrong offsets.
+    find_file(
+        LibRaw22_LIBRARY
+        NAMES liblibraw.so.24
+        PATHS /lib /usr/lib /usr/local/lib
+        PATH_SUFFIXES x86_64-linux-gnu aarch64-linux-gnu)
+endif()
+
+function(navvis_recon_enable_strict_fp target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /fp:strict)
+        target_compile_definitions(${target} PRIVATE _USE_MATH_DEFINES)
+    else()
+        target_compile_options(
+            ${target} PRIVATE -Wall -Wextra -Wpedantic -ffp-contract=off)
+    endif()
+endfunction()
 
 # Small C ABI used by the Python SLAM reconstruction.  The installed matcher
 # stores surfel statistics as float and updates them one hit at a time; doing
@@ -44,31 +66,37 @@ add_library(
     navvis_recon_slam_frontend_native SHARED
     src/slam_frontend_native.cpp)
 target_link_libraries(navvis_recon_slam_frontend_native PRIVATE Eigen3::Eigen)
-target_compile_options(
-    navvis_recon_slam_frontend_native PRIVATE
-    -Wall -Wextra -Wpedantic -ffp-contract=off)
+navvis_recon_enable_strict_fp(navvis_recon_slam_frontend_native)
+if(WIN32)
+    set_target_properties(
+        navvis_recon_slam_frontend_native PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+endif()
 if(OpenMP_CXX_FOUND)
     target_link_libraries(
         navvis_recon_slam_frontend_native PRIVATE OpenMP::OpenMP_CXX)
 endif()
 
 # Complete C++ SurveyorSLAM frontend.  Python remains an offline oracle only;
-# the production executable reads NVSLAM6 and ROS1 IMU input directly.
+# the production executable reads NVSLAM6 and a lossless raw IMU handoff.
 add_library(
     navvis_recon_slam_runtime
     src/slam_archive.cpp
     src/slam_imu.cpp
+    src/slam_imu_file.cpp
     src/slam_batch_collator.cpp
-    src/slam_frontend.cpp
-    src/slam_rosbag.cpp)
+    src/slam_frontend.cpp)
+if(NOT WIN32)
+    target_sources(navvis_recon_slam_runtime PRIVATE src/slam_rosbag.cpp)
+endif()
 target_include_directories(navvis_recon_slam_runtime PUBLIC include)
 target_link_libraries(
     navvis_recon_slam_runtime
-    PUBLIC Eigen3::Eigen PkgConfig::ROS1
+    PUBLIC Eigen3::Eigen
     PRIVATE navvis_recon_slam_frontend_native)
-target_compile_options(
-    navvis_recon_slam_runtime PRIVATE
-    -Wall -Wextra -Wpedantic -ffp-contract=off)
+if(NOT WIN32)
+    target_link_libraries(navvis_recon_slam_runtime PUBLIC PkgConfig::ROS1)
+endif()
+navvis_recon_enable_strict_fp(navvis_recon_slam_runtime)
 
 add_executable(navvis_recon_slam apps/slam_pipeline.cpp)
 target_link_libraries(navvis_recon_slam PRIVATE navvis_recon_slam_runtime)
@@ -85,8 +113,10 @@ add_executable(
 target_link_libraries(
     navvis_recon_slam_batch_collator_test PRIVATE navvis_recon_slam_runtime)
 
-add_executable(navvis_recon_slam_rosbag_test tests/slam_rosbag_test.cpp)
-target_link_libraries(navvis_recon_slam_rosbag_test PRIVATE navvis_recon_slam_runtime)
+if(NOT WIN32)
+    add_executable(navvis_recon_slam_rosbag_test tests/slam_rosbag_test.cpp)
+    target_link_libraries(navvis_recon_slam_rosbag_test PRIVATE navvis_recon_slam_runtime)
+endif()
 
 add_library(navvis_recon
     src/binary_surface_pipeline.cpp
@@ -99,7 +129,10 @@ add_library(navvis_recon
 target_include_directories(navvis_recon PUBLIC include)
 target_include_directories(navvis_recon SYSTEM PRIVATE ${PCL_HEADER_ONLY_INCLUDE_DIR})
 target_link_libraries(navvis_recon PUBLIC Eigen3::Eigen ${OpenCV_LIBS} ${BrotliEncoder_LIBRARY})
-target_compile_options(navvis_recon PRIVATE -Wall -Wextra -Wpedantic -ffp-contract=off)
+if(WIN32)
+    target_link_libraries(navvis_recon PUBLIC pcl_common pcl_octree)
+endif()
+navvis_recon_enable_strict_fp(navvis_recon)
 if(OpenMP_CXX_FOUND)
     target_link_libraries(navvis_recon PUBLIC OpenMP::OpenMP_CXX)
 endif()
@@ -144,8 +177,10 @@ if(Ceres_FOUND)
     # Emit DT_RPATH instead of DT_RUNPATH so its indirect SuiteSparse
     # dependencies (for example libspqr.so.2) are resolved from that same
     # self-contained runtime without requiring LD_PRELOAD/LD_LIBRARY_PATH.
-    target_link_options(
-        navvis_recon_surface_colorizer PRIVATE LINKER:--disable-new-dtags)
+    if(NOT MSVC)
+        target_link_options(
+            navvis_recon_surface_colorizer PRIVATE LINKER:--disable-new-dtags)
+    endif()
     target_compile_definitions(navvis_recon_surface_colorizer PRIVATE NAVVIS_RECON_HAVE_CERES=1)
 
     add_executable(
@@ -153,20 +188,22 @@ if(Ceres_FOUND)
         apps/stage1_imu_ceres_solver.cpp)
     target_link_libraries(
         navvis_recon_stage1_imu_ceres_solver PRIVATE Ceres::ceres Eigen3::Eigen)
-    target_link_options(
-        navvis_recon_stage1_imu_ceres_solver PRIVATE LINKER:--disable-new-dtags)
-    target_compile_options(
-        navvis_recon_stage1_imu_ceres_solver PRIVATE -Wall -Wextra -Wpedantic)
+    if(NOT MSVC)
+        target_link_options(
+            navvis_recon_stage1_imu_ceres_solver PRIVATE LINKER:--disable-new-dtags)
+    endif()
+    navvis_recon_enable_strict_fp(navvis_recon_stage1_imu_ceres_solver)
 
     add_executable(
         navvis_recon_stage2_imu_ceres_solver
         apps/stage2_imu_ceres_solver.cpp)
     target_link_libraries(
         navvis_recon_stage2_imu_ceres_solver PRIVATE Ceres::ceres Eigen3::Eigen)
-    target_link_options(
-        navvis_recon_stage2_imu_ceres_solver PRIVATE LINKER:--disable-new-dtags)
-    target_compile_options(
-        navvis_recon_stage2_imu_ceres_solver PRIVATE -Wall -Wextra -Wpedantic)
+    if(NOT MSVC)
+        target_link_options(
+            navvis_recon_stage2_imu_ceres_solver PRIVATE LINKER:--disable-new-dtags)
+    endif()
+    navvis_recon_enable_strict_fp(navvis_recon_stage2_imu_ceres_solver)
 else()
     message(WARNING
         "Ceres not found; the surface colorizer will use the slower finite-difference "
@@ -178,7 +215,7 @@ if(LibRaw_INCLUDE_DIR AND LibRaw22_LIBRARY)
     target_include_directories(navvis_recon_ocam_panorama PRIVATE ${LibRaw_INCLUDE_DIR})
     target_link_libraries(
         navvis_recon_ocam_panorama PRIVATE navvis_recon ${LibRaw22_LIBRARY} ${CMAKE_DL_LIBS})
-    target_compile_options(navvis_recon_ocam_panorama PRIVATE -Wall -Wextra -Wpedantic)
+    navvis_recon_enable_strict_fp(navvis_recon_ocam_panorama)
 else()
     message(WARNING "LibRaw 0.22/liblibraw.so.24 not found; navvis_recon_ocam_panorama will not be built")
 endif()
@@ -187,4 +224,6 @@ enable_testing()
 add_test(NAME navvis_recon_smoke COMMAND navvis_recon_smoke)
 add_test(NAME navvis_recon_panorama_sampling COMMAND navvis_recon_panorama_sampling)
 add_test(NAME navvis_recon_mapped_space_quality COMMAND navvis_recon_mapped_space_quality_test)
-add_test(NAME navvis_recon_slam_imu COMMAND navvis_recon_slam_imu_test)
+if(TARGET navvis_recon_slam_imu_test)
+    add_test(NAME navvis_recon_slam_imu COMMAND navvis_recon_slam_imu_test)
+endif()

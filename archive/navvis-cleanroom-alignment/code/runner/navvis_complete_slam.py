@@ -4,14 +4,25 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
+import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from navvis_recon.surveyor_slam import load_imu_rosbag  # noqa: E402
+
+
+RAW_IMU_HEADER = struct.Struct("<16sQ")
+RAW_IMU_SAMPLE = struct.Struct("<q10d")
+RAW_IMU_MAGIC = b"NVCRRAWIMU01\0\0\0\0"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,10 +56,54 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _worker(directory: Path, name: str) -> Path:
-    result = (directory / name).resolve()
-    if not result.is_file() or not os.access(result, os.X_OK):
-        raise FileNotFoundError(f"missing executable {result}")
+    candidates = [directory / name]
+    if os.name == "nt":
+        candidates.extend((directory / f"{name}.exe", directory / "Release" / f"{name}.exe"))
+    result = next(
+        (candidate.resolve() for candidate in candidates if candidate.is_file()), None
+    )
+    if result is None or not os.access(result, os.X_OK):
+        raise FileNotFoundError(
+            "missing executable; checked " + ", ".join(str(path) for path in candidates)
+        )
     return result
+
+
+def _native_library(directory: Path) -> Path:
+    names = (
+        ("navvis_recon_slam_frontend_native.dll",)
+        if os.name == "nt"
+        else ("libnavvis_recon_slam_frontend_native.so",)
+    )
+    candidates = [directory / name for name in names]
+    if os.name == "nt":
+        candidates.extend(directory / "Release" / name for name in names)
+    result = next(
+        (candidate.resolve() for candidate in candidates if candidate.is_file()), None
+    )
+    if result is None:
+        raise FileNotFoundError(
+            "missing SLAM native library; checked "
+            + ", ".join(str(path) for path in candidates)
+        )
+    return result
+
+
+def _export_raw_imu(bag: Path, output: Path) -> int:
+    samples = load_imu_rosbag(bag)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("wb") as stream:
+        stream.write(RAW_IMU_HEADER.pack(RAW_IMU_MAGIC, len(samples)))
+        for sample in samples:
+            stream.write(
+                RAW_IMU_SAMPLE.pack(
+                    sample.timestamp_ns,
+                    *sample.linear_acceleration,
+                    *sample.angular_velocity,
+                    *sample.orientation_xyzw,
+                )
+            )
+    return len(samples)
 
 
 def _default_imu_bag(dataset: Path) -> Path:
@@ -85,15 +140,15 @@ def main() -> int:
     frontend = _worker(build, "navvis_recon_slam")
     stage1 = _worker(stage_build, "navvis_recon_stage1_imu_ceres_solver")
     stage2 = _worker(stage_build, "navvis_recon_stage2_imu_ceres_solver")
-    native = (build / "libnavvis_recon_slam_frontend_native.so").resolve()
-    if not native.is_file():
-        raise FileNotFoundError(native)
+    native = _native_library(build)
 
     generated_archive = work / "raw_scans.nvslam6"
     local_trajectory = work / "frontend_trajectory.csv"
     frontend_state = work / "frontend_state.bin"
     optimized_trajectory = work / "optimized_trajectory.csv"
     report = work / "slam_alignment_report.json"
+    timing_report = work / "complete_slam_timing.json"
+    raw_imu = work / "raw_imu.bin"
     backend_work = work / "backend"
     owned_outputs = (local_trajectory, frontend_state, optimized_trajectory, report)
     if any(path.exists() for path in owned_outputs) or backend_work.exists():
@@ -105,6 +160,13 @@ def main() -> int:
         if backend_work.is_dir():
             shutil.rmtree(backend_work)
     work.mkdir(parents=True, exist_ok=True)
+    timing: dict[str, float | int | str] = {}
+    total_started = time.perf_counter()
+
+    imu_started = time.perf_counter()
+    imu_sample_count = _export_raw_imu(imu_bag, raw_imu)
+    timing["imu_export_seconds"] = time.perf_counter() - imu_started
+    timing["imu_samples"] = imu_sample_count
 
     if args.archive:
         archive = args.archive.resolve()
@@ -114,6 +176,7 @@ def main() -> int:
         archive = generated_archive
         if archive.exists() and not args.force:
             raise FileExistsError(f"{archive} exists; pass --archive to reuse it")
+        archive_started = time.perf_counter()
         subprocess.run(
             [
                 sys.executable,
@@ -126,13 +189,14 @@ def main() -> int:
             ],
             check=True,
         )
+        timing["archive_seconds"] = time.perf_counter() - archive_started
 
     frontend_command = [
         str(frontend),
         "--archive",
         str(archive),
-        "--imu-bag",
-        str(imu_bag),
+        "--imu-file",
+        str(raw_imu),
         "--output",
         str(local_trajectory),
         "--state-output",
@@ -144,7 +208,9 @@ def main() -> int:
     ]
     if args.batch_limit is not None:
         frontend_command.extend(("--batch-limit", str(args.batch_limit)))
+    frontend_started = time.perf_counter()
     subprocess.run(frontend_command, check=True)
+    timing["frontend_seconds"] = time.perf_counter() - frontend_started
 
     backend_command = [
         sys.executable,
@@ -178,14 +244,20 @@ def main() -> int:
     environment["NAVVIS_RECON_SLAM_NATIVE"] = str(native)
     existing_python_path = environment.get("PYTHONPATH")
     environment["PYTHONPATH"] = (
-        f"{ROOT / 'src'}:{existing_python_path}"
+        f"{ROOT / 'src'}{os.pathsep}{existing_python_path}"
         if existing_python_path
         else str(ROOT / "src")
     )
+    backend_started = time.perf_counter()
     subprocess.run(backend_command, check=True, env=environment)
+    timing["backend_seconds"] = time.perf_counter() - backend_started
+    timing["total_seconds"] = time.perf_counter() - total_started
+    timing["dataset"] = str(dataset)
+    timing_report.write_text(json.dumps(timing, indent=2, sort_keys=True) + "\n")
 
     print(f"optimized trajectory: {optimized_trajectory}")
     print(f"SLAM report: {report}")
+    print(f"complete timing: {timing_report}")
     print(
         "post-processing input: "
         f"./run_navvis_recon.sh DATASET --proc-base-dir DIR --trajectory-csv {optimized_trajectory}"

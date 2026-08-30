@@ -717,8 +717,8 @@ def load_imu_rosbag(
 
     try:
         import rosbag  # type: ignore[import-not-found]
-    except ImportError as error:
-        raise RuntimeError("ROS1 rosbag Python bindings are required") from error
+    except ImportError:
+        from . import rosbag_compat as rosbag
     samples: list[ImuSample] = []
     with rosbag.Bag(str(path)) as bag:
         for _, message, _ in bag.read_messages(topics=[topic]):
