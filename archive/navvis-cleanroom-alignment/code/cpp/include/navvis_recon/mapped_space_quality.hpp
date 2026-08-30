@@ -43,6 +43,14 @@ public:
     MappedSpaceQualityGrid& operator=(MappedSpaceQualityGrid&&) noexcept;
 
     void addRay(const MappedSpaceQualityRay& ray);
+    // Adds a ray using its position in the original, globally ordered input.
+    // This keeps use_every_nth_point stable when contiguous input chunks are
+    // accumulated independently.
+    void addRayAtInputIndex(const MappedSpaceQualityRay& ray, std::size_t input_index);
+    // Merge a later contiguous input chunk.  Voxel insertion order and the
+    // first-seen order of direction bins are retained, so ordered chunk merges
+    // reproduce the serial accumulator.
+    void mergeLaterChunk(MappedSpaceQualityGrid&& later);
     [[nodiscard]] std::vector<CompactQualityVoxel> compact() const;
     [[nodiscard]] std::size_t inputRayCount() const noexcept;
     [[nodiscard]] const MappedSpaceQualityOptions& options() const noexcept;

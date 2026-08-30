@@ -145,6 +145,16 @@ struct NavVisSurfacePoint {
 static_assert(sizeof(NavVisSurfacePoint) == 32U);
 
 #pragma pack(push, 1)
+struct InspectionPoint {
+    float x;
+    float y;
+    float z;
+    float intensity;
+};
+#pragma pack(pop)
+static_assert(sizeof(InspectionPoint) == 16U);
+
+#pragma pack(push, 1)
 struct SurfaceInputDisk {
     float x;
     float y;
@@ -168,6 +178,8 @@ static_assert(sizeof(CapturedSurfaceInputDisk) == 48U);
 struct Options {
     fs::path input_directory;
     fs::path output;
+    fs::path after_freespace_output;
+    fs::path before_surface_output;
     fs::path work_directory;
     fs::path freespace_diagnostics;
     fs::path surface_diagnostics;
@@ -187,6 +199,7 @@ struct Options {
     std::uint32_t preprocess_threads = 8U;
     bool retain_merged = false;
     bool reuse_merged = false;
+    bool inspection_only = false;
     bool adaptive_density = false;
     bool freespace_carving = false;
     bool global_ray_history = true;
@@ -220,6 +233,10 @@ struct SurfaceTileResult {
     bool processed = false;
     VoxelKey owner{};
     std::vector<NavVisSurfacePoint> points;
+    fs::path after_freespace_records;
+    fs::path before_surface_records;
+    std::uint64_t after_freespace_count = 0U;
+    std::uint64_t before_surface_count = 0U;
     navvis_recon::BinarySurfaceStageCounts counts;
     navvis_recon::BinaryOcclusionStageCounts occlusion_counts;
 };
@@ -274,6 +291,10 @@ Options parseArguments(int argc, char** argv) {
             options.input_directory = value();
         } else if (argument == "--output") {
             options.output = value();
+        } else if (argument == "--after-freespace-output") {
+            options.after_freespace_output = value();
+        } else if (argument == "--before-surface-output") {
+            options.before_surface_output = value();
         } else if (argument == "--work-directory") {
             options.work_directory = value();
         } else if (argument == "--free-space-diagnostics") {
@@ -316,6 +337,8 @@ Options parseArguments(int argc, char** argv) {
             options.retain_merged = true;
         } else if (argument == "--reuse-merged") {
             options.reuse_merged = true;
+        } else if (argument == "--inspection-only") {
+            options.inspection_only = true;
         } else if (argument == "--adaptive-density") {
             options.adaptive_density = true;
         } else if (argument == "--free-space-carving") {
@@ -352,11 +375,12 @@ Options parseArguments(int argc, char** argv) {
             std::cout
                 << "Usage: navvis_recon_shard_surface_filter --input-shards DIR --output FILE "
                    "[--work-directory DIR] [--coarse-cell 0.025] "
+                   "[--after-freespace-output FILE] [--before-surface-output FILE] "
                    "[--minimum-density-floor 2] [--minimum-support 4] "
                    "[--normal-cell 0.10] [--minimum-normal-support 6] "
                    "[--maximum-planar-curvature 0.10] [--output-cell 0.01] "
                    "[--minimum-hits 1] [--tile-threads 1] [--preprocess-threads 8] "
-                   "[--retain-merged] [--reuse-merged] "
+                   "[--retain-merged] [--reuse-merged] [--inspection-only] "
                    "[--adaptive-density] [--free-space-carving] "
                    "[--free-space-local-rays] "
                    "[--free-space-nonstandard] "
@@ -371,6 +395,8 @@ Options parseArguments(int argc, char** argv) {
                    "                   [--surface-diagnostics DIR]\n"
                    "                   [--surface-stage-counts counts.csv]\n"
                    "                   [--surface-diagnostic-tile x,y,z]\n"
+                   "--inspection-only writes the two intermediate PLY files and preserves the "
+                   "existing final Surface output.\n"
                    "Standard sparse mode fixes these values to the captured G11 binary "
                    "parameters; pass --free-space-nonstandard for diagnostic overrides.\n";
             std::exit(0);
@@ -406,6 +432,14 @@ Options parseArguments(int argc, char** argv) {
     }
     if (options.work_directory.empty()) {
         options.work_directory = options.output.string() + ".surface_tmp";
+    }
+    if (options.after_freespace_output.empty()) {
+        options.after_freespace_output =
+            options.output.parent_path() / "pointcloud_after_freespace.ply";
+    }
+    if (options.before_surface_output.empty()) {
+        options.before_surface_output =
+            options.output.parent_path() / "pointcloud_before_surface.ply";
     }
     if (options.freespace_mode == "sparse" && !options.nonstandard_freespace) {
         // "sparse" is the G11/standard compatibility path.  Historical
@@ -1214,6 +1248,8 @@ navvis_recon::BinarySurfaceOptions makeSurfaceOptions(const Options& options) {
 SurfaceTileResult processSurfaceTile(const fs::path& surface_tile,
                                      std::vector<navvis_recon::BinarySurfaceInput> halo_rays,
                                      bool has_ray_history, const Options& options,
+                                     const fs::path& after_freespace_record_directory,
+                                     const fs::path& before_surface_record_directory,
                                      const std::unordered_set<VoxelKey, VoxelKeyHash>*
                                          kept_freespace_leaves,
                                      const navvis_recon::SparseFreespaceOptions&
@@ -1226,6 +1262,37 @@ SurfaceTileResult processSurfaceTile(const fs::path& surface_tile,
         kBinarySurfaceTileSize * Vec3f(static_cast<float>(owner.x), static_cast<float>(owner.y),
                                        static_cast<float>(owner.z));
     const Vec3f core_maximum = core_minimum + Vec3f::Constant(kBinarySurfaceTileSize);
+
+    const auto write_inspection_points = [&](const fs::path& directory,
+                                             const std::string& stage,
+                                             const std::vector<navvis_recon::BinarySurfaceInput>&
+                                                 input,
+                                             fs::path& output_path) {
+        output_path = directory /
+                      ("tile_" + std::to_string(owner.x) + "_" + std::to_string(owner.y) +
+                       "_" + std::to_string(owner.z) + ".inspection");
+        std::ofstream output(output_path, std::ios::binary);
+        if (!output) {
+            throw std::runtime_error("cannot create " + stage + " inspection records " +
+                                     output_path.string());
+        }
+        std::uint64_t count = 0U;
+        for (const auto& point : input) {
+            if ((point.xyz.array() < core_minimum.array()).any() ||
+                (point.xyz.array() >= core_maximum.array()).any()) {
+                continue;
+            }
+            const InspectionPoint record{point.xyz.x(), point.xyz.y(), point.xyz.z(),
+                                         point.intensity};
+            output.write(reinterpret_cast<const char*>(&record), sizeof(record));
+            ++count;
+        }
+        if (!output) {
+            throw std::runtime_error("cannot write " + stage + " inspection records " +
+                                     output_path.string());
+        }
+        return count;
+    };
 
     const bool diagnose_tile =
         !options.surface_diagnostics.empty() &&
@@ -1278,6 +1345,18 @@ SurfaceTileResult processSurfaceTile(const fs::path& surface_tile,
         } else {
             classifier_rays = std::move(halo_rays);
         }
+        {
+            // Free-space decisions use the captured 2 cm CompactOccupancy grid, but the
+            // inspection cloud must remain directly comparable with the requested Surface
+            // resolution.  Aggregate the retained classifier rays at that resolution before
+            // occlusion cleaning instead of exposing the coarser helper surface.
+            const auto after_freespace_input =
+                navvis_recon::applyBinaryOcclusionHelperInputAggregation(classifier_rays,
+                                                                          options.resolution);
+            result.after_freespace_count = write_inspection_points(
+                after_freespace_record_directory, "after-free-space", after_freespace_input,
+                result.after_freespace_records);
+        }
         dump_inputs("raw", classifier_rays);
         dump_inputs("helper_input", helper_input);
         const auto cleaned_rays = navvis_recon::applyBinaryOcclusionCleaningFromHelperInput(
@@ -1287,9 +1366,21 @@ SurfaceTileResult processSurfaceTile(const fs::path& surface_tile,
                                                                               options.resolution);
     } else {
         halo_input = std::move(halo_rays);
+        const auto after_freespace_input =
+            navvis_recon::applyBinaryOcclusionHelperInputAggregation(halo_input,
+                                                                      options.resolution);
+        result.after_freespace_count = write_inspection_points(
+            after_freespace_record_directory, "after-free-space", after_freespace_input,
+            result.after_freespace_records);
     }
 
     dump_inputs("main", halo_input);
+    result.before_surface_count = write_inspection_points(
+        before_surface_record_directory, "before-surface", halo_input,
+        result.before_surface_records);
+    if (options.inspection_only) {
+        return result;
+    }
 
     const auto points = navvis_recon::runBinarySurfacePipeline(
         halo_input, makeSurfaceOptions(options), &result.counts);
@@ -1328,6 +1419,50 @@ void writePly(const fs::path& output_path, const fs::path& records, std::uint64_
     output << input.rdbuf();
 }
 
+void writeInspectionPly(const fs::path& output_path, const std::string& stage,
+                        const std::vector<SurfaceTileResult>& tile_results,
+                        bool after_freespace, std::uint64_t count) {
+    std::ofstream output(output_path, std::ios::binary);
+    if (!output) {
+        throw std::runtime_error("cannot write " + output_path.string());
+    }
+    output << "ply\nformat binary_little_endian 1.0\n"
+           << "comment navvis_recon inspection point cloud: " << stage << '\n'
+           << "element vertex " << count << '\n'
+           << "property float x\nproperty float y\nproperty float z\n"
+           << "property float intensity\nend_header\n";
+    std::uint64_t copied = 0U;
+    for (const auto& result : tile_results) {
+        if (!result.processed) {
+            continue;
+        }
+        const fs::path& records =
+            after_freespace ? result.after_freespace_records : result.before_surface_records;
+        const std::uint64_t record_count =
+            after_freespace ? result.after_freespace_count : result.before_surface_count;
+        const std::uintmax_t expected_bytes =
+            static_cast<std::uintmax_t>(record_count) * sizeof(InspectionPoint);
+        if (fs::file_size(records) != expected_bytes) {
+            throw std::runtime_error("inspection record size mismatch " + records.string());
+        }
+        if (expected_bytes == 0U) {
+            continue;
+        }
+        std::ifstream input(records, std::ios::binary);
+        if (!input) {
+            throw std::runtime_error("cannot read inspection records " + records.string());
+        }
+        output << input.rdbuf();
+        if (!output) {
+            throw std::runtime_error("cannot append inspection records " + records.string());
+        }
+        copied += record_count;
+    }
+    if (copied != count) {
+        throw std::runtime_error("inspection record count mismatch for " + output_path.string());
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1337,6 +1472,12 @@ int main(int argc, char** argv) {
         const Options options = parseArguments(argc, argv);
         if (!options.output.parent_path().empty()) {
             fs::create_directories(options.output.parent_path());
+        }
+        if (!options.after_freespace_output.parent_path().empty()) {
+            fs::create_directories(options.after_freespace_output.parent_path());
+        }
+        if (!options.before_surface_output.parent_path().empty()) {
+            fs::create_directories(options.before_surface_output.parent_path());
         }
         fs::create_directories(options.work_directory);
         if (!options.surface_diagnostics.empty()) {
@@ -1495,6 +1636,12 @@ int main(int argc, char** argv) {
         phase_started = Clock::now();
 
         const fs::path output_records = options.work_directory / "surface_points.bin";
+        const fs::path after_freespace_record_directory =
+            options.work_directory / "after_freespace_inspection";
+        const fs::path before_surface_record_directory =
+            options.work_directory / "before_surface_inspection";
+        fs::create_directories(after_freespace_record_directory);
+        fs::create_directories(before_surface_record_directory);
         std::ofstream output(output_records, std::ios::binary);
         if (!output) {
             throw std::runtime_error("cannot create surface point records");
@@ -1506,6 +1653,8 @@ int main(int argc, char** argv) {
                   << " s\n";
         phase_started = Clock::now();
         std::uint64_t kept = 0U;
+        std::uint64_t after_freespace_kept = 0U;
+        std::uint64_t before_surface_kept = 0U;
         navvis_recon::BinarySurfaceStageCounts totals;
         navvis_recon::BinaryOcclusionStageCounts occlusion_totals;
         std::ofstream surface_stage_counts;
@@ -1553,13 +1702,15 @@ int main(int argc, char** argv) {
                     const std::size_t tile_index = surface_work_order[work_index];
                     tile_results[tile_index] = processSurfaceTile(
                         surface_tiles[tile_index], std::move(surface_tile_inputs[tile_index]),
-                        has_ray_history, options,
+                        has_ray_history, options, after_freespace_record_directory,
+                        before_surface_record_directory,
                         kept_freespace_leaves.empty() ? nullptr : &kept_freespace_leaves,
                         runtime_options.sparse_freespace);
                     const std::size_t completed =
                         completed_surface_tiles.fetch_add(1U, std::memory_order_relaxed) + 1U;
                     std::lock_guard<std::mutex> progress_lock(surface_progress_mutex);
-                    std::cerr << "Surface " << completed << '/' << surface_tiles.size()
+                    std::cerr << (options.inspection_only ? "Occlusion inspection " : "Surface ")
+                              << completed << '/' << surface_tiles.size()
                               << " 5 m tiles (" << options.tile_threads << " workers)\r";
                 }
             } catch (...) {
@@ -1584,7 +1735,9 @@ int main(int argc, char** argv) {
         if (surface_error != nullptr) {
             std::rethrow_exception(surface_error);
         }
-        std::cerr << "\nPhase timing: binary surface tile processing "
+        std::cerr << "\nPhase timing: "
+                  << (options.inspection_only ? "occlusion inspection tile processing "
+                                              : "binary surface tile processing ")
                   << secondsSince(phase_started) << " s\n";
         phase_started = Clock::now();
 
@@ -1598,6 +1751,8 @@ int main(int argc, char** argv) {
             }
             accumulateSurfaceCounts(totals, result.counts);
             accumulateOcclusionCounts(occlusion_totals, result.occlusion_counts);
+            after_freespace_kept += result.after_freespace_count;
+            before_surface_kept += result.before_surface_count;
             if (surface_stage_counts.is_open()) {
                 surface_stage_counts << result.owner.x << ',' << result.owner.y << ','
                                      << result.owner.z << ','
@@ -1630,13 +1785,24 @@ int main(int argc, char** argv) {
                 kept += result.points.size();
             }
         }
-        std::cerr << "\nSurface kernel accumulated timing: normals " << totals.seconds_normals
-                  << " s, selection " << totals.seconds_selection << " s, output voxels "
-                  << totals.seconds_output_voxels << " s, density " << totals.seconds_density
-                  << " s, adaptive SOR " << totals.seconds_adaptive_sor << " s, support pruning "
-                  << totals.seconds_support_pruning << " s, post " << totals.seconds_post << " s\n";
+        if (!options.inspection_only) {
+            std::cerr << "\nSurface kernel accumulated timing: normals " << totals.seconds_normals
+                      << " s, selection " << totals.seconds_selection << " s, output voxels "
+                      << totals.seconds_output_voxels << " s, density " << totals.seconds_density
+                      << " s, adaptive SOR " << totals.seconds_adaptive_sor
+                      << " s, support pruning " << totals.seconds_support_pruning << " s, post "
+                      << totals.seconds_post << " s\n";
+        }
         output.close();
-        writePly(options.output, output_records, kept);
+        if (!options.inspection_only) {
+            writePly(options.output, output_records, kept);
+        }
+        writeInspectionPly(options.after_freespace_output,
+                           "after free-space carving, aggregated at requested resolution",
+                           tile_results, true, after_freespace_kept);
+        writeInspectionPly(options.before_surface_output,
+                           "after occlusion cleaning, before Surface", tile_results, false,
+                           before_surface_kept);
         std::cerr << "Phase timing: deterministic reduction and PLY write "
                   << secondsSince(phase_started) << " s\n"
                   << "Phase timing: total " << secondsSince(total_started) << " s\n";
@@ -1647,7 +1813,12 @@ int main(int argc, char** argv) {
                   << "; binary surface stages input/valid/voxel/density/SOR/post: " << totals.input
                   << '/' << totals.valid << '/' << totals.output_voxels << '/' << totals.density
                   << '/' << totals.adaptive_sor << '/' << totals.post
-                  << "; wrote after 5 m core crop: " << kept << '\n';
+                  << "; intermediate after-free-space/before-surface: "
+                  << after_freespace_kept << '/' << before_surface_kept
+                  << "; wrote after 5 m core crop: " << kept
+                  << (options.inspection_only ? " [inspection-only; final Surface preserved]"
+                                              : "")
+                  << '\n';
         if (!options.retain_merged) {
             fs::remove_all(options.work_directory);
         }

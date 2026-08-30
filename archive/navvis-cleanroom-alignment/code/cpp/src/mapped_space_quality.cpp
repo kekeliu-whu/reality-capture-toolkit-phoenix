@@ -289,7 +289,13 @@ MappedSpaceQualityGrid::MappedSpaceQualityGrid(MappedSpaceQualityGrid&&) noexcep
 MappedSpaceQualityGrid& MappedSpaceQualityGrid::operator=(MappedSpaceQualityGrid&&) noexcept = default;
 
 void MappedSpaceQualityGrid::addRay(const MappedSpaceQualityRay& ray) {
-    const std::size_t input_index = impl_->input_ray_count++;
+    const std::size_t input_index = impl_->input_ray_count;
+    addRayAtInputIndex(ray, input_index);
+}
+
+void MappedSpaceQualityGrid::addRayAtInputIndex(
+    const MappedSpaceQualityRay& ray, const std::size_t input_index) {
+    ++impl_->input_ray_count;
     if (input_index % static_cast<std::size_t>(impl_->options.use_every_nth_point) != 0U) {
         return;
     }
@@ -334,6 +340,54 @@ void MappedSpaceQualityGrid::addRay(const MappedSpaceQualityRay& ray) {
     if (!has_previous_sample || previous_sample_key != endpoint_key) {
         impl_->addPoint(ray.endpoint, ray.origin, encoded_direction);
     }
+}
+
+void MappedSpaceQualityGrid::mergeLaterChunk(MappedSpaceQualityGrid&& later) {
+    if (impl_.get() == later.impl_.get()) {
+        throw std::invalid_argument("cannot merge a mapped-space grid into itself");
+    }
+    const auto& first_options = impl_->options;
+    const auto& later_options = later.impl_->options;
+    if (first_options.voxel_size != later_options.voxel_size ||
+        first_options.minimum_rays_per_voxel != later_options.minimum_rays_per_voxel ||
+        first_options.use_every_nth_point != later_options.use_every_nth_point ||
+        first_options.brotli_quality != later_options.brotli_quality) {
+        throw std::invalid_argument("cannot merge mapped-space grids with different options");
+    }
+    if (impl_->input_ray_count == 0U && impl_->voxels.empty()) {
+        impl_ = std::move(later.impl_);
+        return;
+    }
+
+    // Chunks are merged in original input order.  Appending newly observed
+    // voxels and direction bins in the later chunk's insertion order therefore
+    // preserves the serial accumulator's observable record and float-sum order.
+    for (QualityVoxelState& source : later.impl_->voxels) {
+        auto [iterator, inserted] =
+            impl_->lookup.try_emplace(source.spatial_index, impl_->voxels.size());
+        if (inserted) {
+            impl_->voxels.push_back(std::move(source));
+            continue;
+        }
+
+        QualityVoxelState& destination = impl_->voxels[iterator->second];
+        const std::uint32_t combined_count =
+            static_cast<std::uint32_t>(destination.ray_count) + source.ray_count;
+        destination.ray_count = static_cast<std::uint16_t>(std::min<std::uint32_t>(
+            combined_count, std::numeric_limits<std::uint16_t>::max()));
+        for (const auto& [direction, compressed_range] : source.minimum_range_per_direction) {
+            const auto existing = std::find_if(
+                destination.minimum_range_per_direction.begin(),
+                destination.minimum_range_per_direction.end(),
+                [direction](const auto& entry) { return entry.first == direction; });
+            if (existing == destination.minimum_range_per_direction.end()) {
+                destination.minimum_range_per_direction.emplace_back(direction, compressed_range);
+            } else {
+                existing->second = std::min(existing->second, compressed_range);
+            }
+        }
+    }
+    impl_->input_ray_count += later.impl_->input_ray_count;
 }
 
 std::vector<CompactQualityVoxel> MappedSpaceQualityGrid::compact() const {

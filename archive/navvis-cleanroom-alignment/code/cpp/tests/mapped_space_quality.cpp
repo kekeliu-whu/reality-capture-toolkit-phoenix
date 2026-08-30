@@ -7,6 +7,58 @@
 #include <numeric>
 #include <vector>
 
+namespace {
+
+void assertEqual(
+    const std::vector<navvis_recon::CompactQualityVoxel>& expected,
+    const std::vector<navvis_recon::CompactQualityVoxel>& actual) {
+    assert(expected.size() == actual.size());
+    for (std::size_t index = 0U; index < expected.size(); ++index) {
+        assert(expected[index].spatial_key == actual[index].spatial_key);
+        assert(expected[index].directional_diversity == actual[index].directional_diversity);
+        assert(expected[index].ray_count == actual[index].ray_count);
+        assert(expected[index].minimum_range == actual[index].minimum_range);
+    }
+}
+
+void testOrderedChunkMerge() {
+    navvis_recon::MappedSpaceQualityOptions options;
+    options.minimum_rays_per_voxel = 1;
+    options.use_every_nth_point = 3;
+
+    std::vector<navvis_recon::MappedSpaceQualityRay> rays;
+    for (int index = 0; index < 41; ++index) {
+        navvis_recon::MappedSpaceQualityRay ray;
+        ray.origin = Eigen::Vector3d(
+            -1.25 + 0.013 * index, 2.75 - 0.007 * index, 1.05 + 0.003 * index);
+        ray.endpoint = Eigen::Vector3d(
+            -3.0 + 0.17 * (index % 7), -4.0 + 0.11 * index, 0.5 + 0.09 * (index % 5));
+        rays.push_back(ray);
+    }
+
+    navvis_recon::MappedSpaceQualityGrid serial(options);
+    for (const auto& ray : rays) {
+        serial.addRay(ray);
+    }
+
+    navvis_recon::MappedSpaceQualityGrid merged(options);
+    constexpr std::size_t chunk_size = 7U;
+    for (std::size_t begin = 0U; begin < rays.size(); begin += chunk_size) {
+        navvis_recon::MappedSpaceQualityGrid partial(options);
+        const std::size_t end = std::min(rays.size(), begin + chunk_size);
+        for (std::size_t index = begin; index < end; ++index) {
+            partial.addRayAtInputIndex(rays[index], index);
+        }
+        merged.mergeLaterChunk(std::move(partial));
+    }
+
+    assert(serial.inputRayCount() == rays.size());
+    assert(merged.inputRayCount() == rays.size());
+    assertEqual(serial.compact(), merged.compact());
+}
+
+}  // namespace
+
 int main() {
     navvis_recon::MappedSpaceQualityOptions options;
     options.minimum_rays_per_voxel = 1;
@@ -51,6 +103,7 @@ int main() {
     assert(last->directional_diversity == 202U && last->ray_count == 1U &&
            last->minimum_range == 65U);
 
-    std::cout << "mapped-space quality one-ray semantic oracle passed\n";
+    testOrderedChunkMerge();
+    std::cout << "mapped-space quality semantic and ordered-merge oracles passed\n";
     return 0;
 }
