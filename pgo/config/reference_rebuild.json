@@ -1,0 +1,21 @@
+{
+  "use_gravity_alignment":           false,
+  "odom_edge_translation_error":     0.02,
+  "odom_edge_rotation_error":        0.05,
+  "loop_edge_translation_error":     0.02,
+  "loop_edge_rotation_error":        0.05,
+  "gravity_align_rotation_error":    10,
+
+  "submap_duration_secs":            4.0,
+  "submap_downsample_resolution":    0.2,
+
+  "gicp_transform_epsilon":          1e-4,
+  "gicp_max_iterations":             10,
+  "gicp_fitness_score_threshold":    0.1,
+
+  "loop_closure_search_radius":      30,
+  "loop_closure_search_time_diff":   1000000,
+
+  "outer_iteration_num":             1,
+  "inner_iteration_num":             5
+}

@@ -374,6 +374,7 @@ struct BTCConstraintStats {
   int frames_without_candidate   = 0;
   int matches_rejected_by_time   = 0;
   int matches_rejected_by_gicp   = 0;
+  int matches_rejected_by_sanity = 0;
   int accepted_outside_radius    = 0;
 };
 
@@ -405,17 +406,22 @@ ConfigSetting MakeBTCConfig(const proto::PgoConfig &config,
   btc_cfg.descriptor_max_len_         = 50.0f;
   btc_cfg.non_max_suppression_radius_ = 2.0f;
   btc_cfg.std_side_resolution_        = 0.2f;
-  btc_cfg.skip_near_num_              = 30;
-  btc_cfg.candidate_num_              = 20;
-  btc_cfg.rough_dis_threshold_        = 0.01f;
-  btc_cfg.similarity_threshold_       = 0.7f;
+  // Road and corridor data often produces many similar, low-texture planes.
+  // The old retrieval gate (20 candidates, 0.7 similarity, 0.01 rough
+  // distance) discarded nearly every real revisit before the geometric
+  // verifier could inspect it.  Keep retrieval permissive and let the
+  // point-to-plane matcher below reject false closures.
+  btc_cfg.skip_near_num_              = 15;
+  btc_cfg.candidate_num_              = 100;
+  btc_cfg.rough_dis_threshold_        = 0.03f;
+  btc_cfg.similarity_threshold_       = 0.5f;
   btc_cfg.icp_threshold_              = 0.15f;
   btc_cfg.normal_threshold_           = 0.2f;
   btc_cfg.dis_threshold_              = 0.5f;
 
   if (median_timestamp_gap > 0.0) {
     btc_cfg.skip_near_num_ = std::max(
-        30, static_cast<int>(std::llround(
+        10, static_cast<int>(std::llround(
                 config.loop_closure_search_time_diff() / median_timestamp_gap)));
   }
 
@@ -555,6 +561,25 @@ void TryAddBTCConstraintForFrame(
                          submaps[frame_id].cloud,
                          T_current_to_matched,
                          2.0);
+
+    // A genuine late loop can carry several metres of accumulated drift, so
+    // do not reject it merely for a large translation correction.  A nearly
+    // flipped heading, however, is an unambiguous failure mode on repetitive
+    // road planes: it can pass the local point-to-plane fitness check and then
+    // fold the whole pose graph.  Keep a generous bound that still permits
+    // normal loop corrections while blocking those catastrophic aliases.
+    constexpr double kMaxLoopCorrectionTranslationM = 10.0;
+    constexpr double kMaxLoopCorrectionRotationDeg  = 45.0;
+    if (dt.norm() > kMaxLoopCorrectionTranslationM ||
+        dr_deg > kMaxLoopCorrectionRotationDeg) {
+      ++stats.matches_rejected_by_sanity;
+      spdlog::warn(
+          "BTC match {}<->{} rejected by correction sanity gate: translation {:.3f}m (max {:.1f}m), rotation {:.3f}deg (max {:.1f}deg)",
+          frame_id, matched_id, dt.norm(), kMaxLoopCorrectionTranslationM,
+          dr_deg, kMaxLoopCorrectionRotationDeg);
+      return;
+    }
+
     spdlog::info(
         "Loop edge submap {:4d} -> {:<4d} | "
         "t_orig=({:+7.3f},{:+7.3f},{:+7.3f}) L={:6.2f}m | "
@@ -973,10 +998,11 @@ BTCConstraintStats AddBTCConstraintsInternal(
   }
 
   spdlog::info(
-      "BTC constraint detection finished: {} constraints added, {} frames without descriptors, {} frames without verified candidate, {} matches rejected by time threshold, {} matches rejected by GICP, {} accepted outside prior radius",
+      "BTC constraint detection finished: {} constraints added, {} frames without descriptors, {} frames without verified candidate, {} matches rejected by time threshold, {} matches rejected by GICP, {} matches rejected by correction sanity gate, {} accepted outside prior radius",
       stats.constraints_added, stats.frames_without_descriptors,
       stats.frames_without_candidate, stats.matches_rejected_by_time,
       stats.matches_rejected_by_gicp,
+      stats.matches_rejected_by_sanity,
       stats.accepted_outside_radius);
   return stats;
 }
