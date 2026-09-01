@@ -29,6 +29,17 @@ struct Pose6D {
   Eigen::Matrix3d    rot;
 };
 
+struct DynamicInitializationOptions {
+  bool   enabled                    = true;
+  double min_duration_sec           = 2.0;
+  double max_duration_sec           = 4.0;
+  double max_acc_std_mps2           = 0.35;
+  double max_gyr_std_radps          = 0.08;
+  double max_mean_gyr_radps         = 0.08;
+  double max_acc_norm_error_mps2    = 0.75;
+  double robust_sample_ratio        = 0.25;
+};
+
 inline bool time_list(PointType &x, PointType &y) { return (x.curvature < y.curvature); }
 
 /// *************IMU Process and undistortion
@@ -48,9 +59,11 @@ class ImuProcess {
   void                          set_acc_cov(const V3D &scaler);
   void                          set_gyr_bias_cov(const V3D &b_g);
   void                          set_acc_bias_cov(const V3D &b_a);
+  void                          set_dynamic_initialization_options(const DynamicInitializationOptions &options);
   Eigen::Matrix<double, 12, 12> Q;
-  void Process(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
+  bool Process(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
                PointCloudXYZI::Ptr pcl_un);
+  bool initialized() const { return !imu_need_init_; }
 
   V3D            cov_acc;
   V3D            cov_gyr;
@@ -62,7 +75,11 @@ class ImuProcess {
   std::vector<Pose6D> IMUpose;
 
  private:
-  void IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, int &N);
+  bool TryInitialize(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state);
+  void FinishInitialization(const MeasureGroup &meas,
+                            esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
+                            const V3D &acc_reference, const V3D &gyr_reference,
+                            const V3D &acc_std, const V3D &gyr_std, bool stationary);
   void UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
                     PointCloudXYZI &pcl_in_out);
 
@@ -77,7 +94,10 @@ class ImuProcess {
   V3D                             acc_s_last;
   double                          start_timestamp_;
   double                          last_lidar_end_time_;
-  int                             init_iter_num  = 1;
+  DynamicInitializationOptions    dynamic_init_options_;
+  std::vector<V3D, Eigen::aligned_allocator<V3D>> init_acc_samples_;
+  std::vector<V3D, Eigen::aligned_allocator<V3D>> init_gyr_samples_;
+  bool                            init_wait_logged_ = false;
   bool                            b_first_frame_ = true;
   bool                            imu_need_init_ = true;
 };

@@ -67,6 +67,7 @@ class LioCore
   void mappingLoop();
 
   void publisherLoop();
+
   /*******************main process end*******************/
 
  private:

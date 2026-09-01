@@ -36,8 +36,14 @@ void collectImuOrMotorData(const std::deque<T> &data_queue, double start_time, d
 namespace lixel
 {
 
-lixel::IOUtils::IOUtils(bool motor_enabled, bool sweep_cut_auto)
-    : motor_enabled_(motor_enabled), sweep_cut_auto_(sweep_cut_auto)
+lixel::IOUtils::IOUtils(bool motor_enabled,
+                        bool sweep_cut_auto,
+                        double lidar_to_imu_time_offset_seconds,
+                        double imu_clock_drift_ppm)
+    : motor_enabled_(motor_enabled),
+      sweep_cut_auto_(sweep_cut_auto),
+      lidar_to_imu_time_offset_seconds_(lidar_to_imu_time_offset_seconds),
+      imu_clock_drift_scale_(imu_clock_drift_ppm * 1e-6)
 {
 }
 
@@ -80,10 +86,19 @@ void lixel::IOUtils::addLidar(const PointCloudMsg::Ptr &msg)
 
 void lixel::IOUtils::addImu(const ImuMsg::Ptr &msg)
 {
-  // TODO: verify the imu delay
-  msg->timestamp -= 0.0025;
-  static double first_timestamp = msg->timestamp;
-  msg->timestamp += 0.003 - 5.333333333333334e-06 * (msg->timestamp - first_timestamp);
+  const double raw_timestamp = msg->timestamp;
+  if (!first_imu_timestamp_initialized_)
+  {
+    first_imu_timestamp_ = raw_timestamp;
+    first_imu_timestamp_initialized_ = true;
+  }
+  // Calibration defines t_imu = t_lidar + offset, so subtract the offset
+  // from an IMU timestamp to express it on the LiDAR clock.  Do not apply a
+  // recording-length-dependent correction unless the dataset explicitly
+  // supplies a measured clock drift.
+  msg->timestamp = raw_timestamp - lidar_to_imu_time_offset_seconds_ +
+                   imu_clock_drift_scale_ *
+                       (raw_timestamp - first_imu_timestamp_);
   std::lock_guard<std::recursive_mutex> lg{mtx_input_data_buff_};
   input_data_buff_.imu_queue.push_back(msg);
 }

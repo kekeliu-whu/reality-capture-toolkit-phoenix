@@ -4,15 +4,9 @@
 
 #pragma once
 
+#include <algorithm>
 #include <chrono>
-#include <filesystem>
-#include <string>
-#include <thread>
-
-#include <condition_variable>
-#include <deque>
-#include <fstream>
-#include <mutex>
+#include <cmath>
 #include "voxel_loc.h"
 #include "xmap_types.hpp"
 
@@ -84,6 +78,41 @@ inline V3F voxelLoc2V3F(const VoxelLoc& voxelLoc, float voxel_size) {
   return p;
 }
 
+/**
+ * Return the dense resolution-cell index inside a small voxel.
+ *
+ * The coordinate is measured from the small voxel's minimum corner. XMap's
+ * table layout is ((x * small_scale) + y) * small_scale + z. A negative
+ * result means that floating-point input landed outside the owning voxel.
+ */
+inline IntDataType denseCellIndex(
+    const V3F& point,
+    const VoxelLoc& small_voxel,
+    const Configs& configs) {
+  const V3F origin = voxelLoc2V3F(small_voxel, configs.small_voxel_size);
+  const V3F local = (point - origin) / configs.resolution;
+  Eigen::Matrix<IntDataType, 3, 1> cell;
+  for (int axis = 0; axis < 3; ++axis) {
+    cell[axis] = static_cast<IntDataType>(std::floor(local[axis]));
+    if (cell[axis] < 0 || cell[axis] >= configs.small_scale) return -1;
+  }
+  return (cell.x() * configs.small_scale + cell.y()) * configs.small_scale + cell.z();
+}
+
+inline V3F denseCellCenter(
+    const VoxelLoc& small_voxel,
+    IntDataType dense_index,
+    const Configs& configs) {
+  const IntDataType z = dense_index % configs.small_scale;
+  dense_index /= configs.small_scale;
+  const IntDataType y = dense_index % configs.small_scale;
+  const IntDataType x = dense_index / configs.small_scale;
+  return voxelLoc2V3F(small_voxel, configs.small_voxel_size) +
+         (V3F(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)) +
+          V3F::Constant(0.5f)) *
+             configs.resolution;
+}
+
 // 计算体素的中心位置
 inline V3F calVoxelCenter(const VoxelLoc& voxel, FloatDataType voxel_size) {
   return V3F{
@@ -99,53 +128,13 @@ inline V3F calVoxelCenter(const V3F& point, FloatDataType voxel_size) {
 }
 
 /**
- * 将点云按二进制写入磁盘，动态加载时会频繁调用，所以inline
- * @param data vector保存的点云
- * @param filename 磁盘中点云的文件名
- */
-inline void writePointCloudToFile(
-    const std::vector<PointType, Eigen::aligned_allocator<PointType>>& data,
-    const std::string& filename) {
-  std::ofstream file(filename, std::ios::binary);
-  if (file.is_open()) {
-    file.write(
-        reinterpret_cast<const char*>(data.data()), data.size() * sizeof(pcl::PointXYZINormal));
-    file.close();
-  }
-}
-
-/**
- * 从磁盘读取文件中的点云，动态加载时会频繁调用，所以inline
- * @param filename 磁盘中点云的文件名
- * @return vector保存的点云
- */
-inline std::vector<PointType, Eigen::aligned_allocator<PointType>> readPointCloudFromFile(
-    const std::string& filename) {
-  std::ifstream file(filename, std::ios::binary);
-  std::vector<PointType, Eigen::aligned_allocator<PointType>> data;
-
-  if (file.is_open()) {
-    file.seekg(0, std::ios::end);
-    std::streampos fileSize = file.tellg();
-    file.seekg(0, std::ios::beg);
-
-    std::size_t numElements = fileSize / sizeof(pcl::PointXYZINormal);
-    data.resize(numElements);
-
-    file.read(reinterpret_cast<char*>(data.data()), fileSize);
-    file.close();
-  }
-
-  return data;
-}
-
-/**
  * PCA根据点序列拟合平面，匹配时会频繁调用，所以inline
  * @param points_vec 点序列
  * @return 平面对象的指针
  */
-inline PlanePtr planeFitting(std::vector<V3F> points_vec, const V3F& view_point) {
+inline PlanePtr planeFitting(const std::vector<V3F>& points_vec, const V3F& view_point) {
   PlanePtr plane = std::make_shared<Plane>();
+  if (points_vec.size() < 3) return plane;
   /** 1. SVD特征值分解求解法向量 **/
   int numPoints = points_vec.size();
   Eigen::MatrixXd dataMatrix(numPoints, 3);
@@ -159,7 +148,9 @@ inline PlanePtr planeFitting(std::vector<V3F> points_vec, const V3F& view_point)
   Eigen::VectorXd D = svd.singularValues().transpose();
 
   /** 2. 是否满足平面条件 **/
+  if (D.size() < 3 || D(0) <= EPSILON || D(1) <= EPSILON) return plane;
   double planarity = sqrt(D(2) * D(2) / (D(1) * D(0)));
+  if (!std::isfinite(planarity)) return plane;
   plane->is_plane = planarity < PLANARITY_THRESHOLD;
   plane->normal = svd.matrixV().col(2).cast<FloatDataType>();
   plane->center = mean.cast<FloatDataType>();
@@ -168,27 +159,14 @@ inline PlanePtr planeFitting(std::vector<V3F> points_vec, const V3F& view_point)
 
   /** 3. 确保法向与视锥方向相反 **/
   V3F view_vec = view_point - mean.cast<FloatDataType>();
-  view_vec.normalize();
-  double cos_theta = plane->normal.dot(view_vec);
-  if (cos_theta < 0) plane->normal = -plane->normal;
+  if (view_vec.squaredNorm() > EPSILON) {
+    view_vec.normalize();
+    double cos_theta = plane->normal.dot(view_vec);
+    if (cos_theta < 0) plane->normal = -plane->normal;
+  }
   plane->d = -plane->normal.transpose() * plane->center;
   return plane;
 }
-
-/**
- * 递归创建文件夹
- * @param path 路径
- */
-void createFolders(const std::string& path);
-
-/**
- * 删除文件夹内的所有文件
- * @param folderPath 路径
- */
-void deleteFolderContents(const std::string& folderPath);
-
-// c构建字符串工具
-std::string strprintf(const char* fmt, ...);
 
 class TicToc {
  public:

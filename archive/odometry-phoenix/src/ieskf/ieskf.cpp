@@ -4,24 +4,37 @@ namespace lixel
 {
 IESKF::IESKF(const IESKFParam &param)
 {
-  states_ptr_ = std::make_shared<KFState>();
+  states_ptr_ = std::make_shared<KFState>(param.window_size);
 
-  ieskf_configs_.mill_cov_acc = pow(param.acc_std, 2) * Vec3::Ones() * SCALE;
-  ieskf_configs_.mill_cov_gyr = pow(param.gyr_std, 2) * Vec3::Ones() * SCALE;
-  ieskf_configs_.mill_cov_bias_gyr = pow(param.gyr_bias_std, 2) * Vec3::Ones() * SCALE;
-  ieskf_configs_.mill_cov_bias_acc = pow(param.acc_bias_std, 2) * Vec3::Ones() * SCALE;
-  ieskf_configs_.acc_keep_std_limit = param.acc_keep_std_limit;
-  ieskf_configs_.gyro_keep_std_limit = param.gyro_keep_std_limit;
+  ieskf_configs_.mill_cov_acc =
+      static_cast<FloatDataType>(pow(param.acc_std, 2) * SCALE) * Vec3::Ones();
+  ieskf_configs_.mill_cov_gyr =
+      static_cast<FloatDataType>(pow(param.gyr_std, 2) * SCALE) * Vec3::Ones();
+  ieskf_configs_.mill_cov_bias_gyr =
+      static_cast<FloatDataType>(pow(param.gyr_bias_std, 2) * SCALE) * Vec3::Ones();
+  ieskf_configs_.mill_cov_bias_acc =
+      static_cast<FloatDataType>(pow(param.acc_bias_std, 2) * SCALE) * Vec3::Ones();
+  ieskf_configs_.acc_std = param.acc_std;
+  ieskf_configs_.gyr_std = param.gyr_std;
+  ieskf_configs_.acc_std_slope = param.acc_std_slope;
+  ieskf_configs_.gyro_std_slope = param.gyro_std_slope;
+  ieskf_configs_.lidar_variance_limit =
+      param.lidar_std_dev_limit * param.lidar_std_dev_limit;
   ieskf_configs_.gravity = DEFAULT_GRIVITY_VEC;
   ieskf_configs_.max_iter_num = param.max_iter;
+  // The production DLL does not expose this as a configuration option.
   ieskf_configs_.predict_method = DOUBLE_SAMPLING;
   init_ = false;
 
-  if (WINDOW_SIZE < 1)
+  if (states_ptr_->windowSize() < 1)
   {
     LOG(ERROR) << "STATE WINDOW SIZE <= 1 !!!! SOMETHING WRONG";
     exit(0);
   }
+  LOG(INFO) << "IESKF configured window_size=" << states_ptr_->windowSize()
+            << " state_dim=" << states_ptr_->dimState()
+            << " scalar_bytes=" << sizeof(FloatDataType)
+            << " predict_method=DOUBLE_SAMPLING";
 }
 
 IESKF::~IESKF()
@@ -88,8 +101,13 @@ void IESKF::logState(std::string str)
 
 void IESKF::init(const KFState &init_state)
 {
+  if (init_state.windowSize() != states_ptr_->windowSize())
+    throw std::invalid_argument("Initial state window size does not match IESKF configuration");
   states_ptr_ = std::make_shared<KFState>(init_state);
   last_pcl_end_time_ = init_state.timestamp;
+  // Coning/sculling increments must never cross an initialization boundary.
+  last_dtheta_.setZero();
+  last_dv_.setZero();
   init_ = true;
   logState("init");
 }

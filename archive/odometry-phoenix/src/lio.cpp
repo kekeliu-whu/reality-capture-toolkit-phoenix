@@ -9,31 +9,36 @@ namespace
 {
 void setLioStatus(const lixel::KFState::ConstPtr &state, lixel::LioResultMsg::Ptr &lio_result)
 {
-  lio_result->full_state.q = lixel::QUATD(state->sw_rot_[WINDOW_SIZE - 1]);
-  lio_result->full_state.p = lixel::V3D(state->sw_pos_[WINDOW_SIZE - 1]);
-  lio_result->full_state.v = lixel::V3D(state->vel_);
-  lio_result->full_state.ba = lixel::V3D(state->acc_bias_);
-  lio_result->full_state.bg = lixel::V3D(state->gyo_bias_);
+  lio_result->full_state.q = lixel::QUATD(state->sw_rot_.back().cast<double>());
+  lio_result->full_state.p = state->sw_pos_.back().cast<double>();
+  lio_result->full_state.v = state->vel_.cast<double>();
+  lio_result->full_state.ba = state->acc_bias_.cast<double>();
+  lio_result->full_state.bg = state->gyo_bias_.cast<double>();
 #if GRAVITY_CALIBRATION
   lio_result->full_state.gravity = lixel::V3D(state->gravity);
 #else
-  lio_result->full_state.gravity = lixel::V3D(lixel::DEFAULT_GRIVITY_VEC);
+  lio_result->full_state.gravity = lixel::DEFAULT_GRIVITY_VEC.cast<double>();
 #endif
-  lio_result->full_state.timestamp = state->sw_timestamp[WINDOW_SIZE - 1];
+  lio_result->full_state.timestamp = state->sw_timestamp.back();
 }
 }  // namespace
 
 namespace lixel
 {
 LioCore::LioCore(LioParameters &lio_param)
-    : io_utils_(lio_param.extrinsic_param.motor_param.enabled, lio_param.preprocess_param.sweep_cut_auto), lidar_fusion_(lio_param.kf_param.k_for_adaptive_search)
+    : io_utils_(lio_param.extrinsic_param.motor_param.enabled,
+                lio_param.preprocess_param.sweep_cut_auto,
+                lio_param.sensor_param.imu_param.lidar_to_imu_time_offset_seconds,
+                lio_param.sensor_param.imu_param.clock_drift_ppm),
+      lidar_fusion_(lio_param.kf_param)
 {
   init();
   setParameters(lio_param);
   xmap_ = std::make_shared<xmap::Xmap>(lio_param.map_param.config_path);
   ieskf_ptr_ = std::make_shared<IESKF>(lio_param_.kf_param);
   write_buf_.reset(new PointCloudXYZINormal);
-  initialization_ = std::make_shared<Initialization>(lio_param_.init_param);
+  initialization_ = std::make_shared<Initialization>(
+      lio_param_.init_param, lio_param_.kf_param.window_size);
   initialization_->setXmap(xmap_);
   initialization_->setIESKF(ieskf_ptr_);
   lidar_fusion_.setXmap(xmap_);
@@ -162,7 +167,7 @@ void LioCore::mappingLoop()
     LOG(INFO) << "preprocessT:" << preprocessT.Toc();
 
     // 2. initialize
-    if (!initialization_->staticInit(measurement.imu_vec, measurement.lidar_points, measurement.pcl_end_time))
+    if (!initialization_->initialize(measurement.imu_vec, measurement.lidar_points, measurement.pcl_end_time))
       continue;
 
     // 3. kf.predict
@@ -206,8 +211,8 @@ void LioCore::mappingLoop()
     downsample_surf_body->header.stamp = measurement.pcl_end_time * 1e6;
     undistort_pcl->header.stamp = measurement.pcl_end_time * 1e6;
     lidar_fusion_.setLidarMeas(downsample_surf_body, downsample_map_body, undistort_pcl);
-    AttributeIterate attr_iter;
-    ieskf_ptr_->update(lidar_fusion_, attr_iter);
+    AttributeIterate attr_iter{};
+    const bool update_success = ieskf_ptr_->update(lidar_fusion_, attr_iter);
     LOG(INFO) << "updateT:" << updateT.Toc();
 
     // 8.1 assign normal to point
@@ -225,17 +230,39 @@ void LioCore::mappingLoop()
         downsample_map_body->points[index].normal_z = point_search.normal_z;
       }
     }
+    size_t normal_assigned_count = 0;
+    for (const PointXYZINormal &point : downsample_map_body->points)
+    {
+      if (point.getNormalVector3fMap().squaredNorm() > 1e-8f)
+        ++normal_assigned_count;
+    }
+    const float normal_assigned_ratio = downsample_map_body->empty()
+        ? 0.0f
+        : static_cast<float>(normal_assigned_count) /
+              static_cast<float>(downsample_map_body->size());
+    AttributeIESKF frontend_attribute{};
+    frontend_attribute.sweep_id = measurement.sweep_id;
+    frontend_attribute.timestamp = measurement.pcl_end_time;
+    frontend_attribute.update_success = update_success;
+    frontend_attribute.downsample_dis = adaptive_size;
+    frontend_attribute.state_predict = state_predict;
+    frontend_attribute.attritube_predict = attr_predict;
+    frontend_attribute.jacobi = lidar_fusion_.getAttributeJacobi();
+    frontend_attribute.jacobi.normal_assigned_ratio = normal_assigned_ratio;
+    frontend_attribute.iterate = attr_iter;
+
     // 8.2 update map
     TicToc mapT;
     PointCloudXYZINormal::Ptr update_pcl;
     bool need_update_map = lidar_fusion_.getUpdateFrame(update_pcl);
     PointCloudXYZINormal::Ptr downsample_map_world(new PointCloudXYZINormal);
-    if (need_update_map)
+    if (need_update_map && update_success)
     {
       transformToWorld(update_pcl, ieskf_ptr_->getStatesPtr(), downsample_map_world);
       downsample_map_world->header.stamp = measurement.pcl_end_time * 1e6;
       xmap_->mapIncremental(
-          downsample_map_world, ieskf_ptr_->getStatesPtr()->sw_pos_[WINDOW_SIZE - 1].cast<xmap::FloatDataType>());
+          downsample_map_world,
+          ieskf_ptr_->getStatesPtr()->sw_pos_.back().cast<xmap::FloatDataType>());
       LOG(INFO) << "mapT:" << mapT.Toc();
     }
 
@@ -251,13 +278,7 @@ void LioCore::mappingLoop()
     if (need_publish)
     {
       LioResultMsg::Ptr lio_result(new LioResultMsg());
-      lio_result->attribute_ieskf.sweep_id = measurement.sweep_id;
-      lio_result->attribute_ieskf.timestamp = measurement.pcl_end_time;
-      lio_result->attribute_ieskf.downsample_dis = adaptive_size;
-      lio_result->attribute_ieskf.state_predict = state_predict;
-      lio_result->attribute_ieskf.attritube_predict = attr_predict;
-      lio_result->attribute_ieskf.jacobi = lidar_fusion_.getAttributeJacobi();
-      lio_result->attribute_ieskf.iterate = attr_iter;
+      lio_result->attribute_ieskf = std::move(frontend_attribute);
       setLioStatus(ieskf_ptr_->getStatesPtr(), lio_result);
       lio_result->body_points = publish_pcl;
       io_utils_.addLioResult(lio_result);

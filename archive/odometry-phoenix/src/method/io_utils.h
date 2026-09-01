@@ -31,7 +31,10 @@ struct OutputDataBuffer
 class IOUtils
 {
  public:
-  IOUtils(bool motor_enabled, bool sweep_cut_auto);
+  IOUtils(bool motor_enabled,
+          bool sweep_cut_auto,
+          double lidar_to_imu_time_offset_seconds,
+          double imu_clock_drift_ppm);
   ~IOUtils();
 
   void addLidar(const PointCloudMsg::Ptr &msg);
@@ -78,6 +81,10 @@ class IOUtils
   OutputDataBuffer output_data_buff_;
   bool motor_enabled_;
   bool sweep_cut_auto_;
+  double lidar_to_imu_time_offset_seconds_ = 0.0;
+  double imu_clock_drift_scale_ = 0.0;
+  double first_imu_timestamp_ = 0.0;
+  bool first_imu_timestamp_initialized_ = false;
   int sweep_id = 0;
 
   const double PADDING_DURATION_FOR_IMU_MOTOR_BUFFER = 3.0;

@@ -1,13 +1,34 @@
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
+#include <numeric>
+
 #include "imu_processing.h"
 
-/// *************Preconfiguration
+namespace {
 
-#define MAX_INI_COUNT (20)
+using AlignedV3DVector = std::vector<V3D, Eigen::aligned_allocator<V3D>>;
+
+void ComputeMeanAndStd(const AlignedV3DVector &samples, const std::vector<size_t> &indices,
+                       V3D &mean, V3D &stddev) {
+  mean.setZero();
+  stddev.setZero();
+  if (indices.empty()) return;
+
+  for (const size_t index : indices) mean += samples[index];
+  mean /= static_cast<double>(indices.size());
+
+  if (indices.size() < 2) return;
+  for (const size_t index : indices) {
+    const V3D residual = samples[index] - mean;
+    stddev += residual.cwiseProduct(residual);
+  }
+  stddev = (stddev / static_cast<double>(indices.size() - 1)).cwiseSqrt();
+}
+
+}  // namespace
 
 ImuProcess::ImuProcess() : b_first_frame_(true), imu_need_init_(true), start_timestamp_(-1) {
-  init_iter_num   = 1;
   Q               = process_noise_cov();
   cov_acc         = V3D(0.1, 0.1, 0.1);
   cov_gyr         = V3D(0.1, 0.1, 0.1);
@@ -30,7 +51,10 @@ void ImuProcess::Reset() {
   angvel_last      = V3D::Zero();
   imu_need_init_   = true;
   start_timestamp_ = -1;
-  init_iter_num    = 1;
+  last_lidar_end_time_ = 0;
+  init_acc_samples_.clear();
+  init_gyr_samples_.clear();
+  init_wait_logged_ = false;
   v_imu_.clear();
   IMUpose.clear();
   last_imu_.reset(new sensor_msgs::Imu());
@@ -59,61 +83,153 @@ void ImuProcess::set_gyr_bias_cov(const V3D &b_g) { cov_bias_gyr = b_g; }
 
 void ImuProcess::set_acc_bias_cov(const V3D &b_a) { cov_bias_acc = b_a; }
 
-void ImuProcess::IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, int &N) {
-  V3D cur_acc, cur_gyr;
+void ImuProcess::set_dynamic_initialization_options(const DynamicInitializationOptions &options) {
+  dynamic_init_options_ = options;
+}
 
+bool ImuProcess::TryInitialize(const MeasureGroup &meas,
+                               esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state) {
   if (b_first_frame_) {
     Reset();
-    N                   = 1;
-    b_first_frame_      = false;
-    const auto &imu_acc = meas.imu.front()->linear_acceleration;
-    const auto &gyr_acc = meas.imu.front()->angular_velocity;
-    mean_acc << imu_acc.x, imu_acc.y, imu_acc.z;
-    mean_gyr << gyr_acc.x, gyr_acc.y, gyr_acc.z;
+    b_first_frame_   = false;
     first_lidar_time = meas.lidar_beg_time;
   }
 
   for (const auto &imu : meas.imu) {
     const auto &imu_acc = imu->linear_acceleration;
     const auto &gyr_acc = imu->angular_velocity;
-    cur_acc << imu_acc.x, imu_acc.y, imu_acc.z;
-    cur_gyr << gyr_acc.x, gyr_acc.y, gyr_acc.z;
-
-    mean_acc += (cur_acc - mean_acc) / N;
-    mean_gyr += (cur_gyr - mean_gyr) / N;
-
-    cov_acc = cov_acc * (N - 1.0) / N + (cur_acc - mean_acc).cwiseProduct(cur_acc - mean_acc) * (N - 1.0) / (N * N);
-    cov_gyr = cov_gyr * (N - 1.0) / N + (cur_gyr - mean_gyr).cwiseProduct(cur_gyr - mean_gyr) * (N - 1.0) / (N * N);
-
-    N++;
+    V3D cur_acc(imu_acc.x, imu_acc.y, imu_acc.z);
+    V3D cur_gyr(gyr_acc.x, gyr_acc.y, gyr_acc.z);
+    if (!cur_acc.allFinite() || !cur_gyr.allFinite()) continue;
+    if (start_timestamp_ < 0) start_timestamp_ = imu->header.stamp.toSec();
+    init_acc_samples_.push_back(cur_acc);
+    init_gyr_samples_.push_back(cur_gyr);
   }
+
+  if (init_acc_samples_.size() < 20 || start_timestamp_ < 0) return false;
+
+  const double end_timestamp = meas.imu.back()->header.stamp.toSec();
+  const double duration_sec  = end_timestamp - start_timestamp_;
+  if (dynamic_init_options_.enabled && duration_sec < dynamic_init_options_.min_duration_sec) return false;
+
+  std::vector<size_t> all_indices(init_acc_samples_.size());
+  std::iota(all_indices.begin(), all_indices.end(), 0);
+
+  V3D acc_all_mean, acc_all_std, gyr_all_mean, gyr_all_std;
+  ComputeMeanAndStd(init_acc_samples_, all_indices, acc_all_mean, acc_all_std);
+  ComputeMeanAndStd(init_gyr_samples_, all_indices, gyr_all_mean, gyr_all_std);
+
+  const bool stationary =
+      !dynamic_init_options_.enabled ||
+      (acc_all_std.norm() <= dynamic_init_options_.max_acc_std_mps2 &&
+       gyr_all_std.norm() <= dynamic_init_options_.max_gyr_std_radps &&
+       gyr_all_mean.norm() <= dynamic_init_options_.max_mean_gyr_radps &&
+       std::abs(acc_all_mean.norm() - G_m_s2) <= dynamic_init_options_.max_acc_norm_error_mps2);
+
+  if (stationary) {
+    FinishInitialization(meas, kf_state, acc_all_mean, gyr_all_mean, acc_all_std, gyr_all_std, true);
+    return true;
+  }
+
+  if (duration_sec < dynamic_init_options_.max_duration_sec) {
+    if (!init_wait_logged_) {
+      spdlog::info(
+          "[INIT] Motion detected after {:.2f}s; collecting IMU until {:.2f}s before dynamic initialization "
+          "(acc_std={:.4f}, gyr_std={:.4f}, mean_gyr={:.4f}).",
+          duration_sec, dynamic_init_options_.max_duration_sec, acc_all_std.norm(), gyr_all_std.norm(),
+          gyr_all_mean.norm());
+      init_wait_logged_ = true;
+    }
+    return false;
+  }
+
+  // Gravity and IMU biases are not jointly observable from a moving IMU alone.
+  // Select the least dynamic samples to obtain a robust roll/pitch seed, but do
+  // not interpret the mean angular velocity as gyro bias in this mode.
+  std::vector<size_t> robust_indices = all_indices;
+  std::sort(robust_indices.begin(), robust_indices.end(), [&](const size_t lhs, const size_t rhs) {
+    const double lhs_score = std::abs(init_acc_samples_[lhs].norm() - G_m_s2) /
+                                 std::max(0.1, dynamic_init_options_.max_acc_norm_error_mps2) +
+                             init_gyr_samples_[lhs].norm() /
+                                 std::max(0.01, dynamic_init_options_.max_mean_gyr_radps);
+    const double rhs_score = std::abs(init_acc_samples_[rhs].norm() - G_m_s2) /
+                                 std::max(0.1, dynamic_init_options_.max_acc_norm_error_mps2) +
+                             init_gyr_samples_[rhs].norm() /
+                                 std::max(0.01, dynamic_init_options_.max_mean_gyr_radps);
+    return lhs_score < rhs_score;
+  });
+  const size_t keep_count = std::min(
+      robust_indices.size(),
+      std::max<size_t>(20, static_cast<size_t>(std::ceil(
+                               robust_indices.size() * dynamic_init_options_.robust_sample_ratio))));
+  robust_indices.resize(keep_count);
+
+  V3D acc_robust_mean, acc_robust_std, gyr_robust_mean, gyr_robust_std;
+  ComputeMeanAndStd(init_acc_samples_, robust_indices, acc_robust_mean, acc_robust_std);
+  ComputeMeanAndStd(init_gyr_samples_, robust_indices, gyr_robust_mean, gyr_robust_std);
+  FinishInitialization(meas, kf_state, acc_robust_mean, V3D::Zero(), acc_robust_std, gyr_robust_std, false);
+  return true;
+}
+
+void ImuProcess::FinishInitialization(const MeasureGroup &meas,
+                                      esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
+                                      const V3D &acc_reference, const V3D &gyr_reference,
+                                      const V3D &acc_std, const V3D &gyr_std, bool stationary) {
+  mean_acc = acc_reference;
+  mean_gyr = gyr_reference;
+  cov_acc  = acc_std.cwiseProduct(acc_std);
+  cov_gyr  = gyr_std.cwiseProduct(gyr_std);
+
+  V3D specific_force_direction = mean_acc;
+  if (specific_force_direction.norm() < 1e-6) specific_force_direction = V3D(0, 0, G_m_s2);
+  specific_force_direction.normalize();
+  const V3D gravity_specific_force = specific_force_direction * G_m_s2;
+
   state_ikfom init_state = kf_state.get_x();
   init_state.grav        = S2(V3D(0, 0, -G_m_s2));
-  init_state.rot         = Eigen::Quaterniond::FromTwoVectors(-mean_acc, V3D(0, 0, -1.0));
-  init_state.ba          = mean_acc - mean_acc / mean_acc.norm() * G_m_s2;
-  // init_state.grav        = S2(-mean_acc / mean_acc.norm() * G_m_s2);
-  // init_state.bg           = mean_gyr;
+  init_state.rot         = Eigen::Quaterniond::FromTwoVectors(-gravity_specific_force, V3D(0, 0, -1.0));
+  init_state.vel         = V3D::Zero();
+  if (stationary) {
+    init_state.ba = mean_acc - gravity_specific_force;
+    init_state.bg = mean_gyr;
+  } else {
+    init_state.ba.setZero();
+    init_state.bg.setZero();
+  }
   init_state.offset_T_L_I = Lidar_T_wrt_IMU;
   init_state.offset_R_L_I = Lidar_R_wrt_IMU;
   kf_state.change_x(init_state);
-
-  spdlog::info("mean_acc {} {} {}", mean_acc(0), mean_acc(1), mean_acc(2));
-  spdlog::info("mean_gyr {} {} {}", mean_gyr(0), mean_gyr(1), mean_gyr(2));
-  spdlog::info("grav {} {} {}", init_state.grav[0], init_state.grav[1], init_state.grav[2]);
-  spdlog::info("ba {} {} {}", init_state.ba(0), init_state.ba(1), init_state.ba(2));
-  spdlog::info("bg {} {} {}", init_state.bg(0), init_state.bg(1), init_state.bg(2));
-  spdlog::info("gyr cov {} {} {}", sqrt(cov_gyr(0)), sqrt(cov_gyr(1)), sqrt(cov_gyr(2)));
-  spdlog::info("acc cov {} {} {}", sqrt(cov_acc(0)), sqrt(cov_acc(1)), sqrt(cov_acc(2)));
 
   esekfom::esekf<state_ikfom, 12, input_ikfom>::cov init_P = kf_state.get_P();
   init_P.setIdentity();
   init_P(6, 6) = init_P(7, 7) = init_P(8, 8) = 0.00001;
   init_P(9, 9) = init_P(10, 10) = init_P(11, 11) = 0.00001;
-  init_P(15, 15) = init_P(16, 16) = init_P(17, 17) = 0.0001;
-  init_P(18, 18) = init_P(19, 19) = init_P(20, 20) = 0.001;
-  init_P(21, 21) = init_P(22, 22) = 0.00001;
+  init_P(15, 15) = init_P(16, 16) = init_P(17, 17) = stationary ? 0.0001 : 0.01;
+  init_P(18, 18) = init_P(19, 19) = init_P(20, 20) = stationary ? 0.001 : 0.10;
+  init_P(21, 21) = init_P(22, 22) = stationary ? 0.00001 : 0.01;
   kf_state.change_P(init_P);
-  last_imu_ = meas.imu.back();
+
+  const auto &last_acc_msg = meas.imu.back()->linear_acceleration;
+  const auto &last_gyr_msg = meas.imu.back()->angular_velocity;
+  const V3D last_acc(last_acc_msg.x, last_acc_msg.y, last_acc_msg.z);
+  const V3D last_gyr(last_gyr_msg.x, last_gyr_msg.y, last_gyr_msg.z);
+  angvel_last = last_gyr - init_state.bg;
+  acc_s_last  = init_state.rot * (last_acc - init_state.ba) + V3D(0, 0, -G_m_s2);
+  last_imu_   = meas.imu.back();
+  last_lidar_end_time_ = meas.lidar_end_time;
+  imu_need_init_ = false;
+
+  const double duration_sec = meas.imu.back()->header.stamp.toSec() - start_timestamp_;
+  spdlog::info(
+      "[INIT] Dynamic initialization complete: mode={}, duration={:.3f}s, samples={}, "
+      "acc=[{:.6f}, {:.6f}, {:.6f}], acc_std={:.6f}, gyr_std={:.6f}, "
+      "ba=[{:.6f}, {:.6f}, {:.6f}], bg=[{:.6f}, {:.6f}, {:.6f}].",
+      stationary ? "stationary" : "moving", duration_sec, init_acc_samples_.size(), mean_acc.x(), mean_acc.y(),
+      mean_acc.z(), acc_std.norm(), gyr_std.norm(), init_state.ba.x(), init_state.ba.y(), init_state.ba.z(),
+      init_state.bg.x(), init_state.bg.y(), init_state.bg.z());
+
+  cov_acc = cov_acc_scale;
+  cov_gyr = cov_gyr_scale;
 }
 
 void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
@@ -232,13 +348,15 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
   }
 }
 
-void ImuProcess::Process(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
+bool ImuProcess::Process(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
                          PointCloudXYZI::Ptr cur_pcl_un) {
   double t1, t2, t3;
   t1 = omp_get_wtime();
 
+  if (cur_pcl_un) cur_pcl_un->clear();
+
   if (meas.imu.empty()) {
-    return;
+    return false;
   };
   if (meas.lidar == nullptr) {
     spdlog::error("meas.lidar == nullptr");
@@ -246,24 +364,8 @@ void ImuProcess::Process(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 1
   }
 
   if (imu_need_init_) {
-    /// The very first lidar frame
-    IMU_init(meas, kf_state, init_iter_num);
-
-    imu_need_init_ = true;
-
-    last_imu_ = meas.imu.back();
-
-    state_ikfom imu_state = kf_state.get_x();
-    if (init_iter_num > MAX_INI_COUNT) {
-      cov_acc *= pow(G_m_s2 / mean_acc.norm(), 2);
-      imu_need_init_ = false;
-
-      cov_acc = cov_acc_scale;
-      cov_gyr = cov_gyr_scale;
-      spdlog::info("IMU Initial Done");
-    }
-
-    return;
+    TryInitialize(meas, kf_state);
+    return false;
   }
 
   UndistortPcl(meas, kf_state, *cur_pcl_un);
@@ -272,4 +374,5 @@ void ImuProcess::Process(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 1
   t3 = omp_get_wtime();
 
   // spdlog::info("[ IMU Process ]: Time: {}", t3 - t1);
+  return !cur_pcl_un->empty();
 }

@@ -82,7 +82,7 @@ void IESKF::predict(
   PosAtt first_pos;
   first_pos.timestamp = states_ptr_->timestamp;
   first_pos.pos = states_ptr_->sw_pos_[0].cast<float>();
-  first_pos.quat = QUATD(states_ptr_->sw_rot_[0]).cast<float>();
+  first_pos.quat = QUAT(states_ptr_->sw_rot_[0]);
   state_predict.emplace_back(first_pos);
   LOG(INFO) << std::fixed << "first_pos:" << first_pos.timestamp;
   stateSliding();
@@ -113,12 +113,12 @@ void IESKF::predict(
     PosAtt now_iter_pos;
     now_iter_pos.timestamp = now_iter_ts;
     now_iter_pos.pos = states_ptr_->sw_pos_[0].cast<float>();
-    now_iter_pos.quat = QUATD(states_ptr_->sw_rot_[0]).cast<float>();
+    now_iter_pos.quat = QUAT(states_ptr_->sw_rot_[0]);
     state_predict.emplace_back(now_iter_pos);
   }
   states_ptr_->timestamp = pcl_end_time;
   // timestamp sliding
-  for (int i = WINDOW_SIZE - 1; i >= 1; --i)
+  for (int i = states_ptr_->windowSize() - 1; i >= 1; --i)
   {
     states_ptr_->sw_timestamp[i] = states_ptr_->sw_timestamp[i - 1];
   }
@@ -137,9 +137,12 @@ void IESKF::propagateState(const Vec3& hat_gyro, const Vec3& hat_acc, const doub
 #endif
   Vec3 acc_world_plus_gravity = states_ptr_->sw_rot_[0] * hat_acc + gravity;
 
-  Vec3 d_theta = hat_gyro * dt;
-  Vec3 d_v = hat_acc * dt;
-  Vec3 d_v_temp = d_v + 0.5 * d_theta.cross(d_v) + (last_dtheta_.cross(d_v) + last_dv_.cross(d_theta)) / 12;
+  const FloatDataType dt_f = static_cast<FloatDataType>(dt);
+  Vec3 d_theta = hat_gyro * dt_f;
+  Vec3 d_v = hat_acc * dt_f;
+  Vec3 d_v_temp = d_v + static_cast<FloatDataType>(0.5) * d_theta.cross(d_v) +
+                  (last_dtheta_.cross(d_v) + last_dv_.cross(d_theta)) /
+                      static_cast<FloatDataType>(12.0);
 
   Vec3 pre_vel = states_ptr_->vel_;
 
@@ -149,16 +152,18 @@ void IESKF::propagateState(const Vec3& hat_gyro, const Vec3& hat_acc, const doub
   switch (ieskf_configs_.predict_method)
   {
     case DOUBLE_SAMPLING:
-      // TODO: DOUBLE_SAMPLING have bug !!!!!!
-      vel = vel + (rot * d_v_temp) + gravity * dt;
-      pos = pos + (vel + pre_vel) / 2 * dt;
-      rot = rot * exp((d_theta + last_dtheta_.cross(d_theta) / 12));
+      // Production DLL coning/sculling propagation.
+      vel = vel + (rot * d_v_temp) + gravity * dt_f;
+      pos = pos + (vel + pre_vel) / static_cast<FloatDataType>(2.0) * dt_f;
+      rot = rot * exp((d_theta + last_dtheta_.cross(d_theta) /
+                                    static_cast<FloatDataType>(12.0)));
       last_dv_ = d_v;
       last_dtheta_ = d_theta;
       break;
     case MID_POINT:
-      pos = pos + vel * dt + 0.5 * acc_world_plus_gravity * dt * dt;
-      vel = vel + acc_world_plus_gravity * dt;
+      pos = pos + vel * dt_f + static_cast<FloatDataType>(0.5) *
+                                      acc_world_plus_gravity * dt_f * dt_f;
+      vel = vel + acc_world_plus_gravity * dt_f;
       rot = rot * exp(d_theta);
       break;
     default:
@@ -177,32 +182,37 @@ void IESKF::propagateCov(const Vec3& hat_gyro, const Vec3& hat_acc, const double
   acc_avr_skew << skewSymMatrix(hat_acc);
   Mat3& rot = states_ptr_->sw_rot_[0];
   MatDIM& cov = states_ptr_->mill_cov;
+  const int dim_state = states_ptr_->dimState();
+  const FloatDataType dt_f = static_cast<FloatDataType>(dt);
 
   /*** error state order: dtheta, dt, dv, dbg, dba ***/
-  MatDIM F_x, Q;
-  F_x.setIdentity();
-  F_x.block<3, 3>(0, 0) = exp(hat_gyro * -dt);
-  F_x.block<3, 3>(0, 9) = -Mat3::Identity() * dt;
-  F_x.block<3, 3>(3, 6) = Mat3::Identity() * dt;
-  F_x.block<3, 3>(6, 0) = -rot * acc_avr_skew * dt;
-  F_x.block<3, 3>(6, 12) = -rot * dt;
+  MatDIM F_x = MatDIM::Identity(dim_state, dim_state);
+  MatDIM Q = MatDIM::Zero(dim_state, dim_state);
+  F_x.block<3, 3>(0, 0) = exp(hat_gyro * -dt_f);
+  F_x.block<3, 3>(0, 9) = -Mat3::Identity() * dt_f;
+  F_x.block<3, 3>(3, 6) = Mat3::Identity() * dt_f;
+  F_x.block<3, 3>(6, 0) = -rot * acc_avr_skew * dt_f;
+  F_x.block<3, 3>(6, 12) = -rot * dt_f;
 #if GRAVITY_CALIBRATION
   F_x.block<3, 3>(6, 15) = Mat3::Identity() * dt;
 #endif
-  double gyro_radio = hat_gyro.norm() / ieskf_configs_.gyro_keep_std_limit;
-  gyro_radio = gyro_radio < 1.0 ? 1.0 : gyro_radio;
-  gyro_radio = gyro_radio > 2.0 ? 2.0 : gyro_radio;
-  double acc_radio =
-      (states_ptr_->sw_rot_[0] * hat_acc + ieskf_configs_.gravity).norm() / ieskf_configs_.acc_keep_std_limit;
-  acc_radio = acc_radio < 1.0 ? 1.0 : acc_radio;
-  acc_radio = acc_radio > 2.0 ? 2.0 : acc_radio;
-
-  Q.setZero();
-  Q.block<3, 3>(0, 0).diagonal() = ieskf_configs_.mill_cov_gyr * std::pow(gyro_radio, 2) * dt * dt;
+  const double gyro_std = ieskf_configs_.gyr_std +
+                          ieskf_configs_.gyro_std_slope * hat_gyro.norm();
+  const double acc_norm =
+      (states_ptr_->sw_rot_[0] * hat_acc + ieskf_configs_.gravity).norm();
+  const double acc_std = ieskf_configs_.acc_std +
+                         ieskf_configs_.acc_std_slope * acc_norm;
+  const FloatDataType gyro_variance = static_cast<FloatDataType>(
+      gyro_std * gyro_std * SCALE * dt * dt);
+  const FloatDataType acc_variance = static_cast<FloatDataType>(
+      acc_std * acc_std * SCALE * dt * dt);
+  Q.block<3, 3>(0, 0).diagonal().setConstant(gyro_variance);
   Q.block<3, 3>(6, 6) =
-      rot * ieskf_configs_.mill_cov_acc.asDiagonal() * rot.transpose() * std::pow(acc_radio, 2) * dt * dt;
-  Q.block<3, 3>(9, 9).diagonal() = ieskf_configs_.mill_cov_bias_gyr * dt * dt;    // bias gyro covariance
-  Q.block<3, 3>(12, 12).diagonal() = ieskf_configs_.mill_cov_bias_acc * dt * dt;  // bias acc covariance
+      rot * (Vec3::Constant(acc_variance).asDiagonal()) * rot.transpose();
+  Q.block<3, 3>(9, 9).diagonal() =
+      ieskf_configs_.mill_cov_bias_gyr * (dt_f * dt_f);
+  Q.block<3, 3>(12, 12).diagonal() =
+      ieskf_configs_.mill_cov_bias_acc * (dt_f * dt_f);
   // P = FPF^T + Q
   SparseMat F_x_sparse = F_x.sparseView();
   cov = F_x_sparse * cov * F_x_sparse.transpose() + Q;
@@ -210,28 +220,29 @@ void IESKF::propagateCov(const Vec3& hat_gyro, const Vec3& hat_acc, const double
 
 void IESKF::stateSliding()
 {
-  if (WINDOW_SIZE <= 1)
+  const int window_size = states_ptr_->windowSize();
+  const int dim_state = states_ptr_->dimState();
+  if (window_size <= 1)
     return;
 
   // 1. state sliding
-  for (int i = WINDOW_SIZE - 1; i >= 1; --i)
+  for (int i = window_size - 1; i >= 1; --i)
   {
     states_ptr_->sw_pos_[i] = states_ptr_->sw_pos_[i - 1];
     states_ptr_->sw_rot_[i] = states_ptr_->sw_rot_[i - 1];
   }
 
   // 2. covariance maintain
-  MatDIM F = MatDIM::Zero();
-  F.template block<DIM_CURR_STATE, DIM_CURR_STATE>(0, 0) =
-      Matrix<FloatDataType, DIM_CURR_STATE, DIM_CURR_STATE>::Identity();
-  for (int i = 2; i < WINDOW_SIZE; ++i)
+  MatDIM F = MatDIM::Zero(dim_state, dim_state);
+  F.block(0, 0, DIM_CURR_STATE, DIM_CURR_STATE).setIdentity();
+  for (int i = 2; i < window_size; ++i)
   {
     int dim = DIM_CURR_STATE + (i - 1) * 6;
-    F.template block<3, 3>(dim, dim - 6) = M3D::Identity();
-    F.template block<3, 3>(dim + 3, dim - 3) = M3D::Identity();
+    F.template block<3, 3>(dim, dim - 6) = Mat3::Identity();
+    F.template block<3, 3>(dim + 3, dim - 3) = Mat3::Identity();
   }
-  F.template block<3, 3>(DIM_CURR_STATE, 0) = M3D::Identity();
-  F.template block<3, 3>(DIM_CURR_STATE + 3, 3) = M3D::Identity();
+  F.template block<3, 3>(DIM_CURR_STATE, 0) = Mat3::Identity();
+  F.template block<3, 3>(DIM_CURR_STATE + 3, 3) = Mat3::Identity();
   SparseMat F_sparse = F.sparseView();
   states_ptr_->mill_cov = F_sparse * states_ptr_->mill_cov * F_sparse.transpose();
 }

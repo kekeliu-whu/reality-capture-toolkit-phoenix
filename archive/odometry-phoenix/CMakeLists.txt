@@ -42,6 +42,7 @@ add_library(odometry_phoenix_core STATIC
   src/method/lio_init.cpp
   src/method/preprocess.cpp
   src/method/io_utils.cpp
+  src/method/ulog.cpp
   src/method/uniform_sampling.cpp
   src/method/undistort.cpp
 )
@@ -58,6 +59,7 @@ target_link_libraries(odometry_phoenix_core PUBLIC
   yaml-cpp::yaml-cpp
   glog::glog
   spdlog::spdlog
+  ulog_cpp::ulog_cpp
   xmap_lib
   OpenMP::OpenMP_CXX
 )

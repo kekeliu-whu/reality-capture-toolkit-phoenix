@@ -7,7 +7,7 @@
 
 namespace xmap {
 
-bool Xmap::knnSearch(
+bool Xmap::collectNearestPoints(
     const V3F& point_search,
     const V3F& view_point,
     std::vector<V3F>& nearest_points,
@@ -26,8 +26,7 @@ bool Xmap::knnSearch(
     std::vector<PointType, Eigen::aligned_allocator<PointType>> pointsVector;
 
     auto it = small_voxel_map_.find(searchVoxel[i]);
-    if (it == small_voxel_map_.end() || it->second.cloud_->empty() || it->second.is_dynamic_IO)
-      continue;
+    if (it == small_voxel_map_.end() || it->second.cloud_->empty()) continue;
 
     // 执行本格子的KNN搜索
     int search_max = configs_.knn_max_points;
@@ -41,14 +40,12 @@ bool Xmap::knnSearch(
         V3F point_normal(
             nearest_j_point.normal_x, nearest_j_point.normal_y, nearest_j_point.normal_z);
         V3F view_vec = view_point - point_search;
-        view_vec /= view_vec.norm();
         double cos_theta = point_normal.dot(view_vec);
         // cos_theta < 0排除了钝角的case，留下了锐角和normal = (0,0,0) 的 case
         if (cos_theta < 0) continue;
       }
 
-      V3F searched_point = pointType2V3F(nearest_j_point);
-      if (pointSquaredDistance[j] < configs_.knn_distance_limit * configs_.knn_distance_limit) {
+      if (pointSquaredDistance[j] < configs_.knn_distance_limit_squared) {
         nearest_point_temp.emplace_back(pointType2V3F(nearest_j_point));
         nearest_dist_temp.emplace_back(pointSquaredDistance[j]);
       }
@@ -73,6 +70,28 @@ bool Xmap::knnSearch(
     nearest_points.emplace_back(nearest_point_temp[indices[i]]);
   }
   return nearest_dist_temp.size() >= configs_.knn_min_points;
+}
+
+bool Xmap::knnSearch(
+    const V3F& point_search,
+    const V3F& view_point,
+    std::vector<V3F>& nearest_points,
+    double ts_absolute) {
+  return collectNearestPoints(point_search, view_point, nearest_points, ts_absolute);
+}
+
+bool Xmap::knnSearch(
+    const V3F& point_search,
+    const V3F& view_point,
+    double ts_absolute,
+    PlaneConstPtr& plane) {
+  plane.reset();
+
+  std::vector<V3F> nearest_points;
+  if (!collectNearestPoints(point_search, view_point, nearest_points, ts_absolute)) return false;
+
+  plane = planeFitting(nearest_points, view_point);
+  return plane && plane->is_plane;
 }
 
 bool Xmap::radiusSearch(
@@ -109,7 +128,6 @@ bool Xmap::radiusSearch(
         V3F point_normal(
             nearest_j_point.normal_x, nearest_j_point.normal_y, nearest_j_point.normal_z);
         V3F view_vec = view_point - point_search;
-        view_vec /= view_vec.norm();
         double cos_theta = point_normal.dot(view_vec);
         // cos_theta < 0包含了锐角点和normal=(0,0,0)的无法向点
         if (cos_theta < 0) continue;
@@ -124,7 +142,7 @@ bool Xmap::radiusSearch(
     if (ts_relative > it->second.time_mark_.end_ts) it->second.time_mark_.end_ts = ts_relative;
   }
 
-  return nearest_dist_temp.size() >= configs_.knn_min_points;
+  return nearest_points.size() >= static_cast<std::size_t>(configs_.knn_min_points);
 }
 
 bool Xmap::planeSearch(const V3F& point_search, Plane& plane) { return false; }
@@ -132,10 +150,7 @@ bool Xmap::planeSearch(const V3F& point_search, Plane& plane) { return false; }
 std::vector<VoxelLoc> Xmap::generateSearchVoxelKey(const V3F& point) {
   /** 1. 根据点的位置计算体素坐标 **/
   VoxelLoc voxelLoc = pos2VoxelLoc(point, configs_.small_voxel_size);
-  V3F voxel_center(
-      voxelLoc.x_ * configs_.small_voxel_size,
-      voxelLoc.y_ * configs_.small_voxel_size,
-      voxelLoc.z_ * configs_.small_voxel_size);
+  const V3F voxel_center = calVoxelCenter(voxelLoc, configs_.small_voxel_size);
 
   /** 2. 跨格判断 **/
   V3F diff = point - voxel_center;

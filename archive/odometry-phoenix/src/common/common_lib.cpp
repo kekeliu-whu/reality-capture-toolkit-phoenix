@@ -33,8 +33,8 @@ void transformToWorld(
     const KFState::ConstPtr &state,
     PointCloudXYZINormal::Ptr &feats_map_world)
 {
-  Mat3 rot = state->sw_rot_[WINDOW_SIZE - 1];
-  Vec3 pos = state->sw_pos_[WINDOW_SIZE - 1];
+  Mat3 rot = state->sw_rot_.back();
+  Vec3 pos = state->sw_pos_.back();
   feats_map_world->header = feats_map_body->header;
   feats_map_world->width = feats_map_body->width;
   feats_map_world->height = feats_map_body->height;

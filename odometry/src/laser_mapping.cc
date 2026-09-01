@@ -70,6 +70,23 @@ DEFINE_string(project_dirname, "Z:\\rick\\dataset\\jiuzhou\\zhujiangguihuadasha-
               "Path to the IMU data file");
 DEFINE_string(output_dir, "Z:\\rick\\dataset\\jiuzhou\\zhujiangguihuadasha-1\\output",
               "Directory to save output trajectory");
+DEFINE_bool(dynamic_initialization, true,
+            "Enable motion-aware IMU initialization with a moving-start fallback");
+DEFINE_double(dynamic_init_min_duration, 2.0,
+              "Minimum IMU observation time before accepting a stationary initialization");
+DEFINE_double(dynamic_init_max_duration, 4.0,
+              "Maximum IMU observation time before initializing while moving");
+DEFINE_double(dynamic_init_max_acc_std, 0.35,
+              "Maximum 3-axis accelerometer standard-deviation norm for stationary initialization (m/s^2)");
+DEFINE_double(dynamic_init_max_gyr_std, 0.08,
+              "Maximum 3-axis gyroscope standard-deviation norm for stationary initialization (rad/s)");
+DEFINE_double(dynamic_init_max_mean_gyr, 0.08,
+              "Maximum mean angular-rate norm for stationary initialization (rad/s)");
+DEFINE_double(dynamic_init_max_acc_norm_error, 0.75,
+              "Maximum accelerometer norm error for stationary initialization (m/s^2)");
+DEFINE_double(dynamic_init_robust_sample_ratio, 0.25,
+              "Fraction of least-dynamic IMU samples used for a moving-start gravity seed");
+DEFINE_int32(max_scans, 0, "Stop after this many synchronized LiDAR scans; 0 processes the full dataset");
 
 /*** Time Log Variables ***/
 bool runtime_pos_log = false, extrinsic_est_en = true;
@@ -660,6 +677,25 @@ int main(int argc, char **argv) {
   p_imu->set_gyr_bias_cov(V3D(b_gyr_cov, b_gyr_cov, b_gyr_cov));
   p_imu->set_acc_bias_cov(V3D(b_acc_cov, b_acc_cov, b_acc_cov));
 
+  if (FLAGS_dynamic_init_min_duration < 0 ||
+      FLAGS_dynamic_init_max_duration < FLAGS_dynamic_init_min_duration ||
+      FLAGS_dynamic_init_robust_sample_ratio <= 0 || FLAGS_dynamic_init_robust_sample_ratio > 1) {
+    spdlog::error("Invalid dynamic initialization options: min_duration={}, max_duration={}, robust_sample_ratio={}",
+                  FLAGS_dynamic_init_min_duration, FLAGS_dynamic_init_max_duration,
+                  FLAGS_dynamic_init_robust_sample_ratio);
+    return -1;
+  }
+  DynamicInitializationOptions dynamic_init_options;
+  dynamic_init_options.enabled                 = FLAGS_dynamic_initialization;
+  dynamic_init_options.min_duration_sec        = FLAGS_dynamic_init_min_duration;
+  dynamic_init_options.max_duration_sec        = FLAGS_dynamic_init_max_duration;
+  dynamic_init_options.max_acc_std_mps2        = FLAGS_dynamic_init_max_acc_std;
+  dynamic_init_options.max_gyr_std_radps       = FLAGS_dynamic_init_max_gyr_std;
+  dynamic_init_options.max_mean_gyr_radps      = FLAGS_dynamic_init_max_mean_gyr;
+  dynamic_init_options.max_acc_norm_error_mps2 = FLAGS_dynamic_init_max_acc_norm_error;
+  dynamic_init_options.robust_sample_ratio     = FLAGS_dynamic_init_robust_sample_ratio;
+  p_imu->set_dynamic_initialization_options(dynamic_init_options);
+
   double epsi[23] = {0.001};
   std::fill(epsi, epsi + 23, 0.001);
   kf.init_dyn_share(get_f, df_dx, df_dw, h_share_model, NUM_MAX_ITERATIONS, epsi);
@@ -708,6 +744,7 @@ int main(int argc, char **argv) {
   double last_timestamp;
 
   int count = 0;
+  int synchronized_scan_count = 0;
   // Main processing loop: read and process LiDAR data frame by frame
   while (!lidar_reader.IsFileEnded() && !flg_exit) {
     // Read one frame of point cloud data
@@ -721,6 +758,11 @@ int main(int argc, char **argv) {
 
     // Process synchronized data packages
     if (sync_packages(Measures)) {
+      ++synchronized_scan_count;
+      if (FLAGS_max_scans > 0 && synchronized_scan_count > FLAGS_max_scans) {
+        spdlog::info("Reached --max_scans={}; finalizing outputs.", FLAGS_max_scans);
+        break;
+      }
       if (flg_first_scan)  // skip the first lidar scan
       {
         flg_first_scan = false;
@@ -734,7 +776,9 @@ int main(int argc, char **argv) {
       svd_time     = 0;
       t0           = omp_get_wtime();
 
-      p_imu->Process(Measures, kf, feats_undistort);
+      if (!p_imu->Process(Measures, kf, feats_undistort)) {
+        continue;
+      }
       g_state_point = kf.get_x();
 
       if (feats_undistort == nullptr || feats_undistort->empty()) {

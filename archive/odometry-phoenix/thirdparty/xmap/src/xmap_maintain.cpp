@@ -1,6 +1,9 @@
 //
 // Created by youyuan on 24-1-17.
 //
+#include <algorithm>
+#include <unordered_set>
+#include <utility>
 #include <glog/logging.h>
 #include "xmap.h"
 #include "xmap_util.h"
@@ -8,6 +11,8 @@
 namespace xmap {
 
 void Xmap::mapIncremental(const PointCloudPtr& points_to_add, const V3F& view_point) {
+  if (!points_to_add || points_to_add->empty()) return;
+
   double ts_global = static_cast<double>(points_to_add->header.stamp) * 1e-6;
   if (start_mapping_ts_ == INIT_STARTING_MAPPING_TS) start_mapping_ts_ = ts_global;
 
@@ -30,39 +35,27 @@ void Xmap::mapIncremental(const PointCloudPtr& points_to_add, const V3F& view_po
       }
     }
     point.curvature = ts_relative;
-    VoxelLoc large_voxelLoc = pos2VoxelLoc(point, configs_.large_voxel_size);
     VoxelLoc small_voxelLoc = pos2VoxelLoc(point, configs_.small_voxel_size);
-    // 1.1 进行large_voxel_map的增广
-    if (configs_.enable_dynamic) {
-      auto it_large_map = large_voxel_map_.find(large_voxelLoc);
-      if (it_large_map != large_voxel_map_.end()) {
-        it_large_map->second.insert(small_voxelLoc);
-      } else {
-        std::unordered_set<VoxelLoc> small_voxelLoc_set;
-        small_voxelLoc_set.insert(small_voxelLoc);
-        large_voxel_map_.insert(std::make_pair(large_voxelLoc, small_voxelLoc_set));
-      }
-    }
-
-    // 1.2 进行small_voxel_map的增广
-    // 1.2.1根据点的位置计算体素坐标
+    // 1.1 进行small_voxel_map的增广
     auto it_small_map = small_voxel_map_.find(small_voxelLoc);
 
-    // 1.2.3 在相对坐标系下的hash_key
-    V3F voxel_center = calVoxelCenter(small_voxelLoc, configs_.small_voxel_size);
-    V3F relative_cor = point_v3f - voxel_center;
-    IntDataType hash_key = hashValue(relative_cor, configs_.resolution);
+    // 1.2 生产版本使用 small_scale^3 的稠密格索引，不使用哈希。
+    const IntDataType dense_index = denseCellIndex(point_v3f, small_voxelLoc, configs_);
+    if (dense_index < 0) {
+      LOG(WARNING) << "point fell outside its XMap small voxel";
+      continue;
+    }
 
-    // 1.2.4 将本点添加进容器
+    // 1.3 将本点添加进容器
     if (it_small_map != small_voxel_map_.end()) {
       // 如果体素已存在，则更新或添加点
       auto& value = it_small_map->second;
-      auto it_resolution = value.index_map_.find(hash_key);
-      bool in_resolution = it_resolution != value.index_map_.end();
+      const IntDataType point_index = value.index_map_[dense_index];
+      const bool in_resolution = point_index >= 0;
 
       if (in_resolution) {
         // 在V2.0中使用策略更新点，法向由于只是过滤点，因此不更新
-        int index = it_resolution->second;
+        const int index = point_index;
         switch (configs_.replace_points_flag) {
           case OLD_REMAIN:
             if (ts_relative < value.cloud_->points.at(index).curvature) {
@@ -78,9 +71,7 @@ void Xmap::mapIncremental(const PointCloudPtr& points_to_add, const V3F& view_po
             break;
           case FUSION:
             // 新旧融合时，选择靠近中心的点进行替换
-            VoxelLoc grid_cor_voxel = pos2VoxelLoc(relative_cor, configs_.resolution);
-            V3F grid_cor_center = calVoxelCenter(grid_cor_voxel, configs_.resolution);
-            V3F grid_center = voxel_center + grid_cor_center;
+            const V3F grid_center = denseCellCenter(small_voxelLoc, dense_index, configs_);
             const PointType& old_point = value.cloud_->points.at(index);
             double dist_to_center_old = (grid_center - pointType2V3F(old_point)).norm();
             double dist_to_center_cur = (grid_center - point_v3f).norm();
@@ -91,10 +82,11 @@ void Xmap::mapIncremental(const PointCloudPtr& points_to_add, const V3F& view_po
             break;
         }
         value.time_mark_.end_ts = ts_relative;
+        if (value.counter_ > 0) need_reconstruct_set.insert(small_voxelLoc);
       } else {
         // 将点添加到体素的点云中
         value.cloud_->push_back(point);
-        value.index_map_.insert(std::make_pair(hash_key, value.cloud_->size() - 1));
+        value.index_map_[dense_index] = static_cast<IntDataType>(value.cloud_->size() - 1);
         value.counter_ += 1;
         value.time_mark_.end_ts = ts_relative;
         need_reconstruct_set.insert(small_voxelLoc);
@@ -107,31 +99,43 @@ void Xmap::mapIncremental(const PointCloudPtr& points_to_add, const V3F& view_po
       value.counter_ += 1;
       value.cloud_->push_back(point);
       value.cloud_->header.stamp = points_to_add->header.stamp;
-      value.index_map_.insert(std::make_pair(hash_key, value.cloud_->size() - 1));
+      value.index_map_[dense_index] = 0;
       value.time_mark_ = time_mark;
       need_reconstruct_set.insert(small_voxelLoc);
-      small_voxel_map_.insert(std::make_pair(small_voxelLoc, value));
+      small_voxel_map_.emplace(small_voxelLoc, std::move(value));
     }
   }
 
   /*** 2. 按需重构KD-Tree ***/
-  for (auto voxelLoc : need_reconstruct_set) {
+  std::vector<SmallVoxelValue*> need_reconstruct;
+  need_reconstruct.reserve(need_reconstruct_set.size());
+  for (const auto& voxelLoc : need_reconstruct_set) {
     auto it = small_voxel_map_.find(voxelLoc);
     if (it == small_voxel_map_.end()) {
       LOG(ERROR) << "error occured in voxel_map sync";
       // 二级告警：lru与voxel_map不同步，但可以继续跑，算法某处出错了
       continue;
     }
-    float new_rate = float(it->second.counter_) / float(it->second.cloud_->size());
-    if (new_rate > 0.1 || it->second.cloud_->size() < 100) {
-      it->second.counter_ = 0;
-      it->second.kd_tree_->setInputCloud(it->second.cloud_);
+    need_reconstruct.push_back(&it->second);
+  }
+
+#ifdef MP_EN
+#pragma omp parallel for schedule(dynamic)
+#endif
+  for (int i = 0; i < static_cast<int>(need_reconstruct.size()); ++i) {
+    SmallVoxelValue& value = *need_reconstruct[i];
+    if (value.cloud_->empty()) continue;
+
+    const float new_rate =
+        static_cast<float>(value.counter_) / static_cast<float>(value.cloud_->size());
+    if (new_rate > KDTREE_UPDATE_RATIO || value.cloud_->size() < configs_.convergence_num) {
+      value.kd_tree_->setInputCloud(value.cloud_);
+      value.counter_ = 0;
     }
   }
 
   /*** 3*. 重新计算法向 ***/
   // if (configs_.enable_normal_filter) recomputeNormal(view_point);
-  // checkGridDataSync();
 }
 
 void Xmap::recomputeNormal(const V3F& view_point) {

@@ -35,8 +35,11 @@ struct IESKFConfigs
   Vec3 mill_cov_bias_acc;
   Vec3 gravity;
   int max_iter_num;
-  double acc_keep_std_limit;
-  double gyro_keep_std_limit;
+  double acc_std;
+  double gyr_std;
+  double acc_std_slope;
+  double gyro_std_slope;
+  double lidar_variance_limit;
   PredictMethod predict_method;
 };
 // TODO: add state machine about IESKF (Init, Run, Failed, Save, ...)
@@ -72,7 +75,7 @@ class IESKF
       int sweep_id,
       StatePredict& state_predict,
       AttributePredict& attr_predict);
-  void update(BaseFusion& fusion, AttributeIterate& attr_iter);
+  bool update(BaseFusion& fusion, AttributeIterate& attr_iter);
   void logState(std::string str);
   KFState::ConstPtr getStatesPtr() const;
 

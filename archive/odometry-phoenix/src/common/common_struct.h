@@ -13,8 +13,10 @@
 namespace lixel
 {
 
-// TODO: Determine the double and float in calculation
-using FloatDataType = double;
+// Match the production DLL: nominal states and the matrix-heavy IESKF path use
+// single precision.  Timestamps, configuration values and measurement
+// variances remain double precision at their declarations.
+using FloatDataType = float;
 using IntDataType = int32_t;
 
 using Vec3 = Eigen::Matrix<FloatDataType, 3, 1>;
@@ -123,19 +125,28 @@ typedef struct AttributeIterate
 
 typedef struct AttributeJacobi
 {
-  V3F point_eig;
-  float flat_ness;
-  V3F norm_eig;
-  float smooth_ness;
-  uint32_t use_point_num;
-  uint32_t total_point_num;
-  float overlap_radio;
+  V3F point_eig = V3F::Zero();
+  float flat_ness = 0.0f;
+  V3F norm_eig = V3F::Zero();
+  float smooth_ness = 0.0f;
+  uint32_t use_point_num = 0;
+  uint32_t current_use_point_num = 0;
+  uint32_t total_point_num = 0;
+  uint32_t search_success_num = 0;
+  uint32_t plane_success_num = 0;
+  float overlap_radio = 0.0f;
+  float normal_assigned_ratio = 0.0f;
+  float residual_mean = 0.0f;
+  float residual_rms = 0.0f;
+  Eigen::Matrix<float, 6, 1> current_pose_information_eig =
+      Eigen::Matrix<float, 6, 1>::Zero();
 } AttributeJacobi;
 
 typedef struct AttributeIESKF
 {
   uint32_t sweep_id;
   double timestamp;
+  bool update_success = false;
   float downsample_dis;
   StatePredict state_predict;
   AttributePredict attritube_predict;

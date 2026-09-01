@@ -48,15 +48,15 @@ endif ()
 
 
 SET(XMAP_TEST_OPTION OFF)
+option(XMAP_ACTIVE_PATH_TEST_OPTION "Build the self-contained active-path regression test" OFF)
 
 find_package(Eigen3 REQUIRED)
 find_package(PCL REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(Glog REQUIRED)
 
 add_library(xmap_lib STATIC
         src/xmap.cpp
-        src/xmap_util.cpp
-        src/xmap_dynamic.cpp
         src/xmap_maintain.cpp
         src/xmap_search.cpp
         src/voxel_loc.cpp
@@ -68,7 +68,14 @@ add_library(xmap_lib STATIC
 target_include_directories(xmap_lib PUBLIC ${EIGEN3_INCLUDE_DIR} ${PCL_INCLUDE_DIRS} ${YAML_CPP_INCLUDE_DIRS}
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(xmap_lib ${PCL_LIBRARIES} ${YAML_CPP_LIBRARIES})
+target_link_libraries(xmap_lib PUBLIC ${PCL_LIBRARIES} ${YAML_CPP_LIBRARIES} glog::glog)
+
+if (XMAP_ACTIVE_PATH_TEST_OPTION)
+    enable_testing()
+    add_executable(xmap_active_path_test unit_test/active_path_test.cpp)
+    target_link_libraries(xmap_active_path_test PRIVATE xmap_lib)
+    add_test(NAME xmap_active_path_test COMMAND xmap_active_path_test)
+endif ()
 
 if (XMAP_TEST_OPTION)
     message("XMAP_TEST_OPTION is enabled")
@@ -85,7 +92,6 @@ if (XMAP_TEST_OPTION)
             unit_test/octo_search_test.cpp
             unit_test/unorderedmap_test.cpp
             unit_test/forget_test.cpp
-            unit_test/dynamic_save_load_test.cpp
             )
 
     foreach (TEST_FILE ${XMAP_TEST_FILES})

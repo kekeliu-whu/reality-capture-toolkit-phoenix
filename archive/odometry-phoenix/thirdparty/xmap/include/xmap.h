@@ -1,13 +1,11 @@
 // 涉及Xmap的功能定义与实现
-// 地图定义：大小格GridlMap，大格GridMap用于地图动态加载，小格GridMap用于实际的地图增广与搜索
-// 接口：支持KNN搜索，半径搜索，地图增广，地图动态加载与删除，地图遗忘，法向过滤作为配置无需外部调用
+// 地图定义：小格GridMap用于地图增广与搜索
+// 接口：支持KNN搜索、半径搜索、地图增广、地图遗忘，法向过滤作为配置无需外部调用
 // 设计文档：https://pecivkvtit.feishu.cn/docx/Vq1OdiUmjoq3D5xa9IbczkMhnsb
 
 #pragma once
 
-#include <list>
 #include <unordered_map>
-#include <unordered_set>
 
 #include "small_voxel_value.h"
 #include "voxel_loc.h"
@@ -17,6 +15,7 @@ namespace xmap {
 
 class Xmap {
  public:
+  explicit Xmap(const Configs& configs);
   explicit Xmap(const std::string& path);
   ~Xmap();
 
@@ -40,6 +39,13 @@ class Xmap {
       const V3F& view_point,
       std::vector<V3F>& nearest_points,
       double ts_absolute);
+
+  /** KNN搜索并拟合查询点附近的平面。 */
+  bool knnSearch(
+      const V3F& point_search,
+      const V3F& view_point,
+      double ts_absolute,
+      PlaneConstPtr& plane);
 
   /**
    * 半径搜索功能接口
@@ -73,14 +79,6 @@ class Xmap {
   void forget(const double now_ts, const V3F& view_point);
 
   /**
-   * 动态地图加载功能接口
-   * 依次调用地图落盘与加载，并记录动态加载的位置与体素ID
-   * @param view_point 当前位置
-   * @return
-   */
-  void dynamicSaveAndLoad(const V3F& view_point);
-
-  /**
    * 获取xmap的配置
    * @return 配置对象
    */
@@ -109,15 +107,9 @@ class Xmap {
   PointCloudConstPtr getMapPointCloud() const;
 
  private:
-  // clang-format off
-  std::unordered_map<VoxelLoc, SmallVoxelValue> small_voxel_map_;               // Xmap的实际地图 - 搜索载体
-  std::unordered_map<VoxelLoc, std::unordered_set<VoxelLoc>> large_voxel_map_;  // Xmap的分块地图 - 加载载体 - 开启动态加载才会有值
-
-  Configs configs_;                                   // 地图专属配置，与外部无耦合
-  double start_mapping_ts_ = -1;                      // 开始建图的时间
-  V3F last_dynamic_view_point_ = V3F::Zero();         // 上次动态加载的位置
-  VoxelLoc last_dyanamic_large_voxel_{0, 0, 0};       // 上次动态加载的体素 -- 动态规划思想 -- 防止多次计算
-  // clang-format on
+  std::unordered_map<VoxelLoc, SmallVoxelValue> small_voxel_map_;
+  Configs configs_;
+  double start_mapping_ts_ = -1;
 
   /**
    * 以point为中心，判断哪些体素需要执行knn搜索 || radius搜索
@@ -132,43 +124,21 @@ class Xmap {
    */
   void loadConfigsFromYaml(const std::string& path);
 
+  /** Calculate derived fields and validate configuration. */
+  void finalizeConfigs();
+
+  /** Shared KNN implementation retained for tests and the compatibility API. */
+  bool collectNearestPoints(
+      const V3F& point_search,
+      const V3F& view_point,
+      std::vector<V3F>& nearest_points,
+      double ts_absolute);
+
   /**
    * 重新计算每个点的法向
    * @param view_point 当前位置
    */
   void recomputeNormal(const V3F& view_point);
-
-  /**
-   * 根据view_point, 把磁盘中即将进入视野的大格点云加载到内存之中
-   * @param view_point 当前位置
-   * @return 是否成功
-   */
-  void dynamicLoad(const V3F& view_point);
-
-  /**
-   * 根据view_point, 把在视野外的大格点云保存到磁盘之中
-   * @param view_point 当前位置
-   * @return 是否成功
-   */
-  void dynamicSave(const V3F& view_point);
-
-  /**
-   * 检验大小格子中的元素是否同步
-   * @return 同步返回true，不同步返回false
-   */
-  bool checkGridDataSync();
-
-  /**
-   * 返回本VoxelLoc是否在MapSize内
-   * @param ref_voxel_loc 待确定的大格子VoxelLoc
-   * @param center_voxel_loc 当前Map中心的大格子VoxelLoc
-   * @return
-   */
-  inline bool inMap(const VoxelLoc& ref_voxel_loc, const VoxelLoc& center_voxel_loc) {
-    VoxelLoc minus = center_voxel_loc - ref_voxel_loc;
-    return abs(minus.x_) <= configs_.voxel_diff && abs(minus.y_) <= configs_.voxel_diff &&
-           abs(minus.z_) <= configs_.voxel_diff;
-  }
 
   friend class XmapTest;
 };

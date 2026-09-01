@@ -1,3 +1,5 @@
+model: 0 # 0: normal, 1: online, 2: robust
+
 ros:
   imu_topic: /imu
   encoder_topic: /lidar_to_platform
@@ -14,12 +16,15 @@ preprocess:
   body_mask_max: [ 0.5, 0.8, 0.5 ]
   sweep_duration: 0.1
   sweep_cut_auto: true
+  # Use the calibration time offset.  Set only from an independently measured
+  # clock-rate error; the previous hard-coded -5.333 ppm was dataset-specific.
+  imu_clock_drift_ppm: 0.0
 
 downsample:
   area_method: 0             # L2 use method 0, cube_4_side method
   init_pca_downsample_dis: 1.5
-  base_downsample_dis: 0.2
-  max_downsample_dis: 1.5
+  base_downsample_dis: 0.1
+  max_downsample_dis: 9999
   ref_downsample_point_num: 4000
 
 init_param:
@@ -28,40 +33,65 @@ init_param:
   init_rot_std: 0.001
   init_acc_bias_std: 0.0003
   init_gyro_bias_std: 0.00003
+  use_single_pcl: false
+  enable_debug: false
+  debug_path: "/tmp"
+  dynamic_init_enabled: true
+  dynamic_init_min_duration: 2.0
+  dynamic_init_max_duration: 4.0
+  dynamic_init_icp_voxel_size: 0.25
+  dynamic_init_icp_max_correspondence: 1.5
+  dynamic_init_icp_fitness_threshold: 0.35
+  # Keep enough geometry for a constrained six-DoF initialization ICP.
+  dynamic_init_min_registration_points: 100
+  dynamic_init_min_registration_ratio: 0.6
+  dynamic_init_max_acc_std: 0.35
+  dynamic_init_max_gyr_std: 0.08
+  dynamic_init_max_mean_gyr: 0.08
+  dynamic_init_max_acc_norm_error: 0.75
+  dynamic_init_robust_sample_ratio: 0.25
 
 kf:
-  acc_std: 0.03
-  gyr_std: 0.002
+  window_size: 10
+  reset_window_size: 10
+  max_iter: 10
+  acc_std: 0.014
+  gyr_std: 0.0017
+  acc_std_slope: 0.0065
+  gyro_std_slope: 0.0009
   acc_bias_std: 0.0004
-  gyr_bias_std: 0.0002
-  max_iter: 5
-  acc_keep_std_limit: 0.5
-  gyro_keep_std_limit: 0.5
+  gyr_bias_std: 0.0001
+  faster_model: true
+  knn_search_slope: 0.003
+  knn_search_min_dist: 0.1
+  lidar_std_dev_limit: 9999
   use_gnss: false
   use_vio: false
   use_edge: false
-  k_for_adaptive_search: 0.003
+  use_static: false
 
+debug:
+  save_predict: false
+  save_update: false
+  save_xmap: false
+  save_xmap_interval: 100
+  save_ba_points: false
+  debug_path: "/tmp"
 
 # temp
-knn_min_points: 6
-knn_max_points: 6
-knn_distance_limit: 0.4
+xmap:
+  knn_min_points: 6
+  knn_max_points: 6
+  knn_distance_limit: 0.4
 
-resolution: 0.1   # 0.2m
-small_scale: 60   # 30 * 0.2 --> 6m
-large_scale: 10   # 6 * 10   --> 60m
-map_scale: 5      # 60 * 5  --> 300m的正方体，要求必须是奇数
-forget_range: 200             # Local map forget radis, important parameter and don't modify
-forget_ts: 200                # Local map forget time, important parameter and don't modify
+  resolution: 0.1
+  small_scale: 30             # 0.1 * 30 = 3m
+  forget_range: 200
+  forget_ts: 200
 
-enable_normal_filter: true    # 法向过滤
-enable_forget_point: false    # 逐点遗忘， 暂时无用
-enable_forget: true           # 开启遗忘
-enable_dynamic: false         # 开启动态加载，与地图遗忘是互斥功能
-enable_dynamic_backend: false # 允许动态加载单独开线程并行
-replace_points_flag: 0        # 0: 保留旧点， 1：保留新店，2：新旧融合
+  enable_normal_filter: true
+  enable_forget: true
+  replace_points_flag: 0
 
-pcd_path: '/home/youyuan/lio_pcd/'
-pcd_path_onboard: '/home/youyuan/lio_pcd/'
-test_data_path: '/home/youyuan/文档/K1.las'
+  convergence_num: 100
+  test_data_path: '/home/youyuan/文档/K1.las'

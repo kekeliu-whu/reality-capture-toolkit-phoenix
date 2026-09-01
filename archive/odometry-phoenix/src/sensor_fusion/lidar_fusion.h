@@ -6,14 +6,27 @@
 
 #include "base_fusion.h"
 #include "common/math_utils.h"
+#include "parameters.h"
 #include "xmap.h"
 namespace lixel
 {
 
-constexpr double S_MIN = 0.1;
+constexpr int WARNING_POINTS_NUM = 100;
+constexpr int ERROR_POINTS_NUM = 10;
 
-constexpr int WARNING_POINTS_NUM = 30;
-constexpr int ERROR_POINTS_NUM = 5;
+enum class LiDARMatchStatus : int32_t
+{
+  KNN_FAIL = 0,
+  OUTLIER = 1,
+  NO_PLANE = 2,
+  ACTIVE = 3
+};
+
+struct LiDARMatchCache
+{
+  LiDARMatchStatus status = LiDARMatchStatus::ACTIVE;
+  xmap::PlaneConstPtr plane;
+};
 
 struct LiDARMeasTemp
 {
@@ -29,7 +42,7 @@ struct LiDARMeasTemp
 class LiDARFusion : public BaseFusion
 {
  public:
-  LiDARFusion(double k_for_adaptive_search);
+  explicit LiDARFusion(const IESKFParam& param);
   void setXmap(std::shared_ptr<xmap::Xmap>& xmap_ptr);
   void setLidarMeas(
       const PointCloudXYZINormal::Ptr& surf_pcl,
@@ -43,12 +56,18 @@ class LiDARFusion : public BaseFusion
   KFState::ConstPtr temp_state_;
 
  private:
-  AttributeJacobi attributeJacobi_;
+  AttributeJacobi attributeJacobi_{};
   std::shared_ptr<xmap::Xmap> xmap_ptr_;
-  PointCloudXYZINormal::Ptr sw_lidar_surf_[WINDOW_SIZE];
-  PointCloudXYZINormal::Ptr sw_lidar_map_[WINDOW_SIZE];
-  PointCloud::Ptr sw_lidar_undistort_[WINDOW_SIZE];
-  double k_for_adaptive_search_;  // outlier judgement: residual > k_for_adaptive_search * dist + S_MIN
+  std::vector<PointCloudXYZINormal::Ptr> sw_lidar_surf_;
+  std::vector<PointCloudXYZINormal::Ptr> sw_lidar_map_;
+  std::vector<PointCloud::Ptr> sw_lidar_undistort_;
+  std::vector<std::vector<LiDARMatchCache>> sw_match_cache_;
+  int window_size_;
+  int reset_window_size_;
+  bool faster_model_;
+  bool refresh_matches_ = true;
+  double knn_search_slope_;
+  double knn_search_min_dist_;
   void calculateAttrJacobi(const std::vector<LiDARMeasTemp>& meas_vec);
 };
 }  // namespace lixel

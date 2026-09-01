@@ -31,18 +31,23 @@ init_param:
   init_gyro_bias_std: 0.00005
 
 kf:
+  window_size: 10
+  reset_window_size: 10
   acc_std: 0.080
   gyr_std: 0.003
+  acc_std_slope: 0.0065
+  gyro_std_slope: 0.0009
   acc_bias_std: 0.0020
   gyr_bias_std: 0.0002
   max_iter: 5
-  acc_keep_std_limit: 0.5
-  gyro_keep_std_limit: 0.5
+  faster_model: true
+  knn_search_slope: 0.003
+  knn_search_min_dist: 0.1
+  lidar_std_dev_limit: 9999
   use_gnss: false
   use_vio: false
   use_edge: false
-  k_for_adaptive_search: 0.003
-
+  use_static: false
 
 # temp
 knn_min_points: 8
@@ -51,18 +56,12 @@ knn_distance_limit: 0.4
 
 resolution: 0.1   # 0.2m
 small_scale: 60   # 30 * 0.2 --> 6m
-large_scale: 10   # 6 * 10   --> 60m
-map_scale: 5      # 60 * 5  --> 300m的正方体，要求必须是奇数
 forget_range: 200             # Local map forget radis, important parameter and don't modify
 forget_ts: 200                # Local map forget time, important parameter and don't modify
 
+convergence_num: 200
 enable_normal_filter: true    # 法向过滤
-enable_forget_point: false    # 逐点遗忘， 暂时无用
 enable_forget: true          # 开启遗忘
-enable_dynamic: false         # 开启动态加载，与地图遗忘是互斥功能
-enable_dynamic_backend: false # 允许动态加载单独开线程并行
 replace_points_flag: 0        # 0: 保留旧点， 1：保留新店，2：新旧融合
 
-pcd_path: '/home/youyuan/lio_pcd/'
-pcd_path_onboard: '/home/youyuan/lio_pcd/'
 test_data_path: '/home/youyuan/文档/K1.las'

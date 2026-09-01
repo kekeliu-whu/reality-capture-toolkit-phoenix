@@ -18,6 +18,10 @@ struct SensorParam
     Eigen::Matrix3d Kg;
     Eigen::Matrix3d Ta;
     Eigen::Matrix3d Tg;
+    // Convert incoming IMU-clock timestamps to the LiDAR clock.  Constant
+    // offset comes from calibration; drift is an explicit dataset setting.
+    double lidar_to_imu_time_offset_seconds = 0.0;
+    double clock_drift_ppm = 0.0;
     bool calibrated = false;
     bool enabled = false;
   };
@@ -126,28 +130,54 @@ struct DownsampleParam
 
 struct InitParam
 {
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   double init_pos_std;         // unit: m
   double init_vel_std;         // unit: m/s
   double init_rot_std;         // unit: rad
   double init_acc_bias_std;    // unit: m/s^3
   double init_gyro_bias_std;   // unit: rad/s
+  bool use_initial_pose = false;
+  Eigen::Vector4d initial_quaternion_xyzw = {0.0, 0.0, 0.0, 1.0};
+  Eigen::Vector3d initial_velocity = {0.0, 0.0, 0.0};
+
+  // Motion-aware LiDAR/IMU bootstrap.  The bootstrap registers consecutive
+  // scans in a temporary local frame, estimates the terminal velocity and
+  // builds an initialization map with a separate pose for every scan.
+  bool dynamic_init_enabled = true;
+  double dynamic_init_min_duration = 2.0;
+  double dynamic_init_max_duration = 4.0;
+  double dynamic_init_icp_voxel_size = 0.25;
+  double dynamic_init_icp_max_correspondence = 1.5;
+  double dynamic_init_icp_fitness_threshold = 0.35;
+  int dynamic_init_min_registration_points = 100;
+  double dynamic_init_min_registration_ratio = 0.6;
+  double dynamic_init_max_acc_std = 0.35;
+  double dynamic_init_max_gyr_std = 0.08;
+  double dynamic_init_max_mean_gyr = 0.08;
+  double dynamic_init_max_acc_norm_error = 0.75;
+  double dynamic_init_robust_sample_ratio = 0.25;
 };
 
 struct IESKFParam
 {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
+  int window_size;
+  int reset_window_size;
   double acc_std;              // m/s^2
   double gyr_std;              // rad/s
+  double acc_std_slope;
+  double gyro_std_slope;
   double acc_bias_std;         // m/s^3
   double gyr_bias_std;         // rad/s^2
   int max_iter;                //
-  double acc_keep_std_limit;   // unit: m/s^2
-  double gyro_keep_std_limit;  // unit: rad/s
+  bool faster_model;
+  double knn_search_slope;
+  double knn_search_min_dist;
+  double lidar_std_dev_limit;
   bool use_gnss = false;
   bool use_vio = false;
   bool use_edge = false;
-  double k_for_adaptive_search;
 };
 
 struct PerformanceParam

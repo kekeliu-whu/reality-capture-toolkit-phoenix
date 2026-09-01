@@ -13,7 +13,9 @@ void StaticFusion::calculateMeas(VecX& residual, SparseMat& H, double& R)
   R = STATIC_COV;
   residual = Eigen::Matrix<FloatDataType, STATIC_MEASUREMENT_DIM, 1>::Zero();
 
-  Eigen::Matrix<FloatDataType, 9, DIM_STATE> H_Sparse = Eigen::Matrix<FloatDataType, 9, DIM_STATE>::Zero();
+  Eigen::Matrix<FloatDataType, 9, Eigen::Dynamic> H_Sparse =
+      Eigen::Matrix<FloatDataType, 9, Eigen::Dynamic>::Zero(
+          STATIC_MEASUREMENT_DIM, states_group_ptr_->dimState());
 
   // static means PV not change
   residual.block<3, 1>(3, 0) = init_t_ - states_group_ptr_->sw_pos_[0];

@@ -31,6 +31,7 @@ constexpr double EPSILON = 1e-6;
 constexpr double INIT_STARTING_MAPPING_TS = -1;
 constexpr int MAX_ATTEMP = 10;
 constexpr double PLANARITY_THRESHOLD = 0.3;
+constexpr double KDTREE_UPDATE_RATIO = 0.1;
 
 enum PointUpdateStrategy {
   OLD_REMAIN = 0,   // 0
@@ -62,25 +63,18 @@ struct Configs {
   int knn_min_points = 5;                                // 配置输入
   int knn_max_points = 5;                                // 配置输入
   float knn_distance_limit = 1;                          // 配置输入
+  float knn_distance_limit_squared = 1;                  // 计算获得
 
   float resolution = 0.1;                                // 配置输入
   int small_scale = 30;                                  // 配置输入
-  int large_scale = 20;                                  // 配置输入
-  int map_scale = 3;                                     // 配置输入
   float forget_ts = 10;                                  // 配置输入
   float forget_range = 120;                              // 配置输入
 
-  int voxel_diff = 1;                                    // 计算获得
-  float map_size = 180.0;                                // 计算获得
   float small_voxel_size = 3.0;                          // 计算获得
-  float large_voxel_size = 60.0;                         // 计算获得
 
+  int convergence_num = 200;                             // KD-Tree早期重建阈值
   bool enable_normal_filter = false;                     // 配置输入
-  bool enable_dynamic = false;                           // 配置输入
-  bool enable_dynamic_backend = false;                   // 配置输入
   bool enable_forget = false;                            // 配置输入
-  bool enable_forget_point = false;                      // 配置输入
-  std::string pcd_path = "null";                         // 配置输入
   std::string test_data_path = "null";                   // 配置输入
   PointUpdateStrategy replace_points_flag = OLD_REMAIN;  // 配置输入
 };
