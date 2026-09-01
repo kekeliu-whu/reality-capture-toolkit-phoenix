@@ -120,6 +120,7 @@ add_private_tool(convert_manifold src/tools/convert_manifold.cc)
 add_private_tool(convert_calib src/tools/convert_calib.cc)
 add_private_tool(convert_hs src/tools/convert_hs.cc)
 add_private_tool(export_imu_frames src/tools/export_imu_frames.cc)
+add_private_tool(export_surface_rays src/tools/export_surface_rays.cc)
 
 target_include_directories(
     ${PROJECT_NAME}

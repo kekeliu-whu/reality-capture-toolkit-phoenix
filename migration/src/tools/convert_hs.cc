@@ -3,6 +3,11 @@
 #include <Eigen/Eigen>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
+#include <ros/time.h>
+#include <rosbag/bag.h>
+#include <sensor_msgs/Imu.h>
+#include <sensor_msgs/PointCloud2.h>
+#include <sensor_msgs/PointField.h>
 #include <ulog_cpp/simple_writer.hpp>
 
 #include <algorithm>
@@ -40,12 +45,14 @@ DEFINE_bool(skip_imu, false, "Skip ext_imu_*.mcap conversion");
 DEFINE_bool(skip_lidar, false, "Skip lidar_imu_*.mcap conversion");
 DEFINE_bool(skip_images, false, "Skip camera_*.mcap image export");
 DEFINE_bool(include_cam2, false, "Include the front cam2 JPEG stream and calibration (disabled by default)");
+DEFINE_string(camera_intrinsic_profile, "6k", "Fallback intrinsic profile suffix when calib_info.yaml has no legacy camN keys (for example 6k or 4k)");
 DEFINE_string(camera_model, "OPENCV_FISHEYE", "Calibration camera model: OPENCV or OPENCV_FISHEYE");
 DEFINE_string(ffmpeg_path, "ffmpeg.exe", "FFmpeg executable used to decode cam0/cam1 H.265 frames");
 DEFINE_bool(image_flip_horizontal, true, "Flip exported camera images horizontally");
 DEFINE_bool(image_rotate_cw_180, true, "Rotate exported camera images clockwise by 180 degrees");
 DEFINE_bool(clear_image_camera_dirs, true, "Clear generated images/cam* directories before export");
 DEFINE_int32(image_jpeg_quality, 95, "JPEG quality for directly encoded camera images (1-100)");
+DEFINE_string(rosbag_output, "", "Optional ROS1 bag output containing /hesai/pandar and /alphasense/imu");
 
 namespace {
 
@@ -75,6 +82,15 @@ struct McapMessage {
 struct PcWindow {
   uint64_t begin_ns = 0;
   uint64_t end_ns = 0;
+};
+
+struct HesaiBagPoint {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  float intensity = 0.0f;
+  double timestamp = 0.0;
+  uint16_t ring = 0;
 };
 
 struct SensorIntervalSample {
@@ -548,8 +564,61 @@ bool IsValidPoint(float x, float y, float z, uint64_t timestamp_ns) {
   return x != 0.0f || y != 0.0f || z != 0.0f;
 }
 
+ros::Time RosTimeFromNs(uint64_t timestamp_ns) {
+  return ros::Time(static_cast<uint32_t>(timestamp_ns / 1000000000ULL),
+                   static_cast<uint32_t>(timestamp_ns % 1000000000ULL));
+}
+
+sensor_msgs::PointField PointField(const std::string& name, uint32_t offset, uint8_t datatype) {
+  sensor_msgs::PointField field;
+  field.name = name;
+  field.offset = offset;
+  field.datatype = datatype;
+  field.count = 1;
+  return field;
+}
+
+void WriteHesaiScanToBag(const std::vector<HesaiBagPoint>& points, uint64_t scan_timestamp_ns, rosbag::Bag* bag) {
+  if (bag == nullptr || points.empty()) {
+    return;
+  }
+
+  sensor_msgs::PointCloud2 cloud;
+  cloud.header.stamp = RosTimeFromNs(scan_timestamp_ns);
+  cloud.header.frame_id = "hesai";
+  cloud.height = 1;
+  cloud.width = static_cast<uint32_t>(points.size());
+  cloud.fields = {
+      PointField("x", 0, sensor_msgs::PointField::FLOAT32),
+      PointField("y", 4, sensor_msgs::PointField::FLOAT32),
+      PointField("z", 8, sensor_msgs::PointField::FLOAT32),
+      PointField("intensity", 12, sensor_msgs::PointField::FLOAT32),
+      PointField("timestamp", 16, sensor_msgs::PointField::FLOAT64),
+      PointField("ring", 24, sensor_msgs::PointField::UINT16),
+  };
+  cloud.is_bigendian = false;
+  cloud.point_step = 26;
+  cloud.row_step = cloud.point_step * cloud.width;
+  cloud.is_dense = true;
+  cloud.data.resize(cloud.row_step);
+
+  for (size_t i = 0; i < points.size(); ++i) {
+    uint8_t* dst = cloud.data.data() + i * cloud.point_step;
+    const HesaiBagPoint& point = points[i];
+    std::memcpy(dst, &point.x, sizeof(point.x));
+    std::memcpy(dst + 4, &point.y, sizeof(point.y));
+    std::memcpy(dst + 8, &point.z, sizeof(point.z));
+    std::memcpy(dst + 12, &point.intensity, sizeof(point.intensity));
+    std::memcpy(dst + 16, &point.timestamp, sizeof(point.timestamp));
+    std::memcpy(dst + 24, &point.ring, sizeof(point.ring));
+  }
+
+  bag->write("/hesai/pandar", cloud.header.stamp, cloud);
+}
+
 void FlushLidarScan(const std::shared_ptr<proto::LidarMsg>& lidar_msg, SequentialLidarFileWriter<proto::LidarMsg>* writer, size_t* scan_count,
-                    size_t* point_count, uint64_t scan_timestamp_ns, std::vector<uint64_t>* lidar_timestamps_ns) {
+                    size_t* point_count, uint64_t scan_timestamp_ns, std::vector<uint64_t>* lidar_timestamps_ns,
+                    const std::vector<HesaiBagPoint>& bag_points, rosbag::Bag* bag) {
   if (lidar_msg->points_size() == 0) {
     return;
   }
@@ -559,10 +628,12 @@ void FlushLidarScan(const std::shared_ptr<proto::LidarMsg>& lidar_msg, Sequentia
   *point_count += static_cast<size_t>(lidar_msg->points_size());
   writer->Write(lidar_msg);
   lidar_timestamps_ns->push_back(scan_timestamp_ns);
+  WriteHesaiScanToBag(bag_points, scan_timestamp_ns, bag);
   ++(*scan_count);
 }
 
-bool ConvertLidar(const std::filesystem::path& input_dir, const std::filesystem::path& output_dir, std::vector<uint64_t>* lidar_timestamps_ns) {
+bool ConvertLidar(const std::filesystem::path& input_dir, const std::filesystem::path& output_dir,
+                  std::vector<uint64_t>* lidar_timestamps_ns, rosbag::Bag* bag) {
   const auto windows = ReadPcWindows(input_dir);
   if (windows.empty()) {
     spdlog::error("No pc_windows_*.mcap scan windows found in {}", input_dir.string());
@@ -588,11 +659,14 @@ bool ConvertLidar(const std::filesystem::path& input_dir, const std::filesystem:
   size_t skipped_points = 0;
   uint64_t current_scan_timestamp_ns = 0;
   auto current_scan = std::make_shared<proto::LidarMsg>();
+  std::vector<HesaiBagPoint> current_bag_scan;
 
   auto advance_to = [&](uint64_t point_time_ns) {
     while (window_index < windows.size() && point_time_ns >= windows[window_index].end_ns) {
-      FlushLidarScan(current_scan, &lidar_writer, &scan_count, &point_count, current_scan_timestamp_ns, lidar_timestamps_ns);
+      FlushLidarScan(current_scan, &lidar_writer, &scan_count, &point_count, current_scan_timestamp_ns, lidar_timestamps_ns,
+                     current_bag_scan, bag);
       current_scan = std::make_shared<proto::LidarMsg>();
+      current_bag_scan.clear();
       current_scan_timestamp_ns = 0;
       ++window_index;
     }
@@ -643,16 +717,23 @@ bool ConvertLidar(const std::filesystem::path& input_dir, const std::filesystem:
         point->set_z(z);
         point->set_intensity(
             static_cast<uint32_t>((std::max)(0.0f, intensity)));
+        if (bag != nullptr) {
+          current_bag_scan.push_back(
+              HesaiBagPoint{x, y, z, intensity, static_cast<double>(timestamp_ns) * 1e-9,
+                            ReadLe<uint16_t>(point_data + 16)});
+        }
       }
     });
   }
 
-  FlushLidarScan(current_scan, &lidar_writer, &scan_count, &point_count, current_scan_timestamp_ns, lidar_timestamps_ns);
+  FlushLidarScan(current_scan, &lidar_writer, &scan_count, &point_count, current_scan_timestamp_ns, lidar_timestamps_ns,
+                 current_bag_scan, bag);
   spdlog::info("Wrote lidar.dat: {} scans, {} points, {} packets, {} skipped points", scan_count, point_count, packet_count, skipped_points);
   return scan_count > 0;
 }
 
-bool ConvertImu(const std::filesystem::path& input_dir, const std::filesystem::path& output_dir, std::vector<uint64_t>* imu_timestamps_ns) {
+bool ConvertImu(const std::filesystem::path& input_dir, const std::filesystem::path& output_dir,
+                std::vector<uint64_t>* imu_timestamps_ns, rosbag::Bag* bag) {
   const auto imu_files = GlobFiles(input_dir, "ext_imu_", ".mcap");
   if (imu_files.empty()) {
     spdlog::error("No ext_imu_*.mcap files found in {}", input_dir.string());
@@ -683,6 +764,20 @@ bool ConvertImu(const std::filesystem::path& input_dir, const std::filesystem::p
       imu_msg->set_ax(ReadLe<float>(data + 20));
       imu_msg->set_ay(ReadLe<float>(data + 24));
       imu_msg->set_az(ReadLe<float>(data + 28));
+
+      if (bag != nullptr) {
+        sensor_msgs::Imu ros_imu;
+        ros_imu.header.stamp = RosTimeFromNs(timestamp_ns);
+        ros_imu.header.frame_id = "imu";
+        ros_imu.orientation_covariance[0] = -1.0;
+        ros_imu.angular_velocity.x = imu_msg->gx();
+        ros_imu.angular_velocity.y = imu_msg->gy();
+        ros_imu.angular_velocity.z = imu_msg->gz();
+        ros_imu.linear_acceleration.x = imu_msg->ax();
+        ros_imu.linear_acceleration.y = imu_msg->ay();
+        ros_imu.linear_acceleration.z = imu_msg->az();
+        bag->write("/alphasense/imu", ros_imu.header.stamp, ros_imu);
+      }
     });
   }
 
@@ -856,8 +951,17 @@ bool ConvertCalibration(const std::filesystem::path& input_dir, const std::files
       camera_names.emplace_back("cam2");
     }
     for (const std::string& cam_name : camera_names) {
-      const YAML::Node k_node = intrinsic[cam_name];
-      const YAML::Node d_node = intrinsic[cam_name + "_distortion"];
+      const YAML::Node legacy_k_node = intrinsic[cam_name];
+      const YAML::Node legacy_d_node = intrinsic[cam_name + "_distortion"];
+      const std::string profiled_name = cam_name + "_" + FLAGS_camera_intrinsic_profile;
+      const YAML::Node profiled_k_node = intrinsic[profiled_name];
+      const YAML::Node profiled_d_node = intrinsic[profiled_name + "_distortion"];
+      const bool use_legacy = legacy_k_node && legacy_d_node;
+      const YAML::Node k_node = use_legacy ? legacy_k_node : profiled_k_node;
+      const YAML::Node d_node = use_legacy ? legacy_d_node : profiled_d_node;
+      if (!use_legacy && k_node && d_node) {
+        spdlog::info("Using {} intrinsics for {}", profiled_name, cam_name);
+      }
       const std::string lidar_to_camera_name = "T_lidar_2_" + cam_name;
       if (!k_node || !d_node || !extrinsic[lidar_to_camera_name]) {
         continue;
@@ -897,6 +1001,21 @@ int main(int argc, char** argv) {
   }
   std::filesystem::create_directories(output_dir);
 
+  std::unique_ptr<rosbag::Bag> output_bag;
+  if (!FLAGS_rosbag_output.empty()) {
+    std::filesystem::path bag_path = FLAGS_rosbag_output;
+    if (bag_path.is_relative()) {
+      bag_path = output_dir / bag_path;
+    }
+    if (!bag_path.parent_path().empty()) {
+      std::filesystem::create_directories(bag_path.parent_path());
+    }
+    ros::Time::init();
+    output_bag = std::make_unique<rosbag::Bag>();
+    output_bag->open(bag_path.string(), rosbag::bagmode::Write);
+    spdlog::info("Writing ROS1 Hesai/IMU bag to {}", bag_path.string());
+  }
+
   bool ok = true;
   bool imu_converted = false;
   bool lidar_converted = false;
@@ -906,11 +1025,11 @@ int main(int argc, char** argv) {
     ok = ConvertCalibration(input_dir, output_dir) && ok;
   }
   if (!FLAGS_skip_imu) {
-    imu_converted = ConvertImu(input_dir, output_dir, &imu_timestamps_ns);
+    imu_converted = ConvertImu(input_dir, output_dir, &imu_timestamps_ns, output_bag.get());
     ok = imu_converted && ok;
   }
   if (!FLAGS_skip_lidar) {
-    lidar_converted = ConvertLidar(input_dir, output_dir, &lidar_timestamps_ns);
+    lidar_converted = ConvertLidar(input_dir, output_dir, &lidar_timestamps_ns, output_bag.get());
     ok = lidar_converted && ok;
   }
   if (!FLAGS_skip_images) {
@@ -920,6 +1039,9 @@ int main(int argc, char** argv) {
   const bool requested_sensor_conversions_succeeded = (FLAGS_skip_imu || imu_converted) && (FLAGS_skip_lidar || lidar_converted);
   if (sensor_conversion_requested && requested_sensor_conversions_succeeded) {
     ok = WriteRawUlog(output_dir / "raw.ulg", std::move(lidar_timestamps_ns), std::move(imu_timestamps_ns)) && ok;
+  }
+  if (output_bag) {
+    output_bag->close();
   }
 
   spdlog::info("done.");

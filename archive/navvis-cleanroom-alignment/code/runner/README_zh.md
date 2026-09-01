@@ -100,6 +100,39 @@ G10 会自动选用较保守的自由空间参数 `minimum_intersections=6`、
 4 张 8192×4096 全景。原版程序因该 G10-512 的许可过期而在 LicenseCheck 阶段停止，所以这组
 数据没有可用于逐点几何误差评估的原版点云。
 
+## 禾赛（HS/Pandar）默认自由空间参数
+
+禾赛 HS/Pandar 数据的生产处理默认使用保守 v2 参数，避免自由空间删除过强造成墙面、地面或
+远距离结构空洞：
+
+| 参数 | 默认值 |
+|---|---:|
+| `minimum_intersections` | `3` |
+| `intersection_hit_ratio` | `2.0` |
+| `endpoint_margin` | `0.08 m`（8 cm） |
+| 自由空间占据/穿越网格 | `0.02 m`（2 cm） |
+| 射线半径 | `0.006 m`（6 mm） |
+| 射线抽样步长 | `1`（不抽样） |
+
+直接重跑 `navvis_recon_shard_surface_filter` 时必须显式传入以下参数；
+`--free-space-nonstandard` 用于允许覆盖厂商对齐回归的冻结阈值：
+
+```text
+--free-space-carving
+--free-space-mode sparse
+--free-space-nonstandard
+--free-space-traversal-resolution 0.02
+--free-space-ray-radius 0.006
+--free-space-ray-stride 1
+--free-space-min-intersections 3
+--free-space-intersection-hit-ratio 2.0
+--free-space-endpoint-margin 0.08
+```
+
+自由空间的 2 cm 网格只用于射线穿越和占据判定，不是最终点云分辨率。最终 5 mm 点云仍需同时
+传入 `--resolution 0.005 --output-cell 0.005`。只有复现厂商 G11 standard 或执行冻结对齐回归时，
+才使用捕获参数 `1 / 1.0 / 0.05 m`；不要把该对齐口径作为 HS 数据的生产默认值。
+
 ## 完整阶段
 
 1. 优先只读已有优化轨迹；缺失时融合录制的在线全局 SLAM 与局部里程计，并可对只读参考轨迹计算 ATE/RPE。
@@ -113,10 +146,10 @@ G10 会自动选用较保守的自由空间参数 `minimum_intersections=6`、
    255 个 Spherical Fibonacci 方向桶、厘米 range LUT、方向距离权重，以及 Brotli level 5 的
    13-byte v2 `<Morton key, diversity, ray count, min range>` 记录。`max-ray-length=50 m` 只用于
    原版空间分区，不裁短射线。
-6. G11 standard 使用原二进制捕获的自由空间规则：2 cm 占据体素、5 cm 端点截短、
-   6 mm 射线到质心、0.5–15 m、85° 入射上限、至少 1 次穿越/比值 1.0，并保留跨 10 m
-   分片射线历史；随后执行法线/曲率和与 `--res` 一致的输出体素化。旧 3/1.5、16 倍抽样、
-   1.31 cm 输出格和 8M 密度切换已从 standard 调度中移除。
+6. 禾赛 HS/Pandar 生产处理使用上节的保守 v2 自由空间参数 `3 / 2.0 / 0.08 m`，并保留跨
+   10 m 分片射线历史；随后执行法线/曲率和与 `--res` 一致的输出体素化。只有厂商 G11
+   standard 冻结对齐回归使用捕获规则：2 cm 占据体素、5 cm 端点截短、6 mm 射线到质心、
+   0.5–15 m、85° 入射上限、至少 1 次穿越/比值 1.0。两套口径不得混用。
 7. 每个采集点把四路 JPEG-XL DNG 无损转封装，C++ 解码并输出相机 JPEG；同时执行 OCam、
    GraphCut、曝光补偿和多频带融合生成 8K 全景。
 8. 默认 `recon` 后端按 24 个独立鱼眼视图建立 684×456 PCT 深度图，应用 G11 相机 mask、
