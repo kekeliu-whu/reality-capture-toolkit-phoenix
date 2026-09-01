@@ -210,6 +210,10 @@ set_source_files_properties(
     GENERATED TRUE
     EXTERNAL_OBJECT TRUE
 )
+# xcolor reuses the same CUDA renderer to build depth directly in original
+# OPENCV_FISHEYE views. Keeping one object avoids a second CUDA implementation.
+target_sources(pgo_xcolor_lib PRIVATE "${XSFM_POST_DEPTH_OBJ}")
+target_link_libraries(pgo_xcolor_lib CUDA::cudart)
 add_executable(
   xsfm_post
   tools/xsfm_post.cc

@@ -27,7 +27,6 @@ $BUILD_PACK = Join-Path $PROJECT_ROOT "build-pack"
 # ztools/build-pack.ps1. Do not fall back to development build directories.
 $xsfm_pc_exe = Join-Path $BUILD_PACK "xsfm_process_point_cloud.exe"
 $xsfm_pre_exe = Join-Path $BUILD_PACK "xsfm_pre.exe"
-$xsfm_post_exe = Join-Path $BUILD_PACK "xsfm_post.exe"
 $xcolor_main_exe = Join-Path $BUILD_PACK "xcolor.exe"
 $createInitialModelExe = Join-Path $BUILD_PACK "xsfm_create_initial_model.exe"
 
@@ -42,7 +41,6 @@ if ([string]::IsNullOrWhiteSpace($vocabTreePath)) {
 Write-Host "Build pack dir: $BUILD_PACK" -ForegroundColor Gray
 Write-Host "xsfm point cloud: $xsfm_pc_exe" -ForegroundColor Gray
 Write-Host "xsfm pre:         $xsfm_pre_exe" -ForegroundColor Gray
-Write-Host "xsfm post:        $xsfm_post_exe" -ForegroundColor Gray
 Write-Host "xcolor:           $xcolor_main_exe" -ForegroundColor Gray
 Write-Host "initial model:    $createInitialModelExe" -ForegroundColor Gray
 Write-Host "vocabulary tree:  $vocabTreePath" -ForegroundColor Gray
@@ -51,7 +49,6 @@ Write-Host "inaccurate pose:  $InaccurateInitialPose" -ForegroundColor Gray
 foreach ($tool in @(
     $xsfm_pc_exe,
     $xsfm_pre_exe,
-    $xsfm_post_exe,
     $xcolor_main_exe,
     $createInitialModelExe
   )) {
@@ -327,11 +324,9 @@ if ($LASTEXITCODE -ne 0) {
   exit 1
 }
 
-# Step 4.5: Convert fisheye SfM result to cubemap model and depth maps
-Write-Host "Step 4.5: Running xsfm post..." -ForegroundColor Green
-$xsfmPostOutputDir = "$dataDir\xsfm\cubemap_colmap"
-$xsfmPostImagesPath = "$xsfmPostOutputDir\images"
-$xsfmPostSfmPath = "$xsfmPostOutputDir\sparse"
+# Select the SfM-refined original-fisheye poses directly. No cubemap model,
+# cubemap images, or cubemap depth maps are generated in this pipeline.
+Write-Host "Preparing SfM-pose fisheye colorization..." -ForegroundColor Green
 $sfmModelDir = if (Test-Path -LiteralPath "$sfmOutputDir\0") {
   "$sfmOutputDir\0"
 } elseif (Test-Path -LiteralPath "$sfmOutputDir\cameras.bin") {
@@ -340,25 +335,12 @@ $sfmModelDir = if (Test-Path -LiteralPath "$sfmOutputDir\0") {
   $null
 }
 
-if (-not (Test-Path $xsfm_post_exe)) {
-  Write-Host "ERROR: xsfm_post executable not found at: $xsfm_post_exe" -ForegroundColor Red
-  exit 1
-}
-
 if ([string]::IsNullOrWhiteSpace($sfmModelDir)) {
   Write-Host "ERROR: SfM model not found under: $sfmOutputDir" -ForegroundColor Red
   exit 1
 }
+Write-Host "Using SfM-refined poses: $sfmModelDir" -ForegroundColor Green
 
-$xsfmPostArgs = @(
-  "--model-dir", $sfmModelDir,
-  "--image-dir", "$dataDir\images",
-  "--output-dir", $xsfmPostOutputDir,
-  "--point-cloud-path", "$dataDir\xsfm\localenu_normal.pcd",
-  "--image-step", "2",
-  "--depth-voxel-size", "0.03",
-  "--overwrite"
-)
 $cameraMaskDir = Join-Path $BUILD_PACK "camera_masks"
 if (-not (Test-Path -LiteralPath $cameraMaskDir -PathType Container)) {
   Write-Host "ERROR: Fixed camera mask directory not found: $cameraMaskDir" -ForegroundColor Red
@@ -372,41 +354,27 @@ foreach ($cameraName in $activeCameraNames) {
   }
 }
 Write-Host "Using packaged fixed camera masks: $cameraMaskDir" -ForegroundColor Green
-$xsfmPostArgs += @("--mask-dir", $cameraMaskDir)
 
-& $xsfm_post_exe @xsfmPostArgs
-
-if ($LASTEXITCODE -ne 0) {
-  Write-Host "Error in Step 4.5 (xsfm post)" -ForegroundColor Red
-  exit 1
-}
-
-# Step 5: Colorize point cloud with xcolor.exe
-Write-Host "Step 5: Colorizing point cloud..." -ForegroundColor Green
-# Determine the correct camera path (try multiple possible locations)
-$images_path = $null
-$possible_paths = @(
-  "$xsfmPostImagesPath"
-)
-
-foreach ($path in $possible_paths) {
-  if (Test-Path $path) {
-    $images_path = $path
-    break
-  }
-}
-
-if (-not $images_path) {
-  Write-Host "ERROR: Could not find images directory" -ForegroundColor Red
-  Write-Host "Searched in: $($possible_paths -join ', ')" -ForegroundColor Yellow
+# Step 5: Generate depth and sample color directly in the original fisheye views.
+Write-Host "Step 5: Direct fisheye point-cloud colorization..." -ForegroundColor Green
+$fisheyeImagesPath = "$dataDir\images"
+if (-not (Test-Path -LiteralPath $fisheyeImagesPath -PathType Container)) {
+  Write-Host "ERROR: Original fisheye image directory not found: $fisheyeImagesPath" -ForegroundColor Red
   exit 1
 }
 
 & $xcolor_main_exe `
-  --images_path "$images_path" `
-  --sfm_result_path "$xsfmPostSfmPath" `
+  --images_path "$fisheyeImagesPath" `
+  --sfm_result_path "$sfmModelDir" `
   --point_cloud_filename "$lasFile" `
-  --output_path "$dataDir"
+  --output_path "$dataDir" `
+  --mask_path "$cameraMaskDir" `
+  --generate_fisheye_depths=1 `
+  --gpu_visibility=1 `
+  --gpu_color_fusion=1 `
+  --fisheye_depth_scale=0.25 `
+  --depth_voxel_size=0.03 `
+  --image_step=2
 
 if ($LASTEXITCODE -ne 0) {
   Write-Host "Error in Step 5" -ForegroundColor Red

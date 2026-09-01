@@ -15,15 +15,16 @@
 #include <unordered_map>
 
 #include <omp.h>
-#include <opencv2/opencv.hpp>
 #include <pcl/io/pcd_io.h>
+#include <pcl/io/ply_io.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/spdlog.h>
+#include <opencv2/opencv.hpp>
 #include <pdal/Options.hpp>
 #include <pdal/PointTable.hpp>
 #include <pdal/StageFactory.hpp>
-#include <spdlog/sinks/stdout_color_sinks.h>
-#include <spdlog/spdlog.h>
 
 // #include "common/types.h"
 // #include "core/utils.h"
@@ -41,7 +42,7 @@ DEFINE_string(sfm_result_path,
               "SFM databaset filename");
 DEFINE_string(point_cloud_filename,
               R"(Z:\rick\dataset\jiuzhou\zhujiangguihuadasha\output\small_plane_refined.las)",
-              "Point cloud filename (LAS, LAZ, or PCD format)");
+              "Point cloud filename (LAS, LAZ, PCD, or PLY format)");
 DEFINE_string(output_path,
               R"(Z:\rick\dataset\jiuzhou\zhujiangguihuadasha\output)",
               "Output path");
@@ -52,12 +53,56 @@ DEFINE_string(mask_path,
 DEFINE_int32(max_color_candidates,
              xcolor::kColorInlierMaxNum,
              "Maximum nearest color candidates retained per point.");
+DEFINE_bool(generate_fisheye_depths,
+            false,
+            "Render depth directly in each original OPENCV_FISHEYE view on "
+            "the GPU instead of loading cubemap depth images.");
+DEFINE_bool(gpu_visibility,
+            true,
+            "Reuse CUDA projection/depth results for color visibility instead "
+            "of testing every point again on the CPU.");
+DEFINE_bool(gpu_color_fusion,
+            true,
+            "Sample depth-visible fisheye colors, reject multi-view color "
+            "outliers, and select from three sharpness-aware real-view "
+            "hypotheses directly on the GPU without downloading a "
+            "visible-point list for every image.");
+DEFINE_bool(gpu_color_smooth_fusion,
+            true,
+            "Use a spatially coherent robust mean of agreeing visible views "
+            "instead of selecting one source pixel per point.");
+DEFINE_double(fisheye_depth_scale,
+              0.25,
+              "Generated fisheye depth resolution relative to the source image.");
+DEFINE_double(depth_voxel_size,
+              0.03,
+              "Point splat voxel size in meters for generated fisheye depth.");
+DEFINE_double(depth_visibility_tolerance,
+              xcolor::kDepthVisibilityTolerance,
+              "Maximum generated-depth discrepancy in meters for accepting "
+              "a color observation.");
+DEFINE_double(depth_max_distance,
+              30.0,
+              "Maximum generated depth distance in meters; <=0 disables it.");
+DEFINE_int32(gpu_chunk_points,
+             3000000,
+             "Maximum point count in each CUDA fisheye depth chunk.");
+DEFINE_string(generated_depth_path,
+              "",
+              "Optional directory for saving generated fisheye depth PNGs. "
+              "Depths are used directly from memory when empty.");
+DEFINE_int32(image_step,
+             1,
+             "Use every Nth image independently within each camera directory.");
+DEFINE_int32(limit_images,
+             0,
+             "Optional total image limit for smoke tests; 0 processes all.");
 
 namespace {
 
 void InitPlaintextSpdLog() {
   auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-  auto logger = std::make_shared<spdlog::logger>("", console_sink);
+  auto logger       = std::make_shared<spdlog::logger>("", console_sink);
   spdlog::set_default_logger(logger);
 }
 
@@ -81,7 +126,7 @@ std::optional<fs::path> FindMaskFile(const fs::path& masks_root,
     return std::nullopt;
   }
 
-  const fs::path relative_image_path = fs::path(image_name);
+  const fs::path relative_image_path        = fs::path(image_name);
   const std::vector<std::string> extensions = {
       relative_image_path.extension().string(), ".png", ".jpg", ".jpeg"};
 
@@ -93,6 +138,17 @@ std::optional<fs::path> FindMaskFile(const fs::path& masks_root,
     const fs::path candidate = masks_root / relative_mask_path;
     if (fs::exists(candidate)) {
       return candidate;
+    }
+  }
+
+  // Direct fisheye coloring commonly uses one fixed mask per physical camera,
+  // e.g. masks_root/cam0.png for every cam0/*.jpg image.
+  const auto first_component = relative_image_path.begin();
+  if (first_component != relative_image_path.end()) {
+    fs::path fixed_mask = masks_root / *first_component;
+    fixed_mask.replace_extension(".png");
+    if (fs::exists(fixed_mask)) {
+      return fixed_mask;
     }
   }
 
@@ -118,13 +174,13 @@ bool HasNamedFloatNormalExtraBytes(const std::string& filename) {
   };
   constexpr std::array<uint16_t, 11> kBaseRecordLengths = {
       20, 28, 26, 34, 57, 63, 30, 36, 38, 59, 67};
-  const uint8_t point_format = header[104] & 0x3f;
+  const uint8_t point_format   = header[104] & 0x3f;
   const uint16_t record_length = read_u16(105);
   if (point_format >= kBaseRecordLengths.size() ||
       record_length < kBaseRecordLengths[point_format] + 12) {
     return false;
   }
-  const uint16_t header_size = read_u16(94);
+  const uint16_t header_size  = read_u16(94);
   const uint32_t point_offset = read_u32(96);
   if (point_offset <= header_size || point_offset - header_size > 16 * 1024 * 1024) {
     return false;
@@ -162,16 +218,16 @@ pcl::PointCloud<pcl::PointXYZRGBNormal> ReadPointCloudFromLAS(
   pdal::PointTable table;
   reader->prepare(table);
   pdal::PointViewSet viewSet = reader->execute(table);
-  pdal::PointViewPtr view = *viewSet.begin();
+  pdal::PointViewPtr view    = *viewSet.begin();
 
   spdlog::info("Converting {} points from LAS to PCL format", view->size());
 
   const pdal::Dimension::Id normal_x_dim = view->layout()->findDim("NormalX");
   const pdal::Dimension::Id normal_y_dim = view->layout()->findDim("NormalY");
   const pdal::Dimension::Id normal_z_dim = view->layout()->findDim("NormalZ");
-  const bool has_normals = normal_x_dim != pdal::Dimension::Id::Unknown &&
-                           normal_y_dim != pdal::Dimension::Id::Unknown &&
-                           normal_z_dim != pdal::Dimension::Id::Unknown;
+  const bool has_normals                 = normal_x_dim != pdal::Dimension::Id::Unknown &&
+                                           normal_y_dim != pdal::Dimension::Id::Unknown &&
+                                           normal_z_dim != pdal::Dimension::Id::Unknown;
 
   // Convert PDAL points to PCL format
   cloud.reserve(view->size());
@@ -212,20 +268,27 @@ pcl::PointCloud<pcl::PointXYZRGBNormal> ReadPointCloud(
   if (extension == ".las" || extension == ".laz") {
     return ReadPointCloudFromLAS(filename);
   }
-  if (extension == ".pcd") {
-    spdlog::info("Reading point cloud from PCD file: {}", filename);
+  if (extension == ".pcd" || extension == ".ply") {
     pcl::PointCloud<pcl::PointNormal> source_cloud;
-    if (pcl::io::loadPCDFile(filename, source_cloud) != 0) {
-      throw std::runtime_error("Failed to load PCD file: " + filename);
+    int read_result = -1;
+    if (extension == ".pcd") {
+      spdlog::info("Reading point cloud from PCD file: {}", filename);
+      read_result = pcl::io::loadPCDFile(filename, source_cloud);
+    } else {
+      spdlog::info("Reading point cloud from PLY file: {}", filename);
+      read_result = pcl::io::loadPLYFile(filename, source_cloud);
+    }
+    if (read_result != 0) {
+      throw std::runtime_error("Failed to load point-cloud file: " + filename);
     }
     pcl::PointCloud<pcl::PointXYZRGBNormal> cloud;
     cloud.reserve(source_cloud.size());
     size_t valid_normal_count = 0;
     for (const auto& source : source_cloud) {
       pcl::PointXYZRGBNormal point;
-      point.x = source.x;
-      point.y = source.y;
-      point.z = source.z;
+      point.x        = source.x;
+      point.y        = source.y;
+      point.z        = source.z;
       point.normal_x = source.normal_x;
       point.normal_y = source.normal_y;
       point.normal_z = source.normal_z;
@@ -236,8 +299,9 @@ pcl::PointCloud<pcl::PointXYZRGBNormal> ReadPointCloud(
       }
       cloud.push_back(point);
     }
-    spdlog::info("Loaded {} points from PCD file; {} have valid normals",
+    spdlog::info("Loaded {} points from {} file; {} have valid normals",
                  cloud.size(),
+                 extension == ".pcd" ? "PCD" : "PLY",
                  valid_normal_count);
     return cloud;
   }
@@ -250,7 +314,8 @@ void ReadImages(const std::string& sfm_path,
                 std::vector<Image>& images) {
   const fs::path images_root(images_path);
   const fs::path cubemap_root = images_root.parent_path();
-  const fs::path depths_root = cubemap_root / "depths";
+  const fs::path depths_root  = cubemap_root / "depths";
+  const bool use_depth_files  = fs::exists(depths_root);
   const fs::path masks_root =
       mask_path.empty() ? cubemap_root / "masks" : fs::path(mask_path);
   const bool use_masks = fs::exists(masks_root);
@@ -259,9 +324,18 @@ void ReadImages(const std::string& sfm_path,
   }
 
   colmap::Reconstruction rec;
-  rec.ReadBinary(sfm_path);
+  // Accept both the text model emitted directly from ImgPose.txt and a binary
+  // COLMAP model. Reconstruction::Read prefers binary files when both exist.
+  rec.Read(sfm_path);
 
-  spdlog::info("Loading image poses from {} ...", sfm_path + "/images.bin");
+  const fs::path model_root(sfm_path);
+  const fs::path image_model_path =
+      fs::exists(model_root / "images.bin") ? model_root / "images.bin"
+                                            : model_root / "images.txt";
+  const fs::path camera_model_path =
+      fs::exists(model_root / "cameras.bin") ? model_root / "cameras.bin"
+                                             : model_root / "cameras.txt";
+  spdlog::info("Loading image poses from {} ...", image_model_path.string());
   auto& raw_images = rec.Images();
   spdlog::info("Load {} image poses.", raw_images.size());
 
@@ -296,34 +370,37 @@ void ReadImages(const std::string& sfm_path,
   //   }
   // }
 
-  spdlog::info("Loading cameras from {} ...", sfm_path + "/cameras.bin");
+  spdlog::info("Loading cameras from {} ...", camera_model_path.string());
   auto& raw_cameras = rec.Cameras();
   spdlog::info("Load {} cameras.", raw_cameras.size());
 
   spdlog::info("Loading images from {} ...", images_path);
   images.clear();
   for (auto& [image_id, raw_image] : raw_images) {
-  // for (auto& [image_id, raw_image] : raw_images_filtered) {
+    // for (auto& [image_id, raw_image] : raw_images_filtered) {
     Image image;
+    image.name     = NormalizeRelativePath(raw_image.Name());
     image.filename = images_path + "/" + raw_image.Name();
-    image.pose = raw_image.CamFromWorld();
-    image.camera = raw_cameras.at(raw_image.CameraId());
+    image.pose     = raw_image.CamFromWorld();
+    image.camera   = raw_cameras.at(raw_image.CameraId());
 
     const std::string relative_depth_name = NormalizeRelativePath(
         fs::path(raw_image.Name()).replace_extension(".png").generic_string());
     const fs::path depth_filename = depths_root / fs::path(relative_depth_name);
     if (!fs::exists(depth_filename)) {
-      spdlog::warn("Missing depth image for {}", raw_image.Name());
+      if (use_depth_files) {
+        spdlog::warn("Missing depth image for {}", raw_image.Name());
+      }
     } else {
       image.depth_filename = depth_filename.string();
-      image.depth_intrinsics = DepthIntrinsicsFromCamera(image.camera);
-      image.has_depth = true;
+      image.depth_camera   = image.camera;
+      image.has_depth      = true;
     }
     if (use_masks) {
       const auto mask_file = FindMaskFile(masks_root, raw_image.Name());
       if (mask_file.has_value()) {
         image.mask_filename = mask_file->string();
-        image.has_mask = true;
+        image.has_mask      = true;
       } else {
         spdlog::warn("Missing mask for image {}", raw_image.Name());
       }
@@ -343,11 +420,22 @@ int main(int argc, char** argv) {
                   xcolor::kColorInlierMaxNum);
     return 1;
   }
+  if (!(FLAGS_fisheye_depth_scale > 0.0) ||
+      !(FLAGS_depth_voxel_size > 0.0) ||
+      FLAGS_depth_visibility_tolerance < 0.0 ||
+      FLAGS_gpu_chunk_points <= 0 ||
+      FLAGS_image_step <= 0 || FLAGS_limit_images < 0) {
+    spdlog::error(
+        "Invalid fisheye depth/image selection options: scale and voxel size "
+        "must be positive, gpu_chunk_points/image_step must be positive, and "
+        "limit_images must be non-negative");
+    return 1;
+  }
   spdlog::set_level(spdlog::level::debug);
 
   InitPlaintextSpdLog();
 
-  int cores = std::thread::hardware_concurrency();
+  int cores      = std::thread::hardware_concurrency();
   int cores_used = std::max(cores - 4, 1);
   spdlog::info("Using {}/{} cores.", cores_used, cores);
   omp_set_dynamic(0);
@@ -359,6 +447,35 @@ int main(int argc, char** argv) {
   PrintMemoryUsage();
   xcolor::ReadImages(
       FLAGS_sfm_result_path, FLAGS_images_path, FLAGS_mask_path, images);
+  std::sort(images.begin(), images.end(), [](const auto& lhs, const auto& rhs) {
+    return lhs.name < rhs.name;
+  });
+  if (FLAGS_image_step > 1 || FLAGS_limit_images > 0) {
+    std::vector<xcolor::Image> selected;
+    std::unordered_map<std::string, int> camera_ordinals;
+    for (auto& image : images) {
+      const std::string camera_directory =
+          std::filesystem::path(image.name).parent_path().generic_string();
+      const int ordinal = camera_ordinals[camera_directory]++;
+      if (ordinal % FLAGS_image_step != 0) {
+        continue;
+      }
+      selected.push_back(std::move(image));
+      if (FLAGS_limit_images > 0 &&
+          selected.size() >= static_cast<size_t>(FLAGS_limit_images)) {
+        break;
+      }
+    }
+    images.swap(selected);
+  }
+  if (images.empty()) {
+    spdlog::error("No images selected for colorization");
+    return 1;
+  }
+  spdlog::info("Selected {} images (step={}, limit={})",
+               images.size(),
+               FLAGS_image_step,
+               FLAGS_limit_images);
   PrintMemoryUsage();
 
   // loading point cloud
@@ -373,8 +490,25 @@ int main(int argc, char** argv) {
   spdlog::info("Load {} points.", cloud.size());
 
   spdlog::info("Start xcolor...");
-  xcolor::PerformXColor(
-      images, cloud, FLAGS_output_path, FLAGS_max_color_candidates);
+  xcolor::FisheyeDepthOptions fisheye_depth_options;
+  fisheye_depth_options.generate         = FLAGS_generate_fisheye_depths;
+  fisheye_depth_options.gpu_visibility   = FLAGS_gpu_visibility;
+  fisheye_depth_options.gpu_color_fusion = FLAGS_gpu_color_fusion;
+  fisheye_depth_options.smooth_fusion    = FLAGS_gpu_color_smooth_fusion;
+  fisheye_depth_options.scale            = FLAGS_fisheye_depth_scale;
+  fisheye_depth_options.voxel_size =
+      static_cast<float>(FLAGS_depth_voxel_size);
+  fisheye_depth_options.max_distance =
+      static_cast<float>(FLAGS_depth_max_distance);
+  fisheye_depth_options.visibility_tolerance =
+      static_cast<float>(FLAGS_depth_visibility_tolerance);
+  fisheye_depth_options.gpu_chunk_points = FLAGS_gpu_chunk_points;
+  fisheye_depth_options.output_path      = FLAGS_generated_depth_path;
+  xcolor::PerformXColor(images,
+                        cloud,
+                        FLAGS_output_path,
+                        FLAGS_max_color_candidates,
+                        fisheye_depth_options);
   spdlog::info("Finish xcolor.");
 
   return 0;
